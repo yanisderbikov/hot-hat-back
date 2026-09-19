@@ -1,0 +1,49 @@
+name: Checks
+
+# Только проверка: компиляция и все тесты, включая e2e. Деплоем занимается
+# Railway — он собирает образ из Dockerfile на каждый пуш сам.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    services:
+      # e2e-тесты ждут тот же Postgres, что docker-compose поднимает локально:
+      # localhost:5462, hothat/hothat. Базу hot_hat_e2e они заводят сами.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: hot_hat
+          POSTGRES_USER: hothat
+          POSTGRES_PASSWORD: hothat
+        ports:
+          - 5462:5432
+        options: >-
+          --health-cmd "pg_isready -U hothat -d hot_hat"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          # Только 21: на JDK 23+ Lombok из spring-boot 3.2 молча не
+          # обрабатывает аннотации (см. build.sh).
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Сборка и тесты
+        run: mvn -B clean verify

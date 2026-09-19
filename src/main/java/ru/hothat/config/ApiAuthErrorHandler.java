@@ -16,8 +16,6 @@ import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 /**
  * Ответы про доступ должны выглядеть так же, как из sendError() в Vercel-версии:
@@ -41,7 +39,7 @@ public class ApiAuthErrorHandler implements AuthenticationEntryPoint, AccessDeni
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response,
                          AuthenticationException authException) throws IOException {
-        write(response, 401, "AUTH_REQUIRED");
+        write(request, response, 401, "AUTH_REQUIRED");
     }
 
     @Override
@@ -53,20 +51,19 @@ public class ApiAuthErrorHandler implements AuthenticationEntryPoint, AccessDeni
         // это «нет прав администратора» — клиент видел отказ по правам там, где
         // надо было просто обновить пару токенов.
         if (authentication == null || trustResolver.isAnonymous(authentication)) {
-            write(response, 401, "AUTH_REQUIRED");
+            write(request, response, 401, "AUTH_REQUIRED");
             return;
         }
         HotHatUser user = authentication.getPrincipal() instanceof HotHatUser principal ? principal : null;
-        write(response, 403, GlobalExceptionHandler.deniedCode(user));
+        write(request, response, 403, GlobalExceptionHandler.deniedCode(user));
     }
 
-    private void write(HttpServletResponse response, int status, String code) throws IOException {
+    /** Тело — то же, что у {@link GlobalExceptionHandler}: одна форма на оба пути отказа. */
+    private void write(HttpServletRequest request, HttpServletResponse response, int status, String code)
+            throws IOException {
         response.setStatus(status);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("error", ErrorMessages.resolve(code, status));
-        body.put("code", code);
-        objectMapper.writeValue(response.getWriter(), body);
+        objectMapper.writeValue(response.getWriter(), ErrorResponses.of(request, status, code));
     }
 }

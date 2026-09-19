@@ -1,7 +1,9 @@
 package ru.hothat.config;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,23 +18,38 @@ import ru.hothat.dto.common.ErrorDTO;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-/** Формат ответа тот же, что у sendError(): {"error": текст, "code": машинный код}. */
+/**
+ * Тело ответа — {@link ErrorDTO}: прежние {@code error} и {@code code} плюс
+ * статус, адрес, момент и {@code requestId}, по которому отказ находится в
+ * логе сервера. Собирает его {@link ErrorResponses}, здесь только выбор кода.
+ */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    private final boolean exposeDetails;
+
+    /**
+     * @param exposeDetails показывать ли в теле 500 причину исключения. Пока
+     *                      игра не открыта людям, это экономит поход в лог;
+     *                      потом — выключить: в причине может быть SQL.
+     */
+    public GlobalExceptionHandler(@Value("${hot-hat.errors.expose-details:false}") boolean exposeDetails) {
+        this.exposeDetails = exposeDetails;
+    }
+
     @ExceptionHandler(ApiException.class)
-    public ResponseEntity<ErrorDTO> handleApi(ApiException e) {
-        return ResponseEntity.status(e.getStatus()).body(body(e.getCode(), e.getStatus()));
+    public ResponseEntity<ErrorDTO> handleApi(ApiException e, HttpServletRequest request) {
+        return ResponseEntity.status(e.getStatus()).body(ErrorResponses.of(request, e.getStatus(), e.getCode()));
     }
 
     @ExceptionHandler(AuthenticationException.class)
-    public ResponseEntity<ErrorDTO> handleAuth(AuthenticationException e) {
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(body("AUTH_REQUIRED", 401));
+    public ResponseEntity<ErrorDTO> handleAuth(AuthenticationException e, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ErrorResponses.of(request, 401, "AUTH_REQUIRED"));
     }
 
     /**
@@ -46,11 +63,11 @@ public class GlobalExceptionHandler {
      * админском экране.
      */
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ErrorDTO> handleDenied(AccessDeniedException e) {
+    public ResponseEntity<ErrorDTO> handleDenied(AccessDeniedException e, HttpServletRequest request) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         HotHatUser user = authentication != null
                 && authentication.getPrincipal() instanceof HotHatUser principal ? principal : null;
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body(deniedCode(user), 403));
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ErrorResponses.of(request, 403, deniedCode(user)));
     }
 
     /**
@@ -71,8 +88,8 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorDTO> handleValidation(MethodArgumentNotValidException e) {
-        return validationFailed(e.getBindingResult().getFieldErrors().stream()
+    public ResponseEntity<ErrorDTO> handleValidation(MethodArgumentNotValidException e, HttpServletRequest request) {
+        return validationFailed(request, e.getBindingResult().getFieldErrors().stream()
                 .map(err -> err.getDefaultMessage()));
     }
 
@@ -80,13 +97,12 @@ public class GlobalExceptionHandler {
      * Одна форма ответа на все четыре способа не пройти проверку: клиенту
      * незачем знать, тело это было, параметр строки запроса или кусок пути.
      */
-    private ResponseEntity<ErrorDTO> validationFailed(Stream<String> messages) {
-        String message = messages
+    private ResponseEntity<ErrorDTO> validationFailed(HttpServletRequest request, Stream<String> messages) {
+        List<String> details = messages
                 .filter(text -> text != null && !text.isBlank())
                 .distinct()
-                .collect(Collectors.joining("; "));
-        return ResponseEntity.badRequest().body(new ErrorDTO(
-                message.isBlank() ? "Некорректный запрос" : message, "VALIDATION_FAILED"));
+                .toList();
+        return ResponseEntity.badRequest().body(ErrorResponses.validation(request, details));
     }
 
     /**
@@ -97,8 +113,8 @@ public class GlobalExceptionHandler {
      * сам — {@code MethodArgumentNotValidException} наследует {@code BindException}.
      */
     @ExceptionHandler(BindException.class)
-    public ResponseEntity<ErrorDTO> handleBind(BindException e) {
-        return validationFailed(e.getFieldErrors().stream().map(err -> err.getDefaultMessage()));
+    public ResponseEntity<ErrorDTO> handleBind(BindException e, HttpServletRequest request) {
+        return validationFailed(request, e.getFieldErrors().stream().map(err -> err.getDefaultMessage()));
     }
 
     /**
@@ -116,13 +132,14 @@ public class GlobalExceptionHandler {
      * объявлены оба.
      */
     @ExceptionHandler(ConstraintViolationException.class)
-    public ResponseEntity<ErrorDTO> handleConstraint(ConstraintViolationException e) {
-        return validationFailed(e.getConstraintViolations().stream().map(v -> v.getMessage()));
+    public ResponseEntity<ErrorDTO> handleConstraint(ConstraintViolationException e, HttpServletRequest request) {
+        return validationFailed(request, e.getConstraintViolations().stream().map(v -> v.getMessage()));
     }
 
     @ExceptionHandler(HandlerMethodValidationException.class)
-    public ResponseEntity<ErrorDTO> handleMethodValidation(HandlerMethodValidationException e) {
-        return validationFailed(e.getAllErrors().stream().map(err -> err.getDefaultMessage()));
+    public ResponseEntity<ErrorDTO> handleMethodValidation(HandlerMethodValidationException e,
+                                                           HttpServletRequest request) {
+        return validationFailed(request, e.getAllErrors().stream().map(err -> err.getDefaultMessage()));
     }
 
     /**
@@ -136,10 +153,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
     public ResponseEntity<ErrorDTO> handleUnreadableBody(
-            org.springframework.http.converter.HttpMessageNotReadableException e) {
+            org.springframework.http.converter.HttpMessageNotReadableException e, HttpServletRequest request) {
         log.warn("Некорректное тело запроса: {}", e.getMostSpecificCause().getMessage());
         return ResponseEntity.badRequest()
-                .body(new ErrorDTO("Некорректное тело запроса.", "VALIDATION_FAILED"));
+                .body(ErrorResponses.of(request, 400, "VALIDATION_FAILED", "Некорректное тело запроса."));
     }
 
     /**
@@ -157,11 +174,12 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ErrorDTO> handleTypeMismatch(
-            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException e) {
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException e,
+            HttpServletRequest request) {
         log.warn("Некорректное значение параметра {}: {}", e.getName(), e.getValue());
         return ResponseEntity.badRequest()
-                .body(new ErrorDTO("Некорректное значение параметра «" + e.getName() + "».",
-                        "VALIDATION_FAILED"));
+                .body(ErrorResponses.of(request, 400, "VALIDATION_FAILED",
+                        "Некорректное значение параметра «" + e.getName() + "»."));
     }
 
     /**
@@ -171,9 +189,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
     public ResponseEntity<ErrorDTO> handleNotFound(
-            org.springframework.web.servlet.resource.NoResourceFoundException e) {
+            org.springframework.web.servlet.resource.NoResourceFoundException e, HttpServletRequest request) {
         log.warn("Неизвестный маршрут: {}", e.getResourcePath());
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ErrorDTO("Маршрут не найден.", "NOT_FOUND"));
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponses.of(request, 404, "NOT_FOUND", "Маршрут не найден."));
     }
 
     /**
@@ -186,9 +205,10 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<ErrorDTO> handleMethodNotAllowed(
-            org.springframework.web.HttpRequestMethodNotSupportedException e) {
+            org.springframework.web.HttpRequestMethodNotSupportedException e, HttpServletRequest request) {
         log.warn("Метод {} не поддержан адресом", e.getMethod());
-        ErrorDTO body = new ErrorDTO("Метод не поддерживается этим адресом.", "METHOD_NOT_ALLOWED");
+        ErrorDTO body = ErrorResponses.of(request, 405, "METHOD_NOT_ALLOWED",
+                "Метод не поддерживается этим адресом.");
         Set<HttpMethod> allowed = e.getSupportedHttpMethods();
         // Allow обязателен для 405 по HTTP: без него клиенту негде узнать,
         // какие методы адрес принимает.
@@ -207,11 +227,11 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(org.springframework.web.HttpMediaTypeNotSupportedException.class)
     public ResponseEntity<ErrorDTO> handleUnsupportedMediaType(
-            org.springframework.web.HttpMediaTypeNotSupportedException e) {
+            org.springframework.web.HttpMediaTypeNotSupportedException e, HttpServletRequest request) {
         log.warn("Неподдержанный тип тела: {}", e.getContentType());
         return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
-                .body(new ErrorDTO("Тело запроса нужно присылать как application/json.",
-                        "UNSUPPORTED_MEDIA_TYPE"));
+                .body(ErrorResponses.of(request, 415, "UNSUPPORTED_MEDIA_TYPE",
+                        "Тело запроса нужно присылать как application/json."));
     }
 
     /**
@@ -242,7 +262,7 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
     public ResponseEntity<ErrorDTO> handleConflict(
-            org.springframework.dao.DataIntegrityViolationException e) {
+            org.springframework.dao.DataIntegrityViolationException e, HttpServletRequest request) {
         String cause = String.valueOf(e.getMostSpecificCause().getMessage());
         String code = "CONFLICT";
         if (cause.contains("ux_player_profile_nickname")) {
@@ -254,7 +274,7 @@ public class GlobalExceptionHandler {
         } else {
             log.warn("Нарушено ограничение базы, кода для него нет: {}", cause);
         }
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(body(code, 409));
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponses.of(request, 409, code));
     }
 
     /**
@@ -266,17 +286,36 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
     public ResponseEntity<ErrorDTO> handleConcurrentUpdate(
-            org.springframework.orm.ObjectOptimisticLockingFailureException e) {
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(body("CONCURRENT_UPDATE", 409));
+            org.springframework.orm.ObjectOptimisticLockingFailureException e, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponses.of(request, 409, "CONCURRENT_UPDATE"));
     }
 
+    /**
+     * Всё, для чего обработчика выше не нашлось, — авария сервера.
+     *
+     * <p>В лог — стектрейс целиком; идентификатор запроса в строке лога тот
+     * же, что клиент получает в теле, так что от красного блока в консоли
+     * браузера до причины один поиск. Сама причина в тело попадает только при
+     * включённом {@code hot-hat.errors.expose-details}.
+     */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorDTO> handleOther(Exception e) {
-        log.error("HOT-HAT internal error", e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body("INTERNAL", 500));
+    public ResponseEntity<ErrorDTO> handleOther(Exception e, HttpServletRequest request) {
+        log.error("Необработанное исключение на {} {}", request.getMethod(), request.getRequestURI(), e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ErrorResponses.internal(request, exposeDetails ? describe(e) : null));
     }
 
-    private ErrorDTO body(String code, int status) {
-        return new ErrorDTO(ErrorMessages.resolve(code, status), ErrorMessages.publicCode(code));
+    /**
+     * Исключение и его корень в одну строку: у Spring обёртка почти всегда
+     * общая ({@code TransactionSystemException}, {@code DataAccessException}),
+     * а сказать, что случилось, может только самая глубокая причина.
+     */
+    private static String describe(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        String head = e.getClass().getSimpleName() + ": " + e.getMessage();
+        return root == e ? head : head + " ← " + root.getClass().getSimpleName() + ": " + root.getMessage();
     }
 }
