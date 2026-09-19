@@ -423,7 +423,9 @@ public class TestBotsServiceImpl implements TestBotsService {
         room.setTurnStartedAt(Instant.ofEpochMilli(now));
         room.setTurnDurationSeconds((double) (room.getTurnDuration() == null ? 60 : room.getTurnDuration()));
         room.setTurnEndsAt(0L);
-        room.setTurnId("test-turn-" + now);
+        // Формат тот же, что у MatchEngine (TurnIds): «Угадали»/«Пропустить» живого
+        // объясняющего идут через /api/v2/game, и turn_[a-f0-9]{16} там обязателен.
+        room.setTurnId("turn_" + Ids.hex(8));
         room.setTurnGuessedWords(new ArrayList<>());
         room.setAppealEndsAt(0L);
         room.setAppealVotes(new LinkedHashMap<>());
@@ -513,7 +515,7 @@ public class TestBotsServiceImpl implements TestBotsService {
             lastGuessed = Json.str(Json.map(guessedWords.get(guessedWords.size() - 1)).get("word"));
         }
         Map<String, Object> lastTurn = new LinkedHashMap<>();
-        lastTurn.put("turnId", room.getTurnId() == null ? "test-turn-" + now : room.getTurnId());
+        lastTurn.put("turnId", room.getTurnId() == null ? "turn_" + Ids.hex(8) : room.getTurnId());
         lastTurn.put("teamId", room.getCurrentTeamId());
         lastTurn.put("score", room.getCurrentTurnScore());
         lastTurn.put("guessedWords", guessedWords);

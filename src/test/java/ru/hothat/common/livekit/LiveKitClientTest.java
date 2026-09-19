@@ -4,12 +4,18 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.reactive.function.client.ClientRequest;
+import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 import ru.hothat.config.ApiException;
 
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -94,6 +100,33 @@ class LiveKitClientTest {
         Claims claims = claims(CLIENT.accessToken(player("hat-3f1c", true)));
 
         assertThat(claims.get("metadata", String.class)).contains("\"role\":\"player\"");
+    }
+
+    @Test
+    @DisplayName("Служебный вызов RoomService подписан админом именно этой комнаты")
+    void serviceCallIsScopedToItsRoom() {
+        // LiveKit пускает к ListParticipants/SendData только с roomAdmin и совпадающим
+        // room в гранте; roomAdmin без комнаты — 401 permissions denied. Сеть
+        // подменена: важен заголовок, а не ответ.
+        AtomicReference<ClientRequest> sent = new AtomicReference<>();
+        WebClient.Builder builder = WebClient.builder().exchangeFunction(request -> {
+            sent.set(request);
+            return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header("Content-Type", "application/json")
+                    .body("{\"participants\":[{\"identity\":\"uid-ann\"}]}")
+                    .build());
+        });
+        LiveKitClient client = new LiveKitClient("wss://livekit.example", "ключ", SECRET, builder);
+
+        assertThat(client.listParticipantIdentities("hat-3f1c")).containsExactly("uid-ann");
+
+        String bearer = sent.get().headers().getFirst(HttpHeaders.AUTHORIZATION);
+        assertThat(bearer).startsWith("Bearer ");
+        Map<String, Object> video = video(claims(bearer.substring("Bearer ".length())));
+        assertThat(video)
+                .containsEntry("room", "hot-hat-hat-3f1c")
+                .containsEntry("roomAdmin", true)
+                .doesNotContainKeys("roomJoin", "roomRecord");
     }
 
     @Test

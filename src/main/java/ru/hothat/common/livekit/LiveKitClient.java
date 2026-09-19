@@ -76,9 +76,13 @@ public class LiveKitClient {
     public String accessToken(AccessTokenRequest request) {
         requireConfigured();
         Map<String, Object> video = new HashMap<>();
+        // Комната в гранте — отдельно от права войти: служебному токену вход
+        // не нужен, а комната нужна (см. serviceToken).
+        if (request.roomId() != null && !request.roomId().isBlank()) {
+            video.put("room", roomName(request.roomId()));
+        }
         if (request.roomJoin()) {
             video.put("roomJoin", true);
-            video.put("room", roomName(request.roomId()));
         }
         video.put("canPublish", request.canPublish());
         video.put("canSubscribe", request.canSubscribe());
@@ -115,18 +119,32 @@ public class LiveKitClient {
     }
 
     /** Служебный токен для twirp: только права администратора комнаты. */
-    private String serviceToken(boolean record) {
-        return accessToken(new AccessTokenRequest("hot-hat-service", null, "", null,
-                false, false, false, false, false, record, true, false, 600));
+    /**
+     * Служебный токен для twirp-вызова.
+     *
+     * <p>Методы RoomService, привязанные к комнате (ListParticipants, SendData,
+     * RemoveParticipant, DeleteRoom), LiveKit пускает только с {@code roomAdmin}
+     * <b>и</b> совпадающим {@code room} в гранте: одного {@code roomAdmin} без
+     * комнаты ему мало, ответ — 401 {@code permissions denied}. Поэтому комната
+     * здесь обязательна для RoomService и не нужна Egress — тому достаточно
+     * {@code roomRecord}.
+     *
+     * @param roomId комната, которой касается вызов; {@code null} для Egress
+     * @param record выдать право на запись (Egress)
+     */
+    private String serviceToken(String roomId, boolean record) {
+        return accessToken(new AccessTokenRequest("hot-hat-service", null, roomId, null,
+                false, false, false, false, false, record, roomId != null, false, 600));
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, Object> twirp(String service, String method, Map<String, Object> body, boolean record) {
+    private Map<String, Object> twirp(String service, String method, Map<String, Object> body,
+                                      String roomId, boolean record) {
         String url = httpUrl() + "/twirp/" + service + "/" + method;
         try {
             String response = webClient.post()
                     .uri(url)
-                    .header("Authorization", "Bearer " + serviceToken(record))
+                    .header("Authorization", "Bearer " + serviceToken(roomId, record))
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(body == null ? Map.of() : body)
                     .retrieve()
@@ -163,7 +181,7 @@ public class LiveKitClient {
     @SuppressWarnings("unchecked")
     public List<String> listParticipantIdentities(String roomId) {
         Map<String, Object> response = twirp("livekit.RoomService", "ListParticipants",
-                Map.of("room", roomName(roomId)), false);
+                Map.of("room", roomName(roomId)), roomId, false);
         List<String> identities = new ArrayList<>();
         Object participants = response.get("participants");
         if (participants instanceof List<?> list) {
@@ -181,11 +199,11 @@ public class LiveKitClient {
 
     public void removeParticipant(String roomId, String identity) {
         twirp("livekit.RoomService", "RemoveParticipant",
-                Map.of("room", roomName(roomId), "identity", identity), false);
+                Map.of("room", roomName(roomId), "identity", identity), roomId, false);
     }
 
     public void deleteRoom(String roomId) {
-        twirp("livekit.RoomService", "DeleteRoom", Map.of("room", roomName(roomId)), false);
+        twirp("livekit.RoomService", "DeleteRoom", Map.of("room", roomName(roomId)), roomId, false);
     }
 
     /**
@@ -206,12 +224,12 @@ public class LiveKitClient {
         if (audience != null && !audience.isEmpty()) {
             body.put("destination_identities", List.copyOf(audience));
         }
-        twirp("livekit.RoomService", "SendData", body, false);
+        twirp("livekit.RoomService", "SendData", body, roomId, false);
     }
 
     /** twirp-вызов livekit.Egress; им пользуется запись партий. */
     public Map<String, Object> egress(String method, Map<String, Object> body) {
-        return twirp("livekit.Egress", method, body, true);
+        return twirp("livekit.Egress", method, body, null, true);
     }
 
     private String writeJson(Object value) {
