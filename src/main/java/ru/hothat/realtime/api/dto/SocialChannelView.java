@@ -1,6 +1,9 @@
 package ru.hothat.realtime.api.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import ru.hothat.conference.api.dto.ConferenceInviteView;
+
+import java.util.List;
 
 /**
  * Личное социальное состояние игрока — то, чем живёт шапка портала.
@@ -30,5 +33,9 @@ public record SocialChannelView(
         SocialInboxView inbox,
 
         @Schema(description = "Состояние бана: канал закрывается сразу, как только он наступил")
-        SocialBanView ban) {
+        SocialBanView ban,
+
+        @Schema(description = "Приглашения в видео-чаты, ждущие ответа: карточка «Вступить / Отклонить» "
+                + "на любой странице; та же форма, что у GET /api/v2/conference/invites")
+        List<ConferenceInviteView> conferenceInvites) {
 }

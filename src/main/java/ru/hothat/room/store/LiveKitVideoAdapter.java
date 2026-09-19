@@ -1,18 +1,13 @@
 package ru.hothat.room.store;
 
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import ru.hothat.common.livekit.LiveKitClient;
+import ru.hothat.common.livekit.TurnCredentials;
 import ru.hothat.room.port.VideoSessionPort;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -27,7 +22,6 @@ import java.util.Optional;
  * <p>Срок жизни токена — два часа, как и был. Он длиннее партии намеренно:
  * переподключение вкладки не должно упираться в протухший токен посреди хода.
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class LiveKitVideoAdapter implements VideoSessionPort {
@@ -36,18 +30,10 @@ public class LiveKitVideoAdapter implements VideoSessionPort {
     private static final long TOKEN_TTL_SECONDS = 7200;
 
     private final LiveKitClient liveKit;
+    private final TurnCredentials turn;
 
     @Value("${livekit.url:}")
     private String livekitUrl;
-
-    @Value("${turn.urls:}")
-    private String turnUrls;
-
-    @Value("${turn.secret:}")
-    private String turnSecret;
-
-    @Value("${turn.ttl-seconds:7200}")
-    private long turnTtlSeconds;
 
     @Override
     public String serverUrl() {
@@ -69,41 +55,12 @@ public class LiveKitVideoAdapter implements VideoSessionPort {
     }
 
     /**
-     * Учётка по схеме coturn: имя — «срок:идентификатор», пароль — его
-     * HMAC-SHA1 на общем секрете. Секрета нет или адресов нет — учётки нет.
+     * Учётка ретранслятора: формула подписи общая с видео-чатом и живёт в
+     * {@link TurnCredentials}; здесь только перевод в запись порта.
      */
     @Override
     public Optional<TurnTicket> turnTicket(String identity) {
-        List<String> urls = Arrays.stream((turnUrls == null ? "" : turnUrls).split(","))
-                .map(String::trim)
-                .filter(value -> value.toLowerCase().startsWith("turn:")
-                        || value.toLowerCase().startsWith("turns:"))
-                .toList();
-        if (turnSecret == null || turnSecret.isBlank() || urls.isEmpty()) {
-            return Optional.empty();
-        }
-        long ttlSeconds = Math.min(21600, Math.max(600, turnTtlSeconds));
-        long expiresAt = System.currentTimeMillis() / 1000 + ttlSeconds;
-        String username = expiresAt + ":" + safeIdentity(identity);
-        try {
-            Mac mac = Mac.getInstance("HmacSHA1");
-            mac.init(new SecretKeySpec(turnSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA1"));
-            String credential = java.util.Base64.getEncoder()
-                    .encodeToString(mac.doFinal(username.getBytes(StandardCharsets.UTF_8)));
-            return Optional.of(new TurnTicket(urls, username, credential, ttlSeconds, expiresAt));
-        } catch (Exception e) {
-            // Без учётки связь ещё возможна напрямую, а отказ выключил бы видео
-            // и тем, у кого ретранслятор не нужен вовсе.
-            log.warn("Не удалось подписать TURN-учётку: {}", e.getMessage());
-            return Optional.empty();
-        }
-    }
-
-    /** В имени учётки допустимы только незарезервированные символы URI. */
-    private static String safeIdentity(String identity) {
-        String safe = (identity == null || identity.isBlank() ? "player" : identity)
-                .replaceAll("[^A-Za-z0-9._~-]", "_");
-        safe = safe.length() > 64 ? safe.substring(0, 64) : safe;
-        return safe.isEmpty() ? "player" : safe;
+        return turn.issue(identity).map(grant -> new TurnTicket(
+                grant.urls(), grant.username(), grant.credential(), grant.ttlSeconds(), grant.expiresAtSeconds()));
     }
 }

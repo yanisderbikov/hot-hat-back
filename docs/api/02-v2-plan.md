@@ -708,7 +708,39 @@ JPA-сущность и ходит мимо репозиториев (аудит
 | GET | `/api/v2/app/features/{name}` | `GET /api/features/{name}` (`features.js:54`) | — | `FeatureFlagResponseDTO` | 200 | `ReadFeatureFlagUseCase` | permitAll; имя из закрытого набора, кеш ограниченного размера (G3) |
 | POST | `/api/v2/app/analytics-events` | `POST /api/analytics` (`app-core.js:910`) | `RecordAnalyticsEventRequestDTO` | `AnalyticsEventAcceptedResponseDTO` | 202 | `RecordAnalyticsEventUseCase` | `hasRole('USER')`; `eventType` — enum из шести значений; 202 вместо 201-на-дубликате (D9) |
 
-### 5.15 `/ws/v2` — семь каналов и три кадра
+### 5.14a `/api/v2/conference` (14) — видео-чат
+
+Область добавлена после плана: созвон до шестнадцати друзей без запуска игры.
+Возможность придумана в ветке `dev` фронтенда (SCRUM-18) поверх Vercel-функций
+и Firestore — там одно тело `POST /api/token` с полем `conference_action`
+выбирало между тринадцатью действиями, а страница опрашивала состав раз в
+восемь секунд и ленту раз в пять. Здесь у каждого действия свой адрес и свой
+уровень прав, а чтение живёт кадром `/ws/v2/conference/{id}` (см. 5.15).
+Пакет `ru.hothat.conference`, таблицы `v2.video_conference`,
+`v2.video_conference_member`, `v2.video_conference_message` (V22).
+
+| Метод | Путь | Заменяет | Request DTO | Response DTO | Код | Use-case | Права |
+|---|---|---|---|---|---|---|---|
+| POST | `/api/v2/conference` | `conference_action:"create"` | — | `ConferenceResponseDTO` | 201 | `CreateConferenceUseCase` | `hasRole('USER')` |
+| GET | `/api/v2/conference/{conferenceId}` | `conference_action:"get"` | — | `ConferenceResponseDTO` | 200 | `GetConferenceUseCase` | участник (`CONFERENCE_INVITE_REQUIRED`) |
+| POST | `/api/v2/conference/{conferenceId}/video-token` | `conference_action:"join"` | — | `ConferenceVideoTokenResponseDTO` | 201 | `IssueConferenceVideoTokenUseCase` | участник; имя — из карточки, не из тела |
+| DELETE | `/api/v2/conference/{conferenceId}/members/me` | `conference_action:"leave"` | — | — | 204 | `LeaveConferenceUseCase` | участник; хозяин не выходит |
+| DELETE | `/api/v2/conference/{conferenceId}/members/{uid}` | `conference_action:"kick"` | — | `ConferenceResponseDTO` | 200 | `RemoveConferenceMemberUseCase` | хозяин; себя нельзя (`CONFERENCE_HOST_PROTECTED`) |
+| POST | `/api/v2/conference/{conferenceId}/game-room` | `conference_action:"create_game_room"` | `CreateConferenceGameRoomRequestDTO` | `ConferenceResponseDTO` | 201 | `CreateConferenceGameRoomUseCase` | хозяин; комнату заводит `room.spi.RoomLineupPort` одной транзакцией |
+| GET | `/api/v2/conference/invites` | `conference_action:"pending_invites"` (опрос раз в 4 с) | — | `ConferenceInvitesResponseDTO` | 200 | `ListMyConferenceInvitesUseCase` | свои; тот же список — в кадре `/ws/v2/me/social` |
+| POST | `/api/v2/conference/{conferenceId}/invites` | `conference_action:"invite"` + `"departed"` | `InviteToConferenceRequestDTO` | `SentConferenceInviteResponseDTO` | 201 | `InviteToConferenceUseCase` | участник, только друга; ушедшего без выхода зовут снова после проверки у видеоузла |
+| POST | `/api/v2/conference/{conferenceId}/invites/me/acceptance` | `conference_action:"accept"` | — | `AnsweredConferenceInviteResponseDTO` | 200 | `AnswerConferenceInviteUseCase` | адресат |
+| POST | `/api/v2/conference/{conferenceId}/invites/me/rejection` | `conference_action:"decline"` | — | `AnsweredConferenceInviteResponseDTO` | 200 | `AnswerConferenceInviteUseCase` | адресат |
+| GET | `/api/v2/conference/{conferenceId}/messages` | `conference_action:"chat_list"` | — | `ConferenceMessagesResponseDTO` | 200 | `ReadConferenceMessagesUseCase` | участник |
+| POST | `/api/v2/conference/{conferenceId}/messages` | `conference_action:"chat_send"` (текст) | `PostConferenceMessageRequestDTO` | `SentConferenceMessageResponseDTO` | 201 | `PostConferenceMessageUseCase` | участник |
+| POST | `/api/v2/conference/{conferenceId}/file-messages` | `conference_action:"chat_send"` (attachment) | `PostConferenceFileMessageRequestDTO` | `SentConferenceMessageResponseDTO` | 201 | `PostConferenceFileMessageUseCase` | участник; ключ обязан лежать в своей папке (`CONFERENCE_FILE_INVALID`) |
+| POST | `/api/v2/conference/{conferenceId}/files/upload-tickets` | `POST /api/conference-media` `upload_ticket` | `RequestConferenceUploadTicketRequestDTO` | `ConferenceUploadTicketResponseDTO` | 201 | `IssueConferenceUploadTicketUseCase` | участник; до 25 МБ |
+
+Открытого адреса файлов (`GET /api/conference-media?path=`) больше нет:
+вложения видят только участники, ссылка подписывается на два часа при каждом
+чтении ленты и приезжает в `ConferenceFileView.url`.
+
+### 5.15 `/ws/v2` — восемь каналов и три кадра
 
 | Событие | Путь | Заменяет | Hello DTO | Event DTO | Use-case | Права |
 |---|---|---|---|---|---|---|
@@ -719,6 +751,7 @@ JPA-сущность и ходит мимо репозиториев (аудит
 | CONNECT | `/ws/v2/team/{teamId}/preflight` | **`db`** подписка `rankedTeamPreflights/{teamId}` (`portal.js:125`) | `PreflightHelloDTO` | `PreflightEventDTO` | `StreamPreflightUseCase` | `@teamAuthz.isMember` |
 | CONNECT | `/ws/v2/media/memes` | **`db`** подписка `collection(memeLibrary)` (`app-core.js:5969`) | `MemeLibraryHelloDTO` | `MemeLibraryEventDTO` | `StreamMemeLibraryUseCase` | `hasRole('USER')` |
 | CONNECT | `/ws/v2/machine/recorder/rooms/{roomId}` | **`db`** `startRecorderDbMirror` — подписки `rooms/{id}` и `rooms/{id}/teams` (`app-core.js:13843`, `:13870`) | `RecorderChannelHelloDTO` | `RecorderChannelEventDTO` | `StreamRecorderChannelUseCase` | `hasRole('RECORDER')` |
+| CONNECT | `/ws/v2/conference/{conferenceId}` | опросы `chat_list` (5 с) и `get` (8 с) страницы видео-чата ветки dev; заведённая комната — вместо data-пакета LiveKit `game_room_created` | `ConferenceChannelHelloDTO` | `ConferenceChannelEventDTO` | `StreamConferenceChannelUseCase` | участник; выгнанному — отказ `CONFERENCE_INVITE_REQUIRED` и закрытие |
 | FRAME | `/ws/v2/**` `ping` | `{type:"ping"}` → `{type:"pong"}` (`DocumentSocketHandler`) | `ChannelPingFrameDTO` | `ChannelPongFrameDTO` | `HandleChannelHeartbeatUseCase` | открытая сессия |
 | FRAME | `/ws/v2/lobby` `spotlight` | **`db`** три подписки состава выбранной комнаты (`home/home.js:88`) + `rooms/{id}/players/{uid}` (`live-preview.js:34`) | `SpotlightFrameDTO` | `RoomPreviewEventDTO` | `SpotlightLobbyRoomUseCase` | тот же уровень, что у канала |
 | FRAME | `/ws/v2/**` `unsubscribe` | `{type:"unsubscribe", id}` (`db.js:389-398`) | `ChannelUnsubscribeFrameDTO` | — | `DropChannelSubscriptionUseCase` | открытая сессия |

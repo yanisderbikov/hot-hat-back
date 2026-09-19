@@ -302,7 +302,22 @@ public final class ErrorMessages {
             Map.entry("APPEAL_STILL_OPEN", "Голосование ещё не завершено."),
             Map.entry("DEFAULT_LOADOUT_REQUIRED", "Сначала зарядите 5 мемов в разделе «Мем-арсенал»."),
             Map.entry("ROOM_INVITE_GAME_STARTED", "Это приглашение больше недействительно: игра уже началась или была сыграна."),
-            Map.entry("ROOM_INVITE_EXPIRED", "Срок действия приглашения истёк.")
+            Map.entry("ROOM_INVITE_EXPIRED", "Срок действия приглашения истёк."),
+            // Видео-чат: созвон с друзьями без игры. Тексты видит человек на
+            // странице созвона и на карточке приглашения.
+            Map.entry("CONFERENCE_NOT_FOUND", "Видео-чат не найден."),
+            Map.entry("CONFERENCE_CLOSED", "Видео-чат завершён."),
+            Map.entry("CONFERENCE_INVITE_REQUIRED", "В этот видео-чат можно войти только по приглашению."),
+            Map.entry("CONFERENCE_HOST_ONLY", "Это может сделать только создатель видео-чата."),
+            Map.entry("CONFERENCE_HOST_PROTECTED", "Создателя видео-чата нельзя удалить из звонка."),
+            Map.entry("CONFERENCE_SELF_INVITE", "Себя приглашать не нужно."),
+            Map.entry("CONFERENCE_FULL", "В видео-чате максимум 16 участников."),
+            Map.entry("CONFERENCE_INVITE_NOT_FOUND", "Приглашение не найдено или уже отвечено."),
+            Map.entry("CONFERENCE_PARTICIPANT_NOT_FOUND", "Такого участника в видео-чате нет."),
+            Map.entry("CONFERENCE_GAME_TOO_MANY",
+                    "В игровой комнате максимум 10 игроков. Сначала оставьте в видео-чате не больше 10 человек."),
+            Map.entry("CONFERENCE_CHAT_EMPTY", "Пустое сообщение отправить нельзя."),
+            Map.entry("CONFERENCE_FILE_INVALID", "Файл не из этого видео-чата.")
     );
 
     public static String resolve(String code, int status) {

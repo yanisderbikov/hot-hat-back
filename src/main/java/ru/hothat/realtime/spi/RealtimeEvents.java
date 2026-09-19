@@ -64,4 +64,14 @@ public final class RealtimeEvents {
     /** Общая библиотека мемов изменилась. */
     public record MemeLibraryChanged() {
     }
+
+    /**
+     * Видео-чат изменился: состав, приглашения, чат или заведённая из него
+     * комната.
+     *
+     * <p>Одно событие на весь видео-чат, как у комнаты: канал
+     * {@code /ws/v2/conference/{id}} присылает снимок целиком.
+     */
+    public record ConferenceChanged(String conferenceId) {
+    }
 }

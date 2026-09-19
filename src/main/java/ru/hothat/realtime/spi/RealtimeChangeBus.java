@@ -79,6 +79,13 @@ public class RealtimeChangeBus {
         publish(new RealtimeEvents.MemeLibraryChanged());
     }
 
+    /** Видео-чат: состав, приглашения, чат, заведённая комната. */
+    public void conferenceChanged(String conferenceId) {
+        if (conferenceId != null && !conferenceId.isBlank()) {
+            publish(new RealtimeEvents.ConferenceChanged(conferenceId));
+        }
+    }
+
     private void publish(Object event) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             events.publishEvent(event);

@@ -8,6 +8,7 @@ import ru.hothat.auth.api.dto.MyBanStateResponseDTO;
 import ru.hothat.auth.usecase.GetMyBanStateUseCase;
 import ru.hothat.chat.api.dto.SocialInboxResponseDTO;
 import ru.hothat.chat.usecase.GetMySocialInboxUseCase;
+import ru.hothat.conference.usecase.ListMyConferenceInvitesUseCase;
 import ru.hothat.config.HotHatUser;
 import ru.hothat.friend.api.dto.IncomingFriendRequestsResponseDTO;
 import ru.hothat.friend.api.dto.OutgoingFriendRequestsResponseDTO;
@@ -26,7 +27,7 @@ import ru.hothat.realtime.api.dto.SocialInboxView;
  * каждого обновления канал спрашивает одно — «что сейчас у этого игрока с
  * заявками, входящими и баном». Различие между кадрами придумывает транспорт.
  *
- * <p>Все четыре части собирают те же сценарии, что отвечают на адреса HTTP.
+ * <p>Все пять частей собирают те же сценарии, что отвечают на адреса HTTP.
  * Своей копии сборки здесь нет ни одной: шапка портала считает значки по
  * одним и тем же полям, откуда бы они ни приехали — кадром или ответом.
  *
@@ -34,7 +35,7 @@ import ru.hothat.realtime.api.dto.SocialInboxView;
  * своё», и подставить сюда чужой идентификатор нечем — личность берётся из
  * рукопожатия.
  *
- * <p>Транзакция одна на четыре чтения и {@code readOnly}: иначе значок
+ * <p>Транзакция одна на пять чтений и {@code readOnly}: иначе значок
  * непрочитанного мог бы приехать из состояния до чужого письма, а последнее
  * сообщение — после.
  */
@@ -46,6 +47,7 @@ public class StreamSocialChannelUseCase {
     private final ListOutgoingFriendRequestsUseCase outgoingRequests;
     private final GetMySocialInboxUseCase socialInbox;
     private final GetMyBanStateUseCase banState;
+    private final ListMyConferenceInvitesUseCase conferenceInvites;
 
     @PreAuthorize("hasRole('USER')")
     @Transactional(readOnly = true)
@@ -59,6 +61,7 @@ public class StreamSocialChannelUseCase {
                 new FriendRequestOutboxView(outgoing.items(), outgoing.nextCursor(), outgoing.limit()),
                 new SocialInboxView(inbox.messageVersion(), inbox.unreadMessages(), inbox.lastMessage(),
                         inbox.roomInviteVersion(), inbox.roomInvite(), inbox.updatedAtMs()),
-                new SocialBanView(ban.banned(), ban.reason(), ban.bannedAtMs()));
+                new SocialBanView(ban.banned(), ban.reason(), ban.bannedAtMs()),
+                conferenceInvites.run(user).items());
     }
 }

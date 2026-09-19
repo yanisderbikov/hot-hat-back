@@ -8,6 +8,7 @@ import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import ru.hothat.realtime.ws.ChannelHandshakeAuthenticator;
+import ru.hothat.realtime.ws.ConferenceSocketHandler;
 import ru.hothat.realtime.ws.DirectChatSocketHandler;
 import ru.hothat.realtime.ws.LobbySocketHandler;
 import ru.hothat.realtime.ws.MemeLibrarySocketHandler;
@@ -24,7 +25,7 @@ import java.util.List;
  * токен приходит параметром запроса, потому что браузерный WebSocket не
  * позволяет задать заголовок {@code Authorization} при рукопожатии.
  *
- * <p>Семь именованных каналов §9 плана — и только они. У каждого есть предмет,
+ * <p>Семь именованных каналов §9 плана плюс восьмой — видео-чат, — и только они. У каждого есть предмет,
  * названный адресом, право, принадлежащее области-владельцу, и пара кадров со
  * своей формой — той же, что у соответствующего ответа HTTP. Универсального
  * шлюза с подпиской по пути-строке здесь больше нет: он резал права по одному
@@ -53,6 +54,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     private final PreflightSocketHandler preflightSocketHandler;
     private final MemeLibrarySocketHandler memeLibrarySocketHandler;
     private final RecorderSocketHandler recorderSocketHandler;
+    private final ConferenceSocketHandler conferenceSocketHandler;
     private final ChannelHandshakeAuthenticator handshakeAuthenticator;
 
     /** Тот же список, что у CORS в {@link WebSecurityConfig}: одно окружение — одни источники. */
@@ -76,6 +78,9 @@ public class WebSocketConfig implements WebSocketConfigurer {
         // Номер партии и подпись съёмки приезжают строкой запроса: адрес канала
         // назван планом, и в нём только комната.
         register(registry, recorderSocketHandler, "/ws/v2/machine/recorder/rooms/*");
+        // Восьмой канал — видео-чат: состав, лента и заведённая из него комната
+        // одним кадром, вместо двух опросов, которыми жила страница в dev.
+        register(registry, conferenceSocketHandler, "/ws/v2/conference/*");
     }
 
     private void register(WebSocketHandlerRegistry registry,
