@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: hot-hat-postgres
+    environment:
+      POSTGRES_DB: hot_hat
+      POSTGRES_USER: hothat
+      POSTGRES_PASSWORD: hothat
+    ports:
+      - "5462:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U hothat -d hot_hat" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - hot-hat-network
+
+  hot-hat-back:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hot-hat-back
+    ports:
+      - "8092:8092"
+    env_file:
+      - .env
+    environment:
+      # Внутри compose-сети ходим в postgres по имени сервиса
+      POSTGRES_URL: jdbc:postgresql://postgres:5432/hot_hat
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - hot-hat-network
+
+volumes:
+  postgres_data:
+
+networks:
+  hot-hat-network:
+    driver: bridge

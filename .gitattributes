@@ -1,0 +1,26 @@
+# Единые переносы строк: в рабочей копии Windows получит CRLF там, где ему
+# нужно, но в git всё хранится с LF. Иначе правки с Windows и сборка на
+# Linux-раннере дают diff на весь файл.
+* text=auto eol=lf
+
+# Скрипты обязаны остаться с LF, иначе bash в контейнере их не выполнит
+*.sh text eol=lf
+Dockerfile text eol=lf
+
+# Бинарники не трогать
+*.jar binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+
+# Словари выгружены из фронтенда скриптом: не засоряют diff и статистику языков
+src/main/resources/words/*.txt linguist-generated
+
+# Миграции Flyway всегда неизменяемы — конфликт правится новой миграцией,
+# а не слиянием старой
+src/main/resources/db/migration/*.sql merge=binary

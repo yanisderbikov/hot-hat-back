@@ -1,0 +1,53 @@
+# ══ Секреты и окружение ══════════════════════════════════════════════════════
+.env
+.env.*
+!.env.example
+
+# Ключи и сертификаты
+*.pem
+*.key
+*.p12
+*.pfx
+service-account*.json
+serviceAccountKey*.json
+firebase-adminsdk*.json
+
+# ══ Сборка Maven ═════════════════════════════════════════════════════════════
+target/
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/timing.properties
+release.properties
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+dependency-reduced-pom.xml
+
+# ══ IDE ══════════════════════════════════════════════════════════════════════
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.settings/
+.classpath
+.project
+.sublime-workspace
+
+# ══ ОС ═══════════════════════════════════════════════════════════════════════
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# ══ Логи и временное ═════════════════════════════════════════════════════════
+*.log
+*.tmp
+*.temp
+*.swp
+*.orig
+*.rej
+*.bak
+*.pid
+hs_err_pid*
+replay_pid*
