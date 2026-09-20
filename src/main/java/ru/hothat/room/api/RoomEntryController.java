@@ -118,7 +118,8 @@ public class RoomEntryController {
             @ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND: комнаты нет",
                     content = @Content),
             @ApiResponse(responseCode = "409", description = "SPECTATORS_AFTER_START: партия ещё не "
-                    + "началась; ROOM_CLOSED: комната закрыта", content = @Content)})
+                    + "началась; ROOM_CLOSED: комната закрыта; PLAYER_CANNOT_WATCH: у вас здесь "
+                    + "место игрока — возвращайтесь за стол", content = @Content)})
     @PutMapping("/{roomId}/spectators/me")
     public ResponseEntity<SpectatorSeatResponseDTO> watch(
             @AuthenticationPrincipal HotHatUser user,

@@ -33,6 +33,8 @@ final class RoomRefusals {
             case PRIVATE_GAME_STARTED -> ApiException.of("PRIVATE_GAME_STARTED", 403);
             case PRIVATE_ROOM_NOT_WATCHABLE -> ApiException.of("PRIVATE_ROOM_NOT_WATCHABLE", 403);
             case SPECTATORS_AFTER_START -> ApiException.of("SPECTATORS_AFTER_START", 409);
+            // Место уже есть — за столом; это состояние просящего, а не права.
+            case PLAYER_CANNOT_WATCH -> ApiException.of("PLAYER_CANNOT_WATCH", 409);
         };
     }
 

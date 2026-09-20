@@ -118,6 +118,11 @@ public class RoomSeats {
         return new Seated(player, created);
     }
 
+    /** Есть ли у человека место игрока в комнате — независимо от живости. */
+    public boolean playerSeated(String roomId, String uid) {
+        return getterRoom.getPlayer(roomId, uid).isPresent();
+    }
+
     /** Место зрителя и то, завели ли его этим вызовом. */
     public record Watching(RoomSpectator spectator, boolean created) {
     }

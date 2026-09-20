@@ -1,6 +1,7 @@
 package ru.hothat.testbot.store;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import ru.hothat.config.ApiException;
 import ru.hothat.testbot.port.SpeechSynthesisPort;
@@ -38,6 +39,16 @@ public class EdgeSpeechClient implements SpeechSynthesisPort {
             "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken="
                     + TRUSTED_CLIENT_TOKEN;
     private static final String OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+    /**
+     * Версия Edge, за которую представляется клиент. Bing сверяет
+     * {@code Sec-MS-GEC-Version} с реальными сборками и старые отбрасывает 403
+     * ещё на рукопожатии: строка 130.x, зашитая при переносе, к сентябрю 2026
+     * уже не проходила. Поэтому версия — настройка, а не константа: когда
+     * Microsoft снова отстанет от нас на пару релизов, её меняют переменной
+     * {@code HOT_HAT_EDGE_VERSION} без пересборки. User-Agent собирается из
+     * неё же, чтобы заголовок и подпись не разошлись.
+     */
+    private final String edgeVersion;
     private static final int MAX_TEXT_CHARS = 80;
     private static final int MAX_AUDIO_BYTES = 2_000_000;
     private static final int CACHE_MAX = 48;
@@ -51,6 +62,10 @@ public class EdgeSpeechClient implements SpeechSynthesisPort {
             "1", new Voice("1", "Мужской", "ru-RU-DmitryNeural", "ru-RU", "+0%", "+0Hz"),
             "2", new Voice("2", "Женский", "ru-RU-SvetlanaNeural", "ru-RU", "+0%", "+0Hz"),
             "3", new Voice("3", "Смешной", "en-US-AnaNeural", "ru-RU", "+7%", "+8Hz"));
+
+    public EdgeSpeechClient(@Value("${hot-hat.tts.edge-version:143.0.3650.75}") String edgeVersion) {
+        this.edgeVersion = edgeVersion == null || edgeVersion.isBlank() ? "143.0.3650.75" : edgeVersion.trim();
+    }
 
     /** Небольшой LRU: одни и те же реплики ботов повторяются часто. */
     private final Map<String, Speech> cache =
@@ -96,13 +111,14 @@ public class EdgeSpeechClient implements SpeechSynthesisPort {
         AudioCollector collector = new AudioCollector();
         WebSocket socket = null;
         try {
+            String major = edgeVersion.split("\\.")[0];
             socket = HttpClient.newHttpClient().newWebSocketBuilder()
                     .header("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold")
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                            + "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0")
+                            + "(KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36 Edg/" + major + ".0.0.0")
                     .connectTimeout(Duration.ofSeconds(10))
                     .buildAsync(URI.create(ENDPOINT + "&Sec-MS-GEC=" + secMsGec()
-                            + "&Sec-MS-GEC-Version=1-130.0.2849.68"), collector)
+                            + "&Sec-MS-GEC-Version=1-" + edgeVersion), collector)
                     .get(12, TimeUnit.SECONDS);
 
             socket.sendText(configMessage(), true).get(5, TimeUnit.SECONDS);

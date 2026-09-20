@@ -19,6 +19,9 @@ import ru.hothat.util.Divisions;
  * <p>Правила перенесены из {@code joinAsSpectator()}
  * ({@code app-core.js:12429}): приватную комнату не смотрят, закрытую тоже, а
  * до начала партии зрителей не бывает вовсе — все, кто в комнате, ещё игроки.
+ * Четвёртое правило браузер не держал и держать не мог: сидящий игрок этой
+ * же комнаты получает {@code PLAYER_CANNOT_WATCH} — ему место игрока, а не
+ * зрителя, и интерфейс возвращает его за стол.
  *
  * <p>Тела у запроса нет: имя и аватар сервер берёт из карточки. Раньше их
  * присылал браузер, и подписаться в зале можно было как угодно.
@@ -55,7 +58,7 @@ public class TakeSpectatorSeatUseCase {
                 Divisions.normalize(room.getDivisionLanguage()),
                 Divisions.normalize(RoomProjections.gameLanguage(room)),
                 room.effectiveMaxPlayers());
-        RoomAccessPolicy.refuseSpectatorSeat(facts).ifPresent(refusal -> {
+        RoomAccessPolicy.refuseSpectatorSeat(facts, roomSeats.playerSeated(roomId, user.uid())).ifPresent(refusal -> {
             throw RoomRefusals.of(refusal);
         });
 

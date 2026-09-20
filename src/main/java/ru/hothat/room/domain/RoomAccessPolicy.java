@@ -74,7 +74,9 @@ public final class RoomAccessPolicy {
         /** Смотреть можно только чужую публичную комнату. */
         PRIVATE_ROOM_NOT_WATCHABLE,
         /** До начала партии зрителей не бывает: все, кто в комнате, — игроки. */
-        SPECTATORS_AFTER_START
+        SPECTATORS_AFTER_START,
+        /** Игрок этой комнаты не смотрит её из зала: одно место на человека. */
+        PLAYER_CANNOT_WATCH
     }
 
     /**
@@ -121,12 +123,23 @@ public final class RoomAccessPolicy {
     /**
      * Пускать ли зрителем.
      *
-     * <p>Три отказа и ни одного про дивизион: смотреть чужую партию можно на
-     * любом языке — зритель не садится за стол и ни у кого не отнимает места.
+     * <p>Ни одного отказа про дивизион: смотреть чужую партию можно на любом
+     * языке — зритель не садится за стол и ни у кого не отнимает места.
+     *
+     * <p>Зато свою партию из зала не смотрят. Место в комнате одно на человека
+     * — посадка за стол снимает зрительское место, и обратное правило то же:
+     * сидящему игроку зрительское место не заводится. Иначе ссылка «Смотреть»
+     * на собственную комнату давала бы полусостояние — зрительский пропуск
+     * в видео при хозяйских кнопках на экране.
+     *
+     * @param applicantSeated у просящего уже есть место игрока в этой комнате
      */
-    public static Optional<Refusal> refuseSpectatorSeat(RoomFacts room) {
+    public static Optional<Refusal> refuseSpectatorSeat(RoomFacts room, boolean applicantSeated) {
         if (room.closed()) {
             return Optional.of(Refusal.ROOM_CLOSED);
+        }
+        if (applicantSeated) {
+            return Optional.of(Refusal.PLAYER_CANNOT_WATCH);
         }
         if (room.privateRoom()) {
             return Optional.of(Refusal.PRIVATE_ROOM_NOT_WATCHABLE);
