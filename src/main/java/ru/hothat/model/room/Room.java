@@ -164,6 +164,11 @@ public class Room {
     @Column(name = "current_word", length = 200)
     private String currentWord;
 
+    /** Server-reserved one-word lookahead; never sent to other participants. */
+    @Builder.Default
+    @Column(name = "next_word_roll", nullable = false)
+    private Integer nextWordRoll = 0;
+
     @Builder.Default
     @Column(name = "current_turn_score", nullable = false)
     private Integer currentTurnScore = 0;
