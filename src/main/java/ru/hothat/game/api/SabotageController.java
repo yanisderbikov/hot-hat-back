@@ -30,10 +30,13 @@ import ru.hothat.game.api.dto.ReportClipResultRequestDTO;
 import ru.hothat.game.api.dto.ReportedClipResultResponseDTO;
 import ru.hothat.game.api.dto.SabotageEventResponseDTO;
 import ru.hothat.game.api.dto.UseWeaponRequestDTO;
+import ru.hothat.game.api.dto.ConfirmReplacementPlaybackRequestDTO;
+import ru.hothat.game.api.dto.ConfirmedReplacementPlaybackResponseDTO;
 import ru.hothat.game.usecase.DiscardReplacementClipUseCase;
 import ru.hothat.game.usecase.OrderReplacementClipUseCase;
 import ru.hothat.game.usecase.ReportClipResultUseCase;
 import ru.hothat.game.usecase.UseWeaponUseCase;
+import ru.hothat.game.usecase.ConfirmReplacementPlaybackUseCase;
 
 /**
  * Диверсии против объясняющего.
@@ -60,6 +63,7 @@ public class SabotageController {
     private final OrderReplacementClipUseCase orderClip;
     private final ReportClipResultUseCase reportClipResult;
     private final DiscardReplacementClipUseCase discardClip;
+    private final ConfirmReplacementPlaybackUseCase confirmPlayback;
 
     @Operation(summary = "Применить оружие",
             description = "Проверяет фазу, режим, принадлежность к партии, перезарядку, занятость "
@@ -118,6 +122,18 @@ public class SabotageController {
             String clipId,
             @Valid @RequestBody ReportClipResultRequestDTO request) {
         return ResponseEntity.ok(reportClipResult.run(user, roomId, clipId, request));
+    }
+
+    @Operation(summary = "Подтвердить фактическое воспроизведение Подмены",
+            description = "Только снимаемый участник может подтвердить запуск клипа. Заряд списывается "
+                    + "один раз, только после успешного старта видеопубликации; неудача сохраняет клип.")
+    @PutMapping("/replacement-clips/{clipId}/playback")
+    public ResponseEntity<ConfirmedReplacementPlaybackResponseDTO> playbackResult(
+            @AuthenticationPrincipal HotHatUser user,
+            @PathVariable @RoomId String roomId,
+            @PathVariable @Pattern(regexp = "^repl_[a-f0-9]{20}$") String clipId,
+            @Valid @RequestBody ConfirmReplacementPlaybackRequestDTO request) {
+        return ResponseEntity.ok(confirmPlayback.run(user, roomId, clipId, request));
     }
 
     @Operation(summary = "Отказаться от своего клипа",
