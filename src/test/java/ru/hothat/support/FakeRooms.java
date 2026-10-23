@@ -100,6 +100,11 @@ public final class FakeRooms implements GetterRoom {
     }
 
     @Override
+    public List<RoomSpectator> getSpectatorsOfRooms(List<String> roomIds) {
+        return spectators.stream().filter(row -> roomIds.contains(row.getRoomId())).toList();
+    }
+
+    @Override
     public Optional<RoomSpectator> getSpectator(String roomId, String uid) {
         return spectators.stream()
                 .filter(row -> row.getRoomId().equals(roomId) && row.getUid().equals(uid))
