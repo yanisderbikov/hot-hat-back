@@ -87,6 +87,8 @@ public final class ErrorMessages {
             Map.entry("MATCH_TICKET_NOT_FOUND", "Заявка на подбор не найдена."),
             Map.entry("PREVIEW_SESSION_NOT_FOUND", "Просмотр комнаты не найден."),
             Map.entry("MEME_NOT_FOUND", "Мем не найден."),
+            Map.entry("REPLACEMENT_EVENT_INVALID", "Событие Подмены недоступно: попробуйте применить запись в следующий ход."),
+            Map.entry("REPLACEMENT_ACK_EXPIRED", "Время подтверждения Подмены истекло. Запись и заряд сохранены."),
             Map.entry("MEME_MEDIA_MISSING", "У мема нет файла."),
             Map.entry("NOT_MEME_AUTHOR", "Удалить мем может только тот, кто его загрузил."),
             Map.entry("BUILTIN_MEME_PROTECTED", "Встроенный мем удалить нельзя."),
