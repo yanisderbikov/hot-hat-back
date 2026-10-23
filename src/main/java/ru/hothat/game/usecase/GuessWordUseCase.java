@@ -43,6 +43,8 @@ public class GuessWordUseCase {
                 resolved.nextWord(), resolved.turnScore(), resolved.wordsLeft(), resolved.turnClosed(),
                 resolved.appealEndsAt(),
                 MatchEngine.previewNextWord(session.state(), true),
-                MatchEngine.previewNextWord(session.state(), false));
+                MatchEngine.previewNextWord(session.state(), false),
+                java.util.List.copyOf(session.state().getBag()),
+                session.state().getNextWordRoll());
     }
 }

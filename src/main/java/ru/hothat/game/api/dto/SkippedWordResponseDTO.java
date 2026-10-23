@@ -31,5 +31,14 @@ public record SkippedWordResponseDTO(
         String nextOnGuess,
 
         @Schema(hidden = true)
-        String nextOnSkip) {
+        String nextOnSkip,
+
+        /** Visible only to the current explainer (or in their own word result). */
+        @Schema(hidden = true)
+        java.util.List<String> privateDrawBag,
+
+        /** Reserved roll for the next draw; together with privateDrawBag
+         * supports zero-roundtrip consecutive word taps. */
+        @Schema(hidden = true)
+        Integer privateNextWordRoll) {
 }

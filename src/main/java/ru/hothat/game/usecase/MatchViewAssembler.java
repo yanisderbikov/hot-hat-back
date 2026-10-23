@@ -113,7 +113,9 @@ public class MatchViewAssembler {
                 // его тому, кто должен отгадать, и зрителям в записи.
                 explaining ? state.getCurrentWord() : null,
                 explaining ? ru.hothat.game.domain.MatchEngine.previewNextWord(state, true) : null,
-                explaining ? ru.hothat.game.domain.MatchEngine.previewNextWord(state, false) : null);
+                explaining ? ru.hothat.game.domain.MatchEngine.previewNextWord(state, false) : null,
+                explaining ? List.copyOf(state.getBag()) : null,
+                explaining ? state.getNextWordRoll() : null);
     }
 
     public PauseView pause(MatchState state) {

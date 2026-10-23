@@ -194,7 +194,7 @@ public final class MatchEngine {
         }
         state.setCurrentWord(nextWord);
         if (nextWord != null) {
-            state.setNextWordRoll(random.nextInt(1_000_000));
+            state.setNextWordRoll(advanceRoll(state.getNextWordRoll()));
         }
         state.setWordsLeft(state.getBag().size() + (nextWord == null ? 0 : 1));
 
@@ -224,6 +224,16 @@ public final class MatchEngine {
         int index = reservedIndex(state.getNextWordRoll(), count);
         if (!guessed && index == state.getBag().size()) return state.getCurrentWord();
         return state.getBag().get(index);
+    }
+
+    /**
+     * Shared deterministic progression after each resolved word. The initial
+     * per-turn roll remains random, but the explainer can simulate any number
+     * of fast guesses/skips locally while HTTP actions are queued in order.
+     */
+    public static int advanceRoll(int current) {
+        return (int) (((long) Math.max(0, Math.min(999_999, current)) * 48_271L
+                + 12_820_163L) % 1_000_000L);
     }
 
     private String drawReserved(MatchState state) {
