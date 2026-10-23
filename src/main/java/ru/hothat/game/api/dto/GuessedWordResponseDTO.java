@@ -31,5 +31,11 @@ public record GuessedWordResponseDTO(
         boolean turnClosed,
 
         @Schema(description = "Когда закроется голосование; ноль, если ход не закрыт", example = "0")
-        long appealEndsAtMs) {
+        long appealEndsAtMs,
+
+        @Schema(hidden = true)
+        String nextOnGuess,
+
+        @Schema(hidden = true)
+        String nextOnSkip) {
 }
