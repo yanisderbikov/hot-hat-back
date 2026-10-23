@@ -129,6 +129,37 @@ class MatchEngineTurnTest {
         }
 
         @Test
+        @DisplayName("Подготовленное слово при угадано совпадает с результатом серверного решения")
+        void prefetchedGuessIsExact() {
+            MatchState state = Matches.started(engine, "небо", "море", "лес");
+            TurnStarted started = engine.beginTurn(state, ANN);
+            String expected = MatchEngine.previewNextWord(state, true);
+
+            WordResolved resolved = engine.guess(state, started.turnId(), "pre-guessed");
+
+            assertThat(expected).isEqualTo("море");
+            assertThat(resolved.nextWord()).isEqualTo(expected);
+            assertThat(MatchEngine.previewNextWord(state, true)).isEqualTo("лес");
+        }
+
+        @Test
+        @DisplayName("Предсказанный пропуск учитывает возврат текущего слова в шляпу")
+        void prefetchedSkipIncludesReturnedWord() {
+            MatchState state = Matches.started(engine, "небо", "море", "лес");
+            TurnStarted started = engine.beginTurn(state, ANN);
+            // The last ticket picks the returned current word on Skip.
+            state.setNextWordRoll(999_999);
+            String expected = MatchEngine.previewNextWord(state, false);
+
+            WordResolved resolved = engine.skip(state, started.turnId(), "pre-skipped");
+
+            assertThat(expected).isEqualTo("небо");
+            assertThat(resolved.nextWord()).isEqualTo(expected);
+            assertThat(state.getCurrentTurnScore()).isZero();
+            assertThat(state.getWordsLeft()).isEqualTo(3);
+        }
+
+        @Test
         @DisplayName("Повтор того же нажатия при потере связи не даёт второго очка")
         void repeatedGuessScoresOnce() {
             MatchState state = Matches.started(engine, "небо", "море", "лес");
