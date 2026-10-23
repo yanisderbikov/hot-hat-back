@@ -92,13 +92,32 @@ public class RoomJanitor implements RoomJanitorPort {
      * {@code updatedAt}: у комнат старого поколения первой колонки нет, и без
      * запасной они получали бы фору всегда.
      */
-    private static RoomCleanupPolicy.Verdict verdict(Room room, List<Long> humanLastSeen,
-                                                     boolean targeted, long nowMs) {
+    private RoomCleanupPolicy.Verdict verdict(Room room, List<Long> humanLastSeen,
+                                             boolean targeted, long nowMs) {
+        if (Boolean.TRUE.equals(room.getIsTestRoom())) {
+            boolean humanPresent = humanLastSeen.stream().anyMatch(value ->
+                    value != null && value > nowMs - RoomCleanupPolicy.TEST_ROOM_NO_HUMAN_MS);
+            if (humanPresent && room.getTestVacantSinceAt() != null
+                    && room.getTestVacantSinceAt() > 0) {
+                // Возвращение реального человека отменяет отсчёт удаления.
+                room.setTestVacantSinceAt(0L);
+                saverRoom.save(room);
+            } else if (humanLastSeen.isEmpty()
+                    && (room.getTestVacantSinceAt() == null || room.getTestVacantSinceAt() <= 0)) {
+                // После явного выхода место игрока уже удалено. Фиксируем
+                // начало отсутствия, чтобы не снести комнату немедленно.
+                room.setTestVacantSinceAt(nowMs);
+                saverRoom.save(room);
+            }
+        }
         long createdAt = room.getCreatedAt() != null
                 ? room.getCreatedAt().toEpochMilli()
                 : (room.getUpdatedAt() == null ? 0L : room.getUpdatedAt().toEpochMilli());
         return RoomCleanupPolicy.verdict(
-                new RoomCleanupPolicy.Occupancy(RoomPhase.fromWire(room.getPhase()), createdAt, humanLastSeen),
+                new RoomCleanupPolicy.Occupancy(RoomPhase.fromWire(room.getPhase()),
+                        Boolean.TRUE.equals(room.getIsTestRoom()), createdAt,
+                        room.getTestVacantSinceAt() == null ? 0L : room.getTestVacantSinceAt(),
+                        humanLastSeen),
                 targeted, nowMs);
     }
 

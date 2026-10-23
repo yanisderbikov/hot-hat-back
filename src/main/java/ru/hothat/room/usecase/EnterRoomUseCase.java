@@ -107,6 +107,11 @@ public class EnterRoomUseCase {
         // Живой вход отодвигает уборщика: комната, в которую только что вошли,
         // не должна попасть под общий проход как брошенная.
         room.setLastActivityAt(now);
+        // Если хозяин вернулся в опустевшую тестовую комнату в течение 30 с,
+        // сбрасываем ранее запущенный таймер удаления.
+        if (Boolean.TRUE.equals(room.getIsTestRoom())) {
+            room.setTestVacantSinceAt(0L);
+        }
         saverRoom.save(room);
 
         return new RoomSeatResponseDTO(

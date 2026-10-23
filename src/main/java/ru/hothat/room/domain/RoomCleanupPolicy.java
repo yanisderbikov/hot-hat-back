@@ -21,7 +21,10 @@ import java.util.List;
 public final class RoomCleanupPolicy {
 
     /** Чаще этого общий проход не запускается: он читает тысячу комнат. */
-    public static final long SWEEP_COOLDOWN_MS = 5 * 60 * 1000;
+    public static final long SWEEP_COOLDOWN_MS = 9 * 1000;
+
+    /** Тест без живого человека живёт не дольше 30 секунд. */
+    public static final long TEST_ROOM_NO_HUMAN_MS = 30 * 1000;
 
     /** Столько молчания хватает, чтобы считать комнату в наборе брошенной. */
     public static final long STALE_PLAYER_MS = 10 * 60 * 1000;
@@ -51,10 +54,13 @@ public final class RoomCleanupPolicy {
     /**
      * Комната глазами уборщика.
      *
+     * @param testRoom         тестовая ли комната; боты не считаются людьми
      * @param createdAtMs      когда её завели; 0 — неизвестно, форы не будет
+     * @param vacantSinceAtMs  начало отсутствия людей после явного выхода
      * @param humanLastSeenAtMs отметки присутствия людей, без тест-ботов
      */
-    public record Occupancy(RoomPhase phase, long createdAtMs, List<Long> humanLastSeenAtMs) {
+    public record Occupancy(RoomPhase phase, boolean testRoom, long createdAtMs,
+                            long vacantSinceAtMs, List<Long> humanLastSeenAtMs) {
     }
 
     /**
@@ -75,6 +81,24 @@ public final class RoomCleanupPolicy {
      */
     public static Verdict verdict(Occupancy room, boolean targeted, long nowMs) {
         List<Long> lastSeen = room.humanLastSeenAtMs();
+        if (room.testRoom()) {
+            // Для теста используется отдельный короткий heartbeat (5 с).
+            // Если игрок ушёл штатно, списка людей уже нет: 30 с считаются
+            // от сохранённой метки пустоты, а не от создания комнаты.
+            if (lastSeen.stream().anyMatch(value ->
+                    value != null && value > nowMs - TEST_ROOM_NO_HUMAN_MS)) {
+                return new Verdict(false, "has-human-player");
+            }
+            if (!lastSeen.isEmpty()) {
+                return new Verdict(true, "test-humans-stale-30s");
+            }
+            long vacantSince = room.vacantSinceAtMs() > 0
+                    ? room.vacantSinceAtMs() : nowMs;
+            if (nowMs - vacantSince < TEST_ROOM_NO_HUMAN_MS) {
+                return new Verdict(false, "test-room-30s-grace");
+            }
+            return new Verdict(true, "test-room-empty-30s");
+        }
         if (lastSeen.isEmpty()) {
             boolean recent = room.createdAtMs() > 0
                     && nowMs - room.createdAtMs() < NEW_ROOM_GRACE_MS;

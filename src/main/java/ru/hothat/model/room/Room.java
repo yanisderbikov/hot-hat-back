@@ -74,6 +74,11 @@ public class Room {
     @Column(name = "is_test_room", nullable = false)
     private Boolean isTestRoom = Boolean.FALSE;
 
+    /** Когда тестовая комната впервые осталась без людей; боты не считаются. */
+    @Builder.Default
+    @Column(name = "test_vacant_since_at", nullable = false)
+    private Long testVacantSinceAt = 0L;
+
     @Builder.Default
     @Column(name = "team_lobby", nullable = false)
     private Boolean teamLobby = Boolean.FALSE;
