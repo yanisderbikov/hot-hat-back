@@ -46,5 +46,11 @@ public record TurnView(
 
         @Schema(description = "Слово на руках; заполнено только для объясняющего", example = "Абажур",
                 nullable = true)
-        String currentWord) {
+        String currentWord,
+
+        @Schema(hidden = true)
+        String nextOnGuess,
+
+        @Schema(hidden = true)
+        String nextOnSkip) {
 }
