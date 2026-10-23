@@ -86,6 +86,12 @@ public final class MatchState {
 
     private List<String> bag = new ArrayList<>();
     private String currentWord;
+    /**
+     * Draw ticket chosen by the server one word ahead. The explainer receives
+     * only the resulting one-word previews, never the remaining bag.
+     * Persisted together with the word so the real draw matches the preview.
+     */
+    private int nextWordRoll;
     private int wordsLeft;
     private String lastGuessedWord;
     private String lastSkippedWord;
