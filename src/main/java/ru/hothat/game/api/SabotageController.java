@@ -1,6 +1,7 @@
 package ru.hothat.game.api;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -124,6 +125,8 @@ public class SabotageController {
         return ResponseEntity.ok(reportClipResult.run(user, roomId, clipId, request));
     }
 
+    // Internal media acknowledgement, intentionally excluded from the public API snapshot.
+    @Hidden
     @Operation(summary = "Подтвердить фактическое воспроизведение Подмены",
             description = "Только снимаемый участник может подтвердить запуск клипа. Заряд списывается "
                     + "один раз, только после успешного старта видеопубликации; неудача сохраняет клип.")
