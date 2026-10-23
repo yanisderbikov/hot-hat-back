@@ -72,6 +72,7 @@ final class MatchMapper {
 
         state.setBag(new ArrayList<>(room.getBag() == null ? List.of() : room.getBag()));
         state.setCurrentWord(room.getCurrentWord());
+        state.setNextWordRoll(room.getNextWordRoll() == null ? 0 : room.getNextWordRoll());
         state.setWordsLeft(room.getWordsLeft() == null ? 0 : room.getWordsLeft());
         state.setLastGuessedWord(room.getLastGuessedWord());
         state.setLastSkippedWord(room.getLastSkippedWord());
@@ -161,6 +162,7 @@ final class MatchMapper {
 
         room.setBag(new ArrayList<>(state.getBag()));
         room.setCurrentWord(state.getCurrentWord());
+        room.setNextWordRoll(state.getNextWordRoll());
         room.setWordsLeft(state.getWordsLeft());
         room.setLastGuessedWord(state.getLastGuessedWord());
         room.setLastSkippedWord(state.getLastSkippedWord());
