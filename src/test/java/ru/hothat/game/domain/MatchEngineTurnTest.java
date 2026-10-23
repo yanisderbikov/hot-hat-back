@@ -265,6 +265,38 @@ class MatchEngineTurnTest {
         }
     }
 
+    @Test
+    @DisplayName("20 быстрых последовательных решений точно совпадают с предварительной локальной жеребьёвкой")
+    void twentyInstantPreviewActionsMatchServer() {
+        String[] words = java.util.stream.IntStream.range(0, 80)
+                .mapToObj(i -> "слово-" + i).toArray(String[]::new);
+        MatchState state = Matches.started(engine, words);
+        TurnStarted started = engine.beginTurn(state, ANN);
+        java.util.List<String> privateBag = new java.util.ArrayList<>(state.getBag());
+        int roll = state.getNextWordRoll();
+        String currentWord = state.getCurrentWord();
+        int expectedScore = 0;
+
+        for (int i = 0; i < 20; i++) {
+            boolean counted = i % 3 != 1;
+            if (!counted) privateBag.add(currentWord);
+            int index = (int) (((long) roll * privateBag.size()) / 1_000_000L);
+            currentWord = privateBag.remove(index);
+            roll = MatchEngine.advanceRoll(roll);
+            WordResolved result = counted
+                    ? engine.guess(state, started.turnId(), "fast-" + i)
+                    : engine.skip(state, started.turnId(), "fast-" + i);
+            if (counted) expectedScore += 1;
+
+            assertThat(result.nextWord()).isEqualTo(currentWord);
+            assertThat(state.getCurrentWord()).isEqualTo(currentWord);
+            assertThat(state.getBag()).containsExactlyElementsOf(privateBag);
+            assertThat(state.getNextWordRoll()).isEqualTo(roll);
+            assertThat(state.getCurrentTurnScore()).isEqualTo(expectedScore);
+            assertThat(result.turnClosed()).isFalse();
+        }
+    }
+
     @Nested
     @DisplayName("Конец хода")
     class EndOfTurn {
