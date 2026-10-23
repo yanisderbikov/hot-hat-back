@@ -47,6 +47,9 @@ public interface GetterRoom {
     /** Зрители в порядке посадки — по тому же договору, что {@link #getPlayers}. */
     List<RoomSpectator> getSpectators(String roomId);
 
+    /** Реальные зрители тоже люди; массовое чтение предотвращает N+1 в уборщике. */
+    List<RoomSpectator> getSpectatorsOfRooms(List<String> roomIds);
+
     Optional<RoomSpectator> getSpectator(String roomId, String uid);
 
     List<RoomSpectator> getSpectatorRowsOfUid(String uid);

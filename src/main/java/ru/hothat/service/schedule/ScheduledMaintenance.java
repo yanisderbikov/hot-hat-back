@@ -23,7 +23,11 @@ public class ScheduledMaintenance {
     private final RecordingService recordingService;
     private final MonitorService monitorService;
 
-    @Scheduled(cron = "${cleanup.rooms.cron}")
+    // Частая уборка критична для 30-секундного TTL тестовых комнат.
+    // Отдельный interval не зависит от старого CLEANUP_ROOMS_CRON в Railway:
+    // устаревшее env-значение cron ранее оставляло тестовые комнаты на часы.
+    @Scheduled(fixedDelayString = "${cleanup.rooms.interval-ms:10000}",
+               initialDelayString = "${cleanup.rooms.initial-delay-ms:3000}")
     public void cleanupRooms() {
         try {
             Map<String, Object> result = roomCleanupService.sweep();

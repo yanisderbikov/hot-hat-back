@@ -15,5 +15,7 @@ interface RoomSpectatorRepo extends JpaRepository<RoomSpectator, RoomMemberId> {
 
     List<RoomSpectator> findByUid(String uid);
 
+    List<RoomSpectator> findByRoomIdIn(List<String> roomIds);
+
     void deleteByRoomId(String roomId);
 }

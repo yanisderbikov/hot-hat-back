@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import ru.hothat.model.ops.MaintenanceState;
 import ru.hothat.model.room.Room;
 import ru.hothat.model.room.RoomPlayer;
+import ru.hothat.model.room.RoomSpectator;
 import ru.hothat.repository.GetterOps;
 import ru.hothat.repository.GetterRoom;
 import ru.hothat.repository.SaverOps;
@@ -70,8 +71,8 @@ public class RoomJanitor implements RoomJanitorPort {
         }
         long now = System.currentTimeMillis();
         List<Room> rooms = getterRoom.getAll(SWEEP_BATCH);
-        // Места всех прочитанных комнат — одним запросом. Прежний движок
-        // спрашивал по комнате за раз: тысяча комнат стоила тысячи обращений.
+        // Игроки и реальные зрители читаются двумя пакетными запросами.
+        // Превью на главной не считается присутствием человека в комнате.
         Map<String, List<Long>> humans = humansByRoom(rooms.stream().map(Room::getId).toList());
         List<Swept> swept = new ArrayList<>();
         for (Room room : rooms) {
@@ -130,11 +131,14 @@ public class RoomJanitor implements RoomJanitorPort {
     private Map<String, List<Long>> humansByRoom(List<String> roomIds) {
         Map<String, List<Long>> byRoom = new LinkedHashMap<>();
         for (RoomPlayer player : getterRoom.getPlayersOfRooms(roomIds)) {
-            if (Boolean.TRUE.equals(player.getIsTestBot())) {
-                continue;
-            }
+            if (Boolean.TRUE.equals(player.getIsTestBot())) continue;
             byRoom.computeIfAbsent(player.getRoomId(), key -> new ArrayList<>())
                     .add(player.getLastSeenAt() == null ? 0L : player.getLastSeenAt());
+        }
+        for (RoomSpectator spectator : getterRoom.getSpectatorsOfRooms(roomIds)) {
+            if (Boolean.TRUE.equals(spectator.getPreview())) continue;
+            byRoom.computeIfAbsent(spectator.getRoomId(), key -> new ArrayList<>())
+                    .add(spectator.getLastSeenAt() == null ? 0L : spectator.getLastSeenAt());
         }
         return byRoom;
     }

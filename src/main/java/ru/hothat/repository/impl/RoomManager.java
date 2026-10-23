@@ -105,6 +105,12 @@ class RoomManager implements GetterRoom, SaverRoom {
     }
 
     @Override
+    public List<RoomSpectator> getSpectatorsOfRooms(List<String> roomIds) {
+        if (roomIds == null || roomIds.isEmpty()) return List.of();
+        return wrap("getSpectatorsOfRooms", () -> roomSpectatorRepo.findByRoomIdIn(roomIds));
+    }
+
+    @Override
     public Optional<RoomSpectator> getSpectator(String roomId, String uid) {
         return wrap("getSpectator", () -> roomSpectatorRepo.findById(new RoomMemberId(roomId, uid)));
     }
