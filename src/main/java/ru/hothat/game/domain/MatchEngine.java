@@ -59,6 +59,7 @@ public final class MatchEngine {
         state.setBag(new ArrayList<>(random.shuffle(words)));
         state.setWordsLeft(words.size());
         state.setCurrentWord(null);
+        state.setNextWordRoll(0);
         state.setCurrentTeamIndex(0);
         state.setCurrentTeamId(order.isEmpty() ? null : order.get(0));
         clearTurn(state);
@@ -112,6 +113,9 @@ public final class MatchEngine {
         state.setGuesserUid(guesserUid);
         state.setGuesserName(state.nameOf(guesserUid));
         state.setCurrentWord(word);
+        // Reserve the next random draw now. The UI can display exactly the
+        // same word at tap-time that the authoritative resolver will choose.
+        state.setNextWordRoll(random.nextInt(1_000_000));
         state.setCurrentTurnScore(0);
         state.setGuessedWords(new ArrayList<>());
         state.setTurnStartedAtMs(startedAt);
@@ -186,9 +190,12 @@ public final class MatchEngine {
 
         String nextWord = null;
         if (!lastWord && !state.bagEmpty()) {
-            nextWord = draw(state);
+            nextWord = drawReserved(state);
         }
         state.setCurrentWord(nextWord);
+        if (nextWord != null) {
+            state.setNextWordRoll(random.nextInt(1_000_000));
+        }
         state.setWordsLeft(state.getBag().size() + (nextWord == null ? 0 : 1));
 
         if (nextWord == null) {
@@ -201,6 +208,34 @@ public final class MatchEngine {
         return new WordResolved(counted ? WordResolved.Outcome.COUNTED : WordResolved.Outcome.SKIPPED,
                 word, nextWord, state.getCurrentTurnScore(), state.getWordsLeft(), teamScoreDelta,
                 false, 0);
+    }
+
+    /**
+     * One-word lookahead visible only to the current explainer.
+     *
+     * A skip appends the current word to the end of the bag before drawing.
+     * Both cases use the same precommitted random fraction, so the preview
+     * matches the subsequent server draw without revealing the entire bag.
+     */
+    public static String previewNextWord(MatchState state, boolean guessed) {
+        if (state.getCurrentWord() == null || state.getPhase() != MatchPhase.ACTIVE) return null;
+        int count = state.getBag().size() + (guessed ? 0 : 1);
+        if (count <= 0) return null;
+        int index = reservedIndex(state.getNextWordRoll(), count);
+        if (!guessed && index == state.getBag().size()) return state.getCurrentWord();
+        return state.getBag().get(index);
+    }
+
+    private String drawReserved(MatchState state) {
+        List<String> bag = state.getBag();
+        if (bag.isEmpty()) return null;
+        return bag.remove(reservedIndex(state.getNextWordRoll(), bag.size()));
+    }
+
+    private static int reservedIndex(int roll, int size) {
+        if (size <= 1) return 0;
+        // Exactly one ticket from 0..999999, drawn by injected RandomSource.
+        return (int) (((long) Math.max(0, Math.min(999_999, roll)) * size) / 1_000_000L);
     }
 
     /** Завершить ход по кнопке объясняющего. */
