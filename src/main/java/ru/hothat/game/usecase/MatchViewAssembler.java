@@ -111,7 +111,9 @@ public class MatchViewAssembler {
                 TurnRules.durationSeconds(state), state.getCurrentTurnScore(), state.getWordsLeft(),
                 // Слово знает только объясняющий: иначе ответ сервера выдал бы
                 // его тому, кто должен отгадать, и зрителям в записи.
-                explaining ? state.getCurrentWord() : null);
+                explaining ? state.getCurrentWord() : null,
+                explaining ? ru.hothat.game.domain.MatchEngine.previewNextWord(state, true) : null,
+                explaining ? ru.hothat.game.domain.MatchEngine.previewNextWord(state, false) : null);
     }
 
     public PauseView pause(MatchState state) {
