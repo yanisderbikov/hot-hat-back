@@ -51,9 +51,8 @@ public class ConfirmReplacementPlaybackUseCase {
             throw ApiException.of("REPLACEMENT_ACK_EXPIRED", 409);
         }
         if (!request.played()) {
-            // No charge; allow the same clip to be used on a later turn.
-            state.getLocks().setReplacementUntil(0);
-            session.commit();
+            // No charge and no state change. A late failure acknowledgement must
+            // never unlock a newer replacement attempt on a subsequent turn.
             return new ConfirmedReplacementPlaybackResponseDTO(false, false);
         }
         // Spend and removal are part of one transactional room update.
