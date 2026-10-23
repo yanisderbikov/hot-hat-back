@@ -186,6 +186,23 @@ class MatchEngineTurnTest {
         }
 
         @Test
+        @DisplayName("После 0:00 Не угадано возвращает последнее слово без выдачи нового")
+        void lastWordCanBeRejectedInGrace() {
+            MatchState state = Matches.started(engine, "небо", "море", "лес");
+            TurnStarted started = engine.beginTurn(state, ANN);
+            clock.advance(60_001);
+
+            WordResolved resolved = engine.skip(state, started.turnId(), "last-no");
+
+            assertThat(resolved.outcome()).isEqualTo(WordResolved.Outcome.SKIPPED);
+            assertThat(resolved.turnClosed()).isTrue();
+            assertThat(resolved.nextWord()).isNull();
+            assertThat(state.getPhase()).isEqualTo(MatchPhase.APPEAL);
+            assertThat(state.getCurrentTurnScore()).isZero();
+            assertThat(state.getBag()).containsExactlyInAnyOrder("небо", "море", "лес");
+        }
+
+        @Test
         @DisplayName("После отсрочки нажатие опоздало: очка нет, ход закрыт")
         void guessAfterGraceIsRefused() {
             MatchState state = Matches.started(engine, "небо", "море", "лес");
