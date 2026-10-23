@@ -1,6 +1,7 @@
 package ru.hothat.support;
 
 import org.springframework.core.annotation.AnnotatedElementUtils;
+import io.swagger.v3.oas.annotations.Hidden;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
@@ -57,7 +58,14 @@ public final class Controllers {
 
     /** Только новая поверхность: старые адреса живут по другим правилам. */
     public static List<Route> v2Routes() {
-        return ROUTES.stream().filter(route -> route.path().startsWith("/api/v2")).toList();
+        // @Hidden control handshakes are real routes but springdoc excludes them.
+        // Keep them in routes() for duplicate detection, exclude only from the
+        // API snapshot comparison to match the live /v3/api-docs output.
+        return ROUTES.stream()
+                .filter(route -> route.path().startsWith("/api/v2"))
+                .filter(route -> !AnnotatedElementUtils.hasAnnotation(route.handler(), Hidden.class)
+                        && !AnnotatedElementUtils.hasAnnotation(route.controller(), Hidden.class))
+                .toList();
     }
 
     /** Контроллеры, у которых хотя бы один адрес лежит в {@code /api/v2}. */
