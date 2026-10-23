@@ -41,6 +41,8 @@ public class GuessWordUseCase {
         session.commit();
         return new GuessedWordResponseDTO(WordActions.outcome(resolved.outcome()), resolved.word(),
                 resolved.nextWord(), resolved.turnScore(), resolved.wordsLeft(), resolved.turnClosed(),
-                resolved.appealEndsAt());
+                resolved.appealEndsAt(),
+                MatchEngine.previewNextWord(session.state(), true),
+                MatchEngine.previewNextWord(session.state(), false));
     }
 }
