@@ -56,7 +56,10 @@ public final class SabotageEngine {
         // У владельца негатив и апож не кончаются, но пока заряды есть — тратятся:
         // иначе его панель показывала бы неизрасходованный запас всю партию.
         boolean unlimited = weapon.ownerUnlimited() && command.owner();
-        if (weapon.consumesAmmo() && (!unlimited || attacker.ammo(weapon.ammoKey()) > 0)) {
+        // SCRUM-22: a replacement request only reserves a playback attempt.
+        // Deduct its charge after the target confirms real playback, never here.
+        if (weapon.type() != WeaponType.REPLACEMENT && weapon.consumesAmmo()
+                && (!unlimited || attacker.ammo(weapon.ammoKey()) > 0)) {
             attacker.spend(weapon.ammoKey(), 1);
         }
         if (decision.consumeMeme()) {
@@ -72,9 +75,8 @@ public final class SabotageEngine {
             // Ход помечен: вторая Подмена в том же ходу невозможна.
             state.getLocks().setReplacementTurnId(state.getTurnId() == null ? "" : state.getTurnId());
         }
-        if (decision.consumedClipId() != null) {
-            state.getClips().remove(decision.consumedClipId());
-        }
+        // SCRUM-22: keep the clip for retry if the target goes offline or playback fails.
+        // ConfirmReplacementPlaybackUseCase removes it atomically with ammo deduction.
         remember(state, event);
         return new SabotageOutcome(event, Map.copyOf(attacker.getArsenal()), attacker.getSabotageCooldownUntil());
     }
