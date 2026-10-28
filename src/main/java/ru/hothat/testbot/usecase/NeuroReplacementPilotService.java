@@ -48,12 +48,19 @@ public class NeuroReplacementPilotService {
     private static final int MAX_VOICE_BYTES = 3 * 1024 * 1024;
     private static final int MAX_RESULT_BYTES = 40 * 1024 * 1024;
     private static final String SPOKEN_TEXT = "А вы всё ещё кипятите? Тогда мы идём к вам! А ты, сука, не бойся ночиииии!";
-    private static final String VIDEO_PROMPT = "Edit the attached video. Keep precisely the SAME real webcam person, facial identity, outfit, room, "+
-            "camera angle, lighting, desk and background as the original footage. One static webcam shot, no cuts, "+
-            "no scene changes, no other people, no captions. The person naturally faces the camera and talks for "+
-            "roughly four seconds, then raises one hand and gives a clearly visible thumbs-up directly toward the "+
-            "camera (fingers correctly formed), holds it for a moment, lowers the hand, then talks again to the "+
-            "camera until the end. Natural unscripted webcam movement; keep lips visible. Exactly ten seconds.";
+    // Match the successfully tested GenAPI website configuration: Kling O3,
+    // video-to-video edit, ten seconds, PRO, source audio disabled.
+    private static final String VIDEO_MODEL_ID = "kling-video-o3";
+    private static final String VIDEO_PROMPT =
+            "Edit the supplied webcam video, preserving the same person, face, hair, clothes, " +
+            "lighting, room, furniture and camera framing. Keep one continuous static webcam shot. " +
+            "0–3 seconds: the person looks into the camera and naturally speaks. " +
+            "3–6 seconds: clearly raises the right hand in front of the chest and gives a big, " +
+            "unmistakable thumbs-up toward the webcam, thumb pointing up and other fingers folded, " +
+            "holding the gesture for one second. " +
+            "6–10 seconds: lowers the hand and continues speaking naturally with an unobstructed face. " +
+            "Do not change identity or background. No cuts, no camera movements, no other people, " +
+            "no captions and no added objects. Ten seconds total.";
 
     private final ObjectMapper json;
     private final HttpClient http = HttpClient.newBuilder()
@@ -173,9 +180,9 @@ public class NeuroReplacementPilotService {
             // submission after an HTTP timeout could charge the user twice.
             CompletableFuture<String> videoFuture = CompletableFuture.supplyAsync(() -> {
                 try {
-                    return awaitResult(job, "kling-video-o1", submitMultipart("kling-video-o1", Map.of(
+                    return awaitResult(job, VIDEO_MODEL_ID, submitMultipart(VIDEO_MODEL_ID, Map.of(
                             "model", "edit-video", "prompt", VIDEO_PROMPT, "duration", "10",
-                            "pro", "true", "keep_audio", "false"),
+                            "pro", "true", "keep_audio", "false", "generate_audio", "false"),
                             "video_url", "webcam.mp4", "video/mp4", klingCamera));
                 } catch (Exception exception) { throw new RuntimeException(exception); }
             }, executor);
@@ -231,7 +238,7 @@ public class NeuroReplacementPilotService {
                     "-t", "10"));
             if (video) {
                 command.addAll(List.of("-map", "0:v:0", "-an", "-c:v", "libx264",
-                        "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p",
+                        "-preset", "veryfast", "-crf", "19", "-pix_fmt", "yuv420p",
                         "-movflags", "+faststart"));
             } else {
                 command.addAll(List.of("-vn", "-ac", "1", "-ar", "24000",

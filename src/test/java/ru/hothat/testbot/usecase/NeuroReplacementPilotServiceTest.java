@@ -10,6 +10,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NeuroReplacementPilotServiceTest {
     private final NeuroReplacementPilotService pilot = new NeuroReplacementPilotService(new ObjectMapper());
@@ -78,6 +79,16 @@ class NeuroReplacementPilotServiceTest {
         var response = json.readTree("{\"status\":\"error\"}");
         String message = ReflectionTestUtils.invokeMethod(pilot, "errorCode", response);
         assertEquals("", message);
+    }
+
+    @Test
+    void usesTheSameKlingVideoO3ModelAsTheSuccessfulManualTest() {
+        assertEquals("kling-video-o3",
+                ReflectionTestUtils.getField(NeuroReplacementPilotService.class, "VIDEO_MODEL_ID"));
+        String prompt = (String) ReflectionTestUtils.getField(
+                NeuroReplacementPilotService.class, "VIDEO_PROMPT");
+        assertTrue(prompt.contains("thumbs-up"));
+        assertTrue(prompt.contains("one continuous static webcam shot"));
     }
 
     @Test
