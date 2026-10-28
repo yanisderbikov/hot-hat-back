@@ -620,11 +620,10 @@ public class TestBotsServiceImpl implements TestBotsService {
         }
         Map<String, Object> runtime = Json.map(room.getTestBotRuntime());
         boolean targetIsOwner = user.uid().equals(Json.str(room.getExplainerUid()));
-        int ownerTurnGameNumber = Math.max(0, room.getTestOwnerExplainerGameNumber());
-        int ownerTurnNumber = ownerTurnGameNumber == Math.max(0, room.getGameNumber())
-                ? Math.max(0, room.getTestOwnerExplainerTurnNumber()) : 0;
-        // Первые два хода владельца боты не трогают: он успевает освоиться.
-        if (targetIsOwner && (ownerTurnNumber == 1 || ownerTurnNumber == 2)) {
+        // SCRUM-22: the real human in a bot test can only be targeted by
+        // their explicitly approved Neuro Replacement. Never fire ordinary
+        // bot sabotage against them, in any round or any subsequent game.
+        if (targetIsOwner) {
             long deadline = GameRules.currentTurnDeadline(room);
             room.setTestBotNextSabotageAt(Math.max(now + 5000, deadline + 1500));
             saverRoom.save(room);

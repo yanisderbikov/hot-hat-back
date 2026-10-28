@@ -63,4 +63,20 @@ class NeuroReplacementPilotServiceTest {
 
         assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
     }
+
+    @Test
+    void extractsNestedGenApiFailureInsteadOfGenericError() throws Exception {
+        ObjectMapper json = new ObjectMapper();
+        var response = json.readTree("{\"status\":\"error\",\"data\":{\"error\":{\"message\":\"Unsupported video format\"}}}");
+        String message = ReflectionTestUtils.invokeMethod(pilot, "errorCode", response);
+        assertEquals("Unsupported video format", message);
+    }
+
+    @Test
+    void doesNotInventProviderFailureReason() throws Exception {
+        ObjectMapper json = new ObjectMapper();
+        var response = json.readTree("{\"status\":\"error\"}");
+        String message = ReflectionTestUtils.invokeMethod(pilot, "errorCode", response);
+        assertEquals("", message);
+    }
 }

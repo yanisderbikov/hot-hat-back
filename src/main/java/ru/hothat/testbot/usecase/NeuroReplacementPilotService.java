@@ -8,6 +8,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -36,6 +38,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 public class NeuroReplacementPilotService {
+    private static final Logger LOG = LoggerFactory.getLogger(NeuroReplacementPilotService.class);
     private static final URI GENAPI = URI.create("https://api.gen-api.ru/api/v1/");
     private static final int MAX_VIDEO_BYTES = 12 * 1024 * 1024;
     private static final int MAX_VOICE_BYTES = 3 * 1024 * 1024;
@@ -132,7 +135,10 @@ public class NeuroReplacementPilotService {
         result.put("status", job.state);
         result.put("stage", job.stage);
         result.put("ready", "ready".equals(job.state));
-        if (job.error != null) result.put("error", job.error);
+        if (job.error != null) {
+            result.put("error", job.error);
+            result.put("providerRequests", new LinkedHashMap<>(job.providerRequests));
+        }
         return result;
     }
 
@@ -144,7 +150,7 @@ public class NeuroReplacementPilotService {
             // submission after an HTTP timeout could charge the user twice.
             CompletableFuture<String> videoFuture = CompletableFuture.supplyAsync(() -> {
                 try {
-                    return awaitResult(submitMultipart("kling-video-o1", Map.of(
+                    return awaitResult(job, "kling-video-o1", submitMultipart("kling-video-o1", Map.of(
                             "model", "edit-video", "prompt", VIDEO_PROMPT, "duration", "10",
                             "pro", "true", "keep_audio", "false"),
                             "video_url", cameraMime.equals("video/mp4") ? "webcam.mp4" : "webcam.webm", cameraMime, camera));
@@ -152,10 +158,10 @@ public class NeuroReplacementPilotService {
             }, executor);
             CompletableFuture<String> audioFuture = CompletableFuture.supplyAsync(() -> {
                 try {
-                    String tts = awaitResult(submitJson("tts", Map.of(
+                    String tts = awaitResult(job, "tts", submitJson("tts", Map.of(
                             "input", SPOKEN_TEXT, "voice", "nova", "response_format", "mp3", "speed", 1.35)));
                     job.stage = "Копирование голоса";
-                    return awaitResult(submitMultipart("chatterbox-speech", Map.of(
+                    return awaitResult(job, "chatterbox-speech", submitMultipart("chatterbox-speech", Map.of(
                             "source_audio_url", tts), "target_voice_audio_url",
                             voiceMime.contains("wav") ? "reference.wav" :
                                     voiceMime.equals("audio/mp4") ? "reference.mp4" : "reference.webm", voiceMime, voice));
@@ -164,7 +170,7 @@ public class NeuroReplacementPilotService {
             String videoUrl = videoFuture.join();
             String voiceUrl = audioFuture.join();
             job.stage = "Синхронизация губ";
-            String finalVideo = awaitResult(submitJson("lipsync", Map.of(
+            String finalVideo = awaitResult(job, "lipsync", submitJson("lipsync", Map.of(
                     "video_url", videoUrl, "audio_url", voiceUrl,
                     "model", "lipsync-1.9.0-beta", "sync_mode", "cut_off")));
             validatedResultUri(finalVideo);
@@ -174,8 +180,15 @@ public class NeuroReplacementPilotService {
         } catch (Exception error) {
             job.state = "failed";
             job.stage = "Ошибка генерации";
-            String message = String.valueOf(error.getCause() != null ? error.getCause().getMessage() : error.getMessage());
-            job.error = message.length() > 170 ? message.substring(0, 170) : message;
+            // CompletionException -> RuntimeException -> provider IOException.
+            // Unwrap all layers so the model, request ID and original reason
+            // survive all the way to the owner's test UI.
+            Throwable root = error;
+            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            String message = String.valueOf(root.getMessage());
+            job.error = message.length() > 350 ? message.substring(0, 350) : message;
+            LOG.warn("Neuro replacement failed: room={} job={} providerRequests={} reason={}",
+                    job.roomId, job.id, job.providerRequests, job.error);
         }
     }
 
@@ -184,7 +197,11 @@ public class NeuroReplacementPilotService {
         HttpRequest request = baseRequest(GENAPI.resolve("networks/" + model))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)).build();
-        return requestId(send(request));
+        try {
+            return requestId(send(request));
+        } catch (Exception error) {
+            throw new IOException("GenAPI " + model + " submission: " + error.getMessage(), error);
+        }
     }
 
     private String submitMultipart(String model, Map<String, String> fields, String fileField,
@@ -202,7 +219,11 @@ public class NeuroReplacementPilotService {
         HttpRequest request = baseRequest(GENAPI.resolve("networks/" + model))
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(bytes.toByteArray())).build();
-        return requestId(send(request));
+        try {
+            return requestId(send(request));
+        } catch (Exception error) {
+            throw new IOException("GenAPI " + model + " submission: " + error.getMessage(), error);
+        }
     }
 
     private void write(ByteArrayOutputStream bytes, String str) throws IOException {
@@ -230,7 +251,8 @@ public class NeuroReplacementPilotService {
         return id;
     }
 
-    private String awaitResult(String id) throws Exception {
+    private String awaitResult(Job job, String model, String id) throws Exception {
+        job.providerRequests.put(model, id);
         long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(30);
         while (System.nanoTime() < deadline) {
             JsonNode data = send(baseRequest(GENAPI.resolve("request/get/" + id)).GET().build());
@@ -242,18 +264,46 @@ public class NeuroReplacementPilotService {
                 return url;
             }
             if ("error".equals(status) || "failed".equals(status) || "failure".equals(status) || "canceled".equals(status)) {
-                throw new IOException("GENAPI_" + status.toUpperCase() + " " + errorCode(data));
+                String details = errorCode(data);
+                throw new IOException("GenAPI " + model + " status=" + status +
+                        ", request_id=" + id + ": " +
+                        (details.isBlank() ? "сервис не передал причину ошибки" : details));
             }
             Thread.sleep(6500);
         }
-        throw new IOException("GENAPI_GENERATION_TIMEOUT");
+        throw new IOException("GenAPI " + model + " timeout (30 мин.), request_id=" + id);
     }
 
     private String errorCode(JsonNode body) {
-        String message = body.path("error").asText("");
-        if (message.isBlank()) message = body.path("message").asText("");
-        String safe = message.replaceAll("[^\\p{L}\\p{N} _.,:-]", "");
-        return safe.substring(0, Math.min(safe.length(), 80));
+        String message = findProviderError(body, 0);
+        String safe = message.replaceAll("[^\\p{L}\\p{N} _.,:;!()#-]", " ").trim();
+        return safe.substring(0, Math.min(safe.length(), 180));
+    }
+
+    private String findProviderError(JsonNode node, int depth) {
+        if (node == null || node.isNull() || depth > 4) return "";
+        if (node.isObject()) {
+            for (String name : new String[]{"error", "error_message", "message", "detail", "reason", "description"}) {
+                JsonNode value = node.path(name);
+                if (value.isTextual() && !value.asText("").isBlank()) return value.asText();
+                if (value.isContainerNode()) {
+                    String nested = findProviderError(value, depth + 1);
+                    if (!nested.isBlank()) return nested;
+                }
+            }
+            for (JsonNode value : node) {
+                if (value.isContainerNode()) {
+                    String nested = findProviderError(value, depth + 1);
+                    if (!nested.isBlank()) return nested;
+                }
+            }
+        } else if (node.isArray()) {
+            for (JsonNode value : node) {
+                String nested = findProviderError(value, depth + 1);
+                if (!nested.isBlank()) return nested;
+            }
+        }
+        return "";
     }
 
     private URI validatedResultUri(String url) throws IOException {
@@ -290,6 +340,7 @@ public class NeuroReplacementPilotService {
         volatile String stage = "В очереди";
         volatile String finalVideo;
         volatile String error;
+        final Map<String, String> providerRequests = new ConcurrentHashMap<>();
 
         Job(String id, String roomId, String ownerUid) {
             this.id = id;
