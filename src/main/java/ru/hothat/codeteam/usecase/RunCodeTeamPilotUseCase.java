@@ -23,6 +23,7 @@ import java.util.Map;
 public class RunCodeTeamPilotUseCase {
 
     private static final long PAID_CALL_COOLDOWN_MS = 60_000;
+    private static final int MAX_OUTPUT_TOKENS = 4096;
 
     private final ObjectMapper mapper;
     private final HttpClient http = HttpClient.newBuilder()
@@ -34,6 +35,9 @@ public class RunCodeTeamPilotUseCase {
 
     @Value("${CODE_TEAM_MODEL:gemini-3-8-flash}")
     private String model;
+
+    @Value("${code-team.pilot.max-output-tokens}")
+    private int outputTokenBudget;
 
     @Value("${GENAPI_API_KEY:}")
     private String apiKey;
@@ -60,7 +64,7 @@ public class RunCodeTeamPilotUseCase {
         try {
             String body = mapper.writeValueAsString(Map.of(
                     "model", model,
-                    "max_tokens", 750,
+                    "max_tokens", Math.max(1000, Math.min(outputTokenBudget, MAX_OUTPUT_TOKENS)),
                     "temperature", 0.2,
                     "messages", List.of(
                             Map.of("role", "system", "content", "Ты аналитик игровых взаимодействий. Дай короткий отчёт на русском, только по доказательствам."),
@@ -80,12 +84,21 @@ public class RunCodeTeamPilotUseCase {
             if (analysis.isBlank()) {
                 throw ApiException.of("CODE_TEAM_PROVIDER_UNAVAILABLE", 502);
             }
-            return new CodeTeamPilotResponseDTO("live", model, prepared.evidenceCount(), null, analysis);
+            String finishReason = response.path("choices").path(0).path("finish_reason").asText("");
+            return new CodeTeamPilotResponseDTO("live", model, prepared.evidenceCount(), null,
+                    markTruncatedResponse(analysis, finishReason));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw ApiException.of("CODE_TEAM_PROVIDER_UNAVAILABLE", 502);
         } catch (IOException e) {
             throw ApiException.of("CODE_TEAM_PROVIDER_UNAVAILABLE", 502);
         }
+    }
+
+    static String markTruncatedResponse(String analysis, String finishReason) {
+        if ("length".equalsIgnoreCase(finishReason) || "max_tokens".equalsIgnoreCase(finishReason)) {
+            return analysis + "\n\n⚠️ Отчёт обрезан лимитом токенов модели; текст выше неполный.";
+        }
+        return analysis;
     }
 }
