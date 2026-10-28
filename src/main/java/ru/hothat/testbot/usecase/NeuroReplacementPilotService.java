@@ -92,7 +92,8 @@ public class NeuroReplacementPilotService {
         String videoMime = video.getContentType() == null ? "" : video.getContentType().split(";")[0].trim();
         String voiceMime = voice.getContentType() == null ? "" : voice.getContentType().split(";")[0].trim();
         if (!(videoMime.equals("video/webm") || videoMime.equals("video/mp4")) ||
-                !(voiceMime.equals("audio/webm") || voiceMime.equals("audio/mp4"))) {
+                !(voiceMime.equals("audio/webm") || voiceMime.equals("audio/mp4") ||
+                        voiceMime.equals("audio/wav") || voiceMime.equals("audio/x-wav"))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UNSUPPORTED_MEDIARECORDER_FORMAT");
         }
         Job job = new Job(UUID.randomUUID().toString(), roomId, ownerUid);
@@ -156,7 +157,8 @@ public class NeuroReplacementPilotService {
                     job.stage = "Копирование голоса";
                     return awaitResult(submitMultipart("chatterbox-speech", Map.of(
                             "source_audio_url", tts), "target_voice_audio_url",
-                            voiceMime.equals("audio/mp4") ? "reference.mp4" : "reference.webm", voiceMime, voice));
+                            voiceMime.contains("wav") ? "reference.wav" :
+                                    voiceMime.equals("audio/mp4") ? "reference.mp4" : "reference.webm", voiceMime, voice));
                 } catch (Exception exception) { throw new RuntimeException(exception); }
             }, executor);
             String videoUrl = videoFuture.join();
