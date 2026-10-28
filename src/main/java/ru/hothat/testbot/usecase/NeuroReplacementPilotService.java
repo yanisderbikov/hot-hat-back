@@ -53,7 +53,11 @@ public class NeuroReplacementPilotService {
             .connectTimeout(Duration.ofSeconds(25))
             .followRedirects(HttpClient.Redirect.NEVER)
             .build();
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService executor = Executors.newCachedThreadPool(task -> {
+        Thread worker = new Thread(task, "neuro-replacement-pilot");
+        worker.setDaemon(true);
+        return worker;
+    });
     private final Map<String, Job> byRoom = new ConcurrentHashMap<>();
 
     @Value("${neuro-replacement.pilot.enabled:false}")
@@ -141,7 +145,7 @@ public class NeuroReplacementPilotService {
                 try {
                     return awaitResult(submitMultipart("kling-video-o1", Map.of(
                             "model", "edit-video", "prompt", VIDEO_PROMPT, "duration", "10",
-                            "pro", "false", "keep_audio", "false"),
+                            "pro", "true", "keep_audio", "false"),
                             "video_url", cameraMime.equals("video/mp4") ? "webcam.mp4" : "webcam.webm", cameraMime, camera));
                 } catch (Exception exception) { throw new RuntimeException(exception); }
             }, executor);

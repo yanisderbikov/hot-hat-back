@@ -8,6 +8,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -31,6 +32,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 @RequestMapping("/api/v2/admin/test-rooms/{roomId}/neuro-replacements")
 @PreAuthorize("hasRole('OWNER')")
+@SecurityRequirement(name = "Bearer")
 public class NeuroReplacementPilotController {
 
     private final NeuroReplacementPilotService pilot;
