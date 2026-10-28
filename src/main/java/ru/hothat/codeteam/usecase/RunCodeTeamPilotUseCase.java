@@ -29,7 +29,7 @@ public class RunCodeTeamPilotUseCase {
             .connectTimeout(Duration.ofSeconds(10)).build();
     private long lastPaidAttemptMs;
 
-    @Value("${CODE_TEAM_PILOT_ENABLED:false}")
+    @Value("${code-team.pilot.enabled}")
     private boolean enabled;
 
     @Value("${CODE_TEAM_MODEL:gemini-3-8-flash}")
