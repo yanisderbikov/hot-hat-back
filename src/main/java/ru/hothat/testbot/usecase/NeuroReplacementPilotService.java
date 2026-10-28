@@ -17,6 +17,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -145,6 +149,14 @@ public class NeuroReplacementPilotService {
     private void process(Job job, byte[] camera, String cameraMime, byte[] voice, String voiceMime) {
         try {
             job.state = "processing";
+            // Browser MediaRecorder usually gives WebM. Kling's video editor
+            // requires MP4/MOV; Chatterbox is most reliable with PCM WAV.
+            // Convert both *before* starting any billable GenAPI task.
+            job.stage = "Подготовка записи";
+            byte[] klingCamera = cameraMime.equals("video/webm")
+                    ? transcodeMedia(camera, "webm", "mp4", true) : camera;
+            byte[] chatterboxVoice = voiceMime.contains("wav")
+                    ? voice : transcodeMedia(voice, voiceMime.equals("audio/mp4") ? "m4a" : "webm", "wav", false);
             job.stage = "Видео и озвучка";
             // Both models start at once. Only one operation per model: retrying a
             // submission after an HTTP timeout could charge the user twice.
@@ -153,7 +165,7 @@ public class NeuroReplacementPilotService {
                     return awaitResult(job, "kling-video-o1", submitMultipart("kling-video-o1", Map.of(
                             "model", "edit-video", "prompt", VIDEO_PROMPT, "duration", "10",
                             "pro", "true", "keep_audio", "false"),
-                            "video_url", cameraMime.equals("video/mp4") ? "webcam.mp4" : "webcam.webm", cameraMime, camera));
+                            "video_url", "webcam.mp4", "video/mp4", klingCamera));
                 } catch (Exception exception) { throw new RuntimeException(exception); }
             }, executor);
             CompletableFuture<String> audioFuture = CompletableFuture.supplyAsync(() -> {
@@ -163,8 +175,7 @@ public class NeuroReplacementPilotService {
                     job.stage = "Копирование голоса";
                     return awaitResult(job, "chatterbox-speech", submitMultipart("chatterbox-speech", Map.of(
                             "source_audio_url", tts), "target_voice_audio_url",
-                            voiceMime.contains("wav") ? "reference.wav" :
-                                    voiceMime.equals("audio/mp4") ? "reference.mp4" : "reference.webm", voiceMime, voice));
+                            "reference.wav", "audio/wav", chatterboxVoice));
                 } catch (Exception exception) { throw new RuntimeException(exception); }
             }, executor);
             String videoUrl = videoFuture.join();
@@ -189,6 +200,50 @@ public class NeuroReplacementPilotService {
             job.error = message.length() > 350 ? message.substring(0, 350) : message;
             LOG.warn("Neuro replacement failed: room={} job={} providerRequests={} reason={}",
                     job.roomId, job.id, job.providerRequests, job.error);
+        }
+    }
+
+    /**
+     * Normalizes browser media without contacting GenAPI or consuming credits.
+     * FFmpeg is installed in the Railway runtime image. Uploads are capped
+     * before and after transcoding so a malformed video cannot exhaust RAM.
+     */
+    private byte[] transcodeMedia(byte[] source, String inputExtension,
+                                  String outputExtension, boolean video) throws Exception {
+        Path input = Files.createTempFile("hat-neuro-input-", "." + inputExtension);
+        Path output = Files.createTempFile("hat-neuro-output-", "." + outputExtension);
+        try {
+            Files.write(input, source);
+            List<String> command = new ArrayList<>(List.of(
+                    "ffmpeg", "-hide_banner", "-loglevel", "error",
+                    "-nostdin", "-y", "-i", input.toString()));
+            if (video) {
+                command.addAll(List.of("-map", "0:v:0", "-an", "-c:v", "libx264",
+                        "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p",
+                        "-movflags", "+faststart"));
+            } else {
+                command.addAll(List.of("-vn", "-ac", "1", "-ar", "24000",
+                        "-c:a", "pcm_s16le"));
+            }
+            command.add(output.toString());
+            Process tool = new ProcessBuilder(command).redirectErrorStream(true).start();
+            if (!tool.waitFor(90, TimeUnit.SECONDS)) {
+                tool.destroyForcibly();
+                throw new IOException("FFMPEG_PREPARATION_TIMEOUT");
+            }
+            if (tool.exitValue() != 0) {
+                String diagnostic = new String(tool.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
+                        .replaceAll("[^\\p{L}\\p{N} _.,:;!()#-]", " ").trim();
+                throw new IOException("FFMPEG_PREPARATION_FAILED " +
+                        diagnostic.substring(0, Math.min(140, diagnostic.length())));
+            }
+            long bytes = Files.size(output);
+            int max = video ? MAX_VIDEO_BYTES : MAX_VOICE_BYTES;
+            if (bytes == 0 || bytes > max) throw new IOException("PREPARED_MEDIA_SIZE_INVALID");
+            return Files.readAllBytes(output);
+        } finally {
+            Files.deleteIfExists(input);
+            Files.deleteIfExists(output);
         }
     }
 
