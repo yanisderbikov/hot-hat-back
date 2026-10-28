@@ -49,11 +49,12 @@ public class NeuroReplacementPilotController {
             @AuthenticationPrincipal HotHatUser owner,
             @PathVariable @RoomId String roomId,
             @RequestParam(name = "consented", defaultValue = "false") boolean consented,
+            @RequestParam(name = "windowStartSeconds", defaultValue = "0") double windowStartSeconds,
             @RequestPart("video") MultipartFile video,
             @RequestPart("voice") MultipartFile voice) {
         check(owner, roomId);
         return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .body(pilot.start(roomId, owner.uid(), consented, video, voice));
+                .body(pilot.start(roomId, owner.uid(), consented, video, voice, windowStartSeconds));
     }
 
     @GetMapping("/{jobId}")

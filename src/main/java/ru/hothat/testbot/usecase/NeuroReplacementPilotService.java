@@ -79,6 +79,14 @@ public class NeuroReplacementPilotService {
 
     public synchronized Map<String, Object> start(String roomId, String ownerUid, boolean consented,
                                                    MultipartFile video, MultipartFile voice) {
+        return start(roomId, ownerUid, consented, video, voice, 0);
+    }
+
+    public synchronized Map<String, Object> start(String roomId, String ownerUid, boolean consented,
+                                                   MultipartFile video, MultipartFile voice, double windowStartSeconds) {
+        if (!Double.isFinite(windowStartSeconds) || windowStartSeconds < 0 || windowStartSeconds > 25) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_REFERENCE_WINDOW");
+        }
         if (!enabled) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "NEURO_REPLACEMENT_DISABLED");
         if (!consented) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "EXPLICIT_IMAGE_VOICE_PAYMENT_CONSENT_REQUIRED");
         if (key == null || key.isBlank()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "GENAPI_API_KEY_NOT_CONFIGURED");
@@ -105,7 +113,7 @@ public class NeuroReplacementPilotService {
         }
         Job job = new Job(UUID.randomUUID().toString(), roomId, ownerUid);
         byRoom.put(roomId, job);
-        executor.execute(() -> process(job, videoBytes, videoMime, voiceBytes, voiceMime));
+        executor.execute(() -> process(job, videoBytes, videoMime, voiceBytes, voiceMime, windowStartSeconds));
         return snapshot(job);
     }
 
@@ -146,17 +154,20 @@ public class NeuroReplacementPilotService {
         return result;
     }
 
-    private void process(Job job, byte[] camera, String cameraMime, byte[] voice, String voiceMime) {
+    private void process(Job job, byte[] camera, String cameraMime, byte[] voice, String voiceMime, double startSeconds) {
         try {
             job.state = "processing";
             // Browser MediaRecorder usually gives WebM. Kling's video editor
             // requires MP4/MOV; Chatterbox is most reliable with PCM WAV.
             // Convert both *before* starting any billable GenAPI task.
             job.stage = "Подготовка записи";
-            byte[] klingCamera = cameraMime.equals("video/webm")
-                    ? transcodeMedia(camera, "webm", "mp4", true) : camera;
-            byte[] chatterboxVoice = voiceMime.contains("wav")
-                    ? voice : transcodeMedia(voice, voiceMime.equals("audio/mp4") ? "m4a" : "webm", "wav", false);
+            // Only the best ten seconds selected locally by the player device
+            // leave our backend. The full observation is never sent to Kling.
+            byte[] klingCamera = transcodeMedia(camera,
+                    cameraMime.equals("video/mp4") ? "mp4" : "webm", "mp4", true, startSeconds);
+            byte[] chatterboxVoice = transcodeMedia(voice,
+                    voiceMime.contains("wav") ? "wav" : voiceMime.equals("audio/mp4") ? "m4a" : "webm",
+                    "wav", false, startSeconds);
             job.stage = "Видео и озвучка";
             // Both models start at once. Only one operation per model: retrying a
             // submission after an HTTP timeout could charge the user twice.
@@ -209,14 +220,15 @@ public class NeuroReplacementPilotService {
      * before and after transcoding so a malformed video cannot exhaust RAM.
      */
     private byte[] transcodeMedia(byte[] source, String inputExtension,
-                                  String outputExtension, boolean video) throws Exception {
+                                  String outputExtension, boolean video, double startSeconds) throws Exception {
         Path input = Files.createTempFile("hat-neuro-input-", "." + inputExtension);
         Path output = Files.createTempFile("hat-neuro-output-", "." + outputExtension);
         try {
             Files.write(input, source);
             List<String> command = new ArrayList<>(List.of(
                     "ffmpeg", "-hide_banner", "-loglevel", "error",
-                    "-nostdin", "-y", "-i", input.toString()));
+                    "-nostdin", "-y", "-ss", String.valueOf(startSeconds), "-i", input.toString(),
+                    "-t", "10"));
             if (video) {
                 command.addAll(List.of("-map", "0:v:0", "-an", "-c:v", "libx264",
                         "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p",
@@ -240,6 +252,24 @@ public class NeuroReplacementPilotService {
             long bytes = Files.size(output);
             int max = video ? MAX_VIDEO_BYTES : MAX_VOICE_BYTES;
             if (bytes == 0 || bytes > max) throw new IOException("PREPARED_MEDIA_SIZE_INVALID");
+            // Reject too-short or invalid excerpts locally before a paid API POST.
+            Process probe = new ProcessBuilder("ffprobe", "-v", "error", "-show_entries",
+                    "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
+                    output.toString()).start();
+            if (!probe.waitFor(12, TimeUnit.SECONDS) || probe.exitValue() != 0) {
+                probe.destroyForcibly();
+                throw new IOException("PREPARED_MEDIA_PROBE_FAILED");
+            }
+            double seconds;
+            try {
+                seconds = Double.parseDouble(new String(probe.getInputStream().readAllBytes(),
+                        StandardCharsets.UTF_8).trim());
+            } catch (NumberFormatException exception) {
+                throw new IOException("PREPARED_MEDIA_DURATION_UNKNOWN", exception);
+            }
+            if (!Double.isFinite(seconds) || seconds < 9.2) {
+                throw new IOException("PREPARED_MEDIA_TOO_SHORT " + seconds + "s");
+            }
             return Files.readAllBytes(output);
         } finally {
             Files.deleteIfExists(input);

@@ -79,4 +79,22 @@ class NeuroReplacementPilotServiceTest {
         String message = ReflectionTestUtils.invokeMethod(pilot, "errorCode", response);
         assertEquals("", message);
     }
+
+    @Test
+    void rejectsOutOfRangeObservationWindowBeforePaidWork() {
+        ReflectionTestUtils.setField(pilot, "enabled", true);
+        ReflectionTestUtils.setField(pilot, "key", "local-test-token");
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> pilot.start("hat-0123456789abcdef", "owner-1", true, null, null, 29.5));
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+    }
+
+    @Test
+    void rejectsNonFiniteObservationWindowBeforePaidWork() {
+        ReflectionTestUtils.setField(pilot, "enabled", true);
+        ReflectionTestUtils.setField(pilot, "key", "local-test-token");
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> pilot.start("hat-0123456789abcdef", "owner-1", true, null, null, Double.NaN));
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+    }
 }
