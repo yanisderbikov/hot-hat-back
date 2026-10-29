@@ -1,0 +1,53 @@
+name: Refresh API contract snapshot
+
+# One-off maintenance job: runs automatically when first introduced in new-dev.
+# Generated files are committed only to new-dev; no main branch writes.
+on:
+  push:
+    branches: [new-dev]
+    paths: ['.github/workflows/refresh-api-contract.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: hot_hat
+          POSTGRES_USER: hothat
+          POSTGRES_PASSWORD: hothat
+        ports:
+          - 5462:5432
+        options: >-
+          --health-cmd "pg_isready -U hothat -d hot_hat"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: new-dev
+          persist-credentials: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Generate exact API spec from Spring Boot
+        run: mvn -B -Dtest=OpenApiSnapshotFreshnessTest -Dhot-hat.refresh-openapi-snapshot=true test
+      - name: Commit refreshed spec to new-dev
+        run: |
+          if git diff --quiet -- docs/api/openapi-snapshot.json; then
+            echo "API spec snapshot was already current"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/api/openapi-snapshot.json
+          git commit -m "SCRUM-31 - Refresh exact OpenAPI contract from running Spring Boot"
+          git push origin HEAD:new-dev
