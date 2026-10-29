@@ -128,6 +128,76 @@ public class NeuroReplacementPilotService {
         catch (RuntimeException e) { LOG.error("Neuro paid task checkpoint failed room={} job={}", job.roomId, job.id, e); }
     }
 
+    private Job loadJobById(String id) {
+        if (jdbc == null) return null;
+        List<Job> jobs = jdbc.query("""
+            SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
+                   final_video_url,error_message,final_video_key,
+                   source_camera_key,source_voice_key,source_camera_mime,source_voice_mime,
+                   window_start_seconds,submitting_model
+              FROM neuro_replacement_job WHERE job_id=?
+            """, (rs,n) -> {
+            Job job = new Job(rs.getString(1), rs.getString(2), rs.getString(3));
+            job.state=rs.getString(4); job.stage=rs.getString(5);
+            try {
+                JsonNode ids=json.readTree(rs.getString(6));
+                ids.fields().forEachRemaining(e -> job.providerRequests.put(e.getKey(),e.getValue().asText()));
+            } catch (Exception ignored) {}
+            job.finalVideo=rs.getString(7); job.error=rs.getString(8); job.finalVideoKey=rs.getString(9);
+            job.sourceCameraKey=rs.getString(10);job.sourceVoiceKey=rs.getString(11);
+            job.cameraMime=rs.getString(12);job.voiceMime=rs.getString(13);
+            job.startSeconds=rs.getDouble(14);job.submittingModel=rs.getString(15);
+            return job;
+        }, id);
+        return jobs.isEmpty()?null:jobs.get(0);
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void recoverPendingJobs() {
+        if (jdbc == null || objectStore == null || !objectStore.configured()) return;
+        try {
+            List<String> pending = jdbc.query("""
+                SELECT job_id FROM neuro_replacement_job WHERE state IN ('queued','processing')
+                ORDER BY created_at ASC LIMIT 25
+                """, (rs,n) -> rs.getString(1));
+            for (String id : pending) {
+                Job job = loadJobById(id);
+                if (job == null) continue;
+                if (job.sourceCameraKey == null || job.sourceVoiceKey == null) {
+                    job.state="interrupted";
+                    job.stage="Прежняя версия не сохранила исходные файлы для восстановления";
+                    job.error="Нет архива входных материалов. Требуется ручная проверка ID GenAPI.";
+                    checkpoint(job);
+                    continue;
+                }
+                if (job.submittingModel != null
+                        && !job.providerRequests.containsKey(job.submittingModel)) {
+                    // The remote POST might have succeeded before the worker
+                    // received its ID. NEVER charge twice due to a redeploy.
+                    job.state="interrupted";
+                    job.stage="Неоднозначный платный запрос "+job.submittingModel;
+                    job.error="Нельзя автоматически повторять POST без сверки с GenAPI.";
+                    checkpoint(job);
+                    continue;
+                }
+                byRoom.putIfAbsent(job.roomId, job);
+                executor.execute(() -> {
+                    try {
+                        process(job, objectStore.get(job.sourceCameraKey), job.cameraMime,
+                                objectStore.get(job.sourceVoiceKey),job.voiceMime,job.startSeconds);
+                    } catch (Exception e) {
+                        job.state="failed";
+                        job.stage="Не удалось восстановить исходные файлы";
+                        job.error="RECOVERY_INPUT_FAILED: "+e.getClass().getSimpleName();
+                        checkpoint(job);
+                    }
+                });
+            }
+        } catch (Exception e) {
+            LOG.error("Neuro pending-job recovery failed", e);
+        }
+    }
+
     /** Read a historical task for this owner, independent of room lifecycle. */
     private Job findOwnerJob(String ownerUid, String jobId) {
         if (jdbc == null) return null;
@@ -177,9 +247,15 @@ public class NeuroReplacementPilotService {
             result.put("roomId",job.roomId);
             result.put("createdAt",rs.getTimestamp(10).toInstant().toString());
             result.put("archived",job.finalVideoKey != null);
-            if (!"ready".equals(job.state) && !"failed".equals(job.state)) {
-                result.put("status","interrupted");
-                result.put("stage","Поток прервался при перезапуске сервера; ID GenAPI сохранены");
+            // An active in-memory worker is definitive proof the task is
+            // running. Never present "processing" as "interrupted" merely
+            // because the history is loaded from PostgreSQL.
+            Job active = byRoom.get(job.roomId);
+            if (active != null && active.id.equals(job.id)) {
+                result = snapshot(active);
+                result.put("roomId",job.roomId);
+                result.put("createdAt",rs.getTimestamp(10).toInstant().toString());
+                result.put("archived",active.finalVideoKey != null);
             }
             return result;
         }, ownerUid);
@@ -218,10 +294,8 @@ public class NeuroReplacementPilotService {
             restored.finalVideo = rs.getString(7);
             restored.error = rs.getString(8);
             restored.finalVideoKey = rs.getString(9);
-            if (!"ready".equals(restored.state) && !"failed".equals(restored.state)) {
-                restored.state = "interrupted";
-                restored.stage = "После перезапуска автоматическая генерация прервана. ID GenAPI сохранены.";
-            }
+            // Restoring a row is not proof that its remote processing stopped.
+            // Startup recovery determines which jobs can resume or need review.
             return restored;
         }, roomId);
         if (found.isEmpty()) return null;
@@ -281,7 +355,23 @@ public class NeuroReplacementPilotService {
                     "NEURO_RESULT_ARCHIVE_NOT_CONFIGURED");
         }
         Job job = new Job(UUID.randomUUID().toString(), roomId, ownerUid);
-        try { persist(job); }
+        job.cameraMime=videoMime;
+        job.voiceMime=voiceMime;
+        job.startSeconds=windowStartSeconds;
+        job.sourceCameraKey="neuro-replacements/"+ownerUid+"/"+job.id+"-input-camera"+
+                (videoMime.equals("video/mp4")?".mp4":".webm");
+        job.sourceVoiceKey="neuro-replacements/"+ownerUid+"/"+job.id+"-input-voice"+
+                (voiceMime.contains("wav")?".wav":voiceMime.equals("audio/mp4")?".m4a":".webm");
+        try {
+            // Paid work MUST NOT start until both references have been archived.
+            // Railway restarts can then recover the task using the same inputs.
+            if (objectStore == null || !objectStore.configured()) {
+                throw new IllegalStateException("NEURO_INPUT_ARCHIVE_NOT_CONFIGURED");
+            }
+            objectStore.put(job.sourceCameraKey, videoBytes, videoMime);
+            objectStore.put(job.sourceVoiceKey, voiceBytes, voiceMime);
+            persist(job);
+        }
         catch (RuntimeException e) {
             LOG.error("Refusing paid work because durable task storage failed", e);
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "NEURO_JOB_STORAGE_UNAVAILABLE");
