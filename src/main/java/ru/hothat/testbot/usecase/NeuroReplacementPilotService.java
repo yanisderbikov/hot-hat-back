@@ -698,9 +698,12 @@ public class NeuroReplacementPilotService {
             // leave our backend. The full observation is never sent to Kling.
             byte[] klingCamera = transcodeMedia(camera,
                     cameraMime.equals("video/mp4") ? "mp4" : "webm", "mp4", true, startSeconds);
+            // Keep the full observed voice sample (up to 30s) for better
+            // timbre, habitual articulation and breathing reference. The
+            // camera reference remains a short, high-quality 10s selection.
             byte[] chatterboxVoice = transcodeMedia(voice,
                     voiceMime.contains("wav") ? "wav" : voiceMime.equals("audio/mp4") ? "m4a" : "webm",
-                    "wav", false, startSeconds);
+                    "wav", false, 0);
             job.stage = "Видео и озвучка";
             checkpoint(job);
             // A fresh performance is required: video-to-video edit tends
@@ -799,7 +802,7 @@ public class NeuroReplacementPilotService {
             List<String> command = new ArrayList<>(List.of(
                     "ffmpeg", "-hide_banner", "-loglevel", "error",
                     "-nostdin", "-y", "-ss", String.valueOf(startSeconds), "-i", input.toString(),
-                    "-t", "10"));
+                    "-t", video ? "10" : "30"));
             if (video) {
                 // Kling video editing requires >=720px on BOTH dimensions,
                 // H.264 MP4, and 24-60fps. A fallback LiveKit stream may be
