@@ -2,6 +2,14 @@ package ru.hothat.testbot.api;
 
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import lombok.RequiredArgsConstructor;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import ru.hothat.testbot.api.dto.NeuroJobResponseDTO;
+import ru.hothat.testbot.api.dto.NeuroReadinessResponseDTO;
+import ru.hothat.testbot.api.dto.NeuroProviderStatusResponseDTO;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -28,24 +36,36 @@ public class NeuroReplacementHistoryController {
     private final NeuroReplacementPilotService pilot;
 
     @GetMapping("/readiness")
+    @ApiResponse(responseCode = "200", description = "Готовность архива и базы перед платной отправкой",
+            content = @Content(mediaType = "application/json",
+                    schema = @Schema(implementation = NeuroReadinessResponseDTO.class)))
     public Map<String,Boolean> readiness(@AuthenticationPrincipal HotHatUser owner) {
         return pilot.readiness();
     }
 
     @GetMapping
+    @ApiResponse(responseCode = "200", description = "История всех попыток владельца, независимо от комнаты",
+            content = @Content(mediaType = "application/json",
+                    array = @ArraySchema(schema = @Schema(implementation = NeuroJobResponseDTO.class))))
     public List<Map<String,Object>> history(@AuthenticationPrincipal HotHatUser owner) {
         return pilot.history(owner.uid());
     }
 
     @GetMapping("/{jobId}/provider-status")
+    @ApiResponse(responseCode = "200", description = "Бесплатная проверка ранее созданных запросов GenAPI",
+            content = @Content(mediaType = "application/json",
+                    schema = @Schema(implementation = NeuroProviderStatusResponseDTO.class)))
     public Map<String,Object> providerStatus(@AuthenticationPrincipal HotHatUser owner,
-                                             @PathVariable String jobId) {
+                                             @Parameter(description = "Сохранённый ID задания Hot Hat") @PathVariable String jobId) {
         return pilot.inspectProvider(owner.uid(),jobId);
     }
 
     @GetMapping("/{jobId}/video")
+    @ApiResponse(responseCode = "200", description = "Архивный MP4 Нейроподмены с видео и голосом",
+            content = @Content(mediaType = "video/mp4",
+                    schema = @Schema(type = "string", format = "binary")))
     public ResponseEntity<byte[]> video(@AuthenticationPrincipal HotHatUser owner,
-                                       @PathVariable String jobId) {
+                                       @Parameter(description = "ID готового задания с финальным MP4") @PathVariable String jobId) {
         byte[] bytes = pilot.archivedVideo(owner.uid(), jobId);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
