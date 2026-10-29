@@ -734,10 +734,19 @@ public class NeuroReplacementPilotService {
             String videoUrl = paidStage(job, VIDEO_MODEL_ID,
                     () -> submitMultipart(VIDEO_MODEL_ID, klingEditFields(),
                             "video_url", "webcam.mp4", "video/mp4", klingCamera));
+            job.stage = "Согласование речи и жестов";
+            checkpoint(job);
+            // The new actor looks at the webcam first, so speech must not
+            // start while his face is still turning. Prepare an exact 15s
+            // soundtrack with a 1.5s lead and silence after the catchphrase.
+            // Old paid Lip Sync IDs are never submitted again, so do not
+            // regenerate/swap their original provider input on recovery.
+            String alignedVoiceUrl = job.providerRequests.containsKey("lipsync")
+                    ? voiceUrl : alignSpeechToActingTimeline(job, voiceUrl);
             job.stage = "Синхронизация губ";
             checkpoint(job);
             String finalVideo = paidStage(job, "lipsync", () -> submitJson("lipsync", Map.of(
-                    "video_url", videoUrl, "audio_url", voiceUrl,
+                    "video_url", videoUrl, "audio_url", alignedVoiceUrl,
                     "model", "lipsync-1.9.0-beta", "sync_mode", LIPSYNC_SYNC_MODE)));
             validatedResultUri(finalVideo);
             job.finalVideo = finalVideo;
@@ -1003,6 +1012,47 @@ public class NeuroReplacementPilotService {
         }
     }
 
+
+    /**
+     * Time-align the paid, cloned voice to the directed 15-second performance.
+     * Do not depend on generated narration to include leading silence:
+     * explicitly add 1.5s before the first line and pad the goodbye/exit
+     * with silence. Uses private S3 + expiring signed URL for the Lip Sync
+     * provider to fetch; no new provider request is made at this step.
+     */
+    private String alignSpeechToActingTimeline(Job job, String voiceUrl) throws Exception {
+        byte[] inputBytes = download(voiceUrl,MAX_VOICE_BYTES);
+        Path source = Files.createTempFile("neuro-voice-render-", ".audio");
+        Path output = Files.createTempFile("neuro-voice-render-", ".wav");
+        try {
+            Files.write(source,inputBytes);
+            Process tool = new ProcessBuilder("ffmpeg", "-hide_banner", "-loglevel", "error",
+                    "-nostdin", "-y", "-i", source.toString(), "-vn",
+                    "-af", "adelay=1500,apad", "-t", String.valueOf(VIDEO_DURATION_SECONDS),
+                    "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le",
+                    output.toString()).redirectErrorStream(true).start();
+            if (!tool.waitFor(40,TimeUnit.SECONDS)) {
+                tool.destroyForcibly();
+                throw new IOException("NEURO_ALIGNED_VOICE_TIMEOUT");
+            }
+            if (tool.exitValue() != 0) throw new IOException("NEURO_ALIGNED_VOICE_INVALID");
+            long bytes=Files.size(output);
+            if (bytes<10000 || bytes>MAX_VOICE_BYTES) {
+                throw new IOException("NEURO_ALIGNED_VOICE_SIZE_INVALID");
+            }
+            String keyPath="neuro-replacements/"+job.ownerUid+"/"+job.id+"-lipsync-voice.wav";
+            objectStore.put(keyPath,Files.readAllBytes(output),"audio/wav");
+            String signed=objectStore.presignGet(keyPath,Duration.ofHours(2),
+                    "audio/wav",null,"private, no-store");
+            if(signed==null || !signed.startsWith("https://")) {
+                throw new IOException("NEURO_ALIGNED_VOICE_SIGNED_URL_UNAVAILABLE");
+            }
+            return signed;
+        } finally {
+            Files.deleteIfExists(source);
+            Files.deleteIfExists(output);
+        }
+    }
 
     /**
      * Reject the exact failure seen in the owner's 29-Oct MP4: almost all
