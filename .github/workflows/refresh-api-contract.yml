@@ -1,6 +1,6 @@
 name: Refresh API contract snapshot
 
-# Maintenance refresh for the 402-safe Neuro continuation and zero-charge recovery of paid Lip Sync MP4.
+# Maintenance refresh after separating fast GenAPI GET from owner-approved asynchronous paid-MP4 repair.
 # Generated files are committed only to new-dev; no main branch writes.
 on:
   push:
