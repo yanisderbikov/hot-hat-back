@@ -140,6 +140,12 @@ public class NeuroReplacementPilotService {
     }
 
     /** All paid attempts, latest first, including failures and interrupted tasks. */
+    /** Free readiness check before the user authorizes an expensive AI task. */
+    public Map<String,Boolean> readiness() {
+        return Map.of("archiveReady",objectStore != null && objectStore.configured(),
+                "databaseReady",jdbc != null);
+    }
+
     public List<Map<String,Object>> history(String ownerUid) {
         if (jdbc == null) return List.of();
         return jdbc.query("""
