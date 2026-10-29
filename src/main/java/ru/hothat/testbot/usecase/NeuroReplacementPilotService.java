@@ -55,24 +55,51 @@ public class NeuroReplacementPilotService {
     private static final int MAX_VIDEO_BYTES = 12 * 1024 * 1024;
     private static final int MAX_VOICE_BYTES = 3 * 1024 * 1024;
     private static final int MAX_RESULT_BYTES = 40 * 1024 * 1024;
-    private static final String SPOKEN_TEXT = "А вы всё ещё кипятите? Тогда мы идём к вам! А ты, сука, не бойся ночиииии!";
-    // Match the successfully tested GenAPI website configuration: Kling O3,
-    // video-to-video edit, ten seconds, PRO, source audio disabled.
+    // This is a fresh performance, not an edit of the recorded person's gestures.
+    // The reference camera video supplies identity, webcam room, and habitual
+    // facial presence; the directed acting comes from the prompt.
+    private static final String SPOKEN_TEXT = "А вы всё ещё кипятите? ... Тогда мы идём к вам!";
     private static final String VIDEO_MODEL_ID = "kling-video-o3";
-    // Preserve the full ten-second Kling clip when speech is shorter; cut_off
-    // truncated a successfully paid Lip Sync result in the 29-Oct pilot.
+    private static final String VIDEO_ACTING_MODE = "reference-to-video";
+    private static final int VIDEO_DURATION_SECONDS = 15;
     private static final String LIPSYNC_SYNC_MODE = "silence";
+    private static final String TTS_MODEL_ID = "gemini-tts";
+    private static final String SPEECH_STYLE =
+            "Russian male human speaker delivering a playful, expressive, clear catchphrase to a friend. " +
+            "Warm natural conversational intonation, precise Russian pronunciation and consonants. " +
+            "Speak unhurriedly; ask the first question with amused curiosity, take a meaningful pause, " +
+            "then say the second sentence with a confident smile and enthusiastic emphasis. " +
+            "No announcer voice, no robotic monotone, no shouting, no added words. " +
+            "The question and exclamation must remain clearly intelligible.";
     private static final String VIDEO_PROMPT =
-            "Edit the supplied webcam video, preserving the same person, face, hair, clothes, " +
-            "lighting, room, furniture and camera framing. Keep one continuous static webcam shot. " +
-            "0–3 seconds: the person looks into the camera and naturally speaks. " +
-            "3–6 seconds: clearly raises the right hand in front of the chest and gives a big, " +
-            "unmistakable thumbs-up toward the webcam, thumb pointing up and other fingers folded, " +
-            "holding the gesture for one second. " +
-            "6–10 seconds: lowers the hand and continues speaking naturally with an unobstructed face. " +
-            "Do not change identity or background. No cuts, no camera movements, no other people, " +
-            "no captions and no added objects. Ten seconds total.";
-
+            "Create a NEW realistic, continuous 15-second webcam performance based on @Video1 as an " +
+            "APPEARANCE AND SET REFERENCE ONLY, NOT as motion to copy. Preserve exactly the same adult " +
+            "man's recognizable facial proportions, beard, hairstyle, age, white T-shirt, lighting, " +
+            "window, furniture, room, fixed webcam position and framing. Observe the person's natural " +
+            "facial presence and microexpressions in the reference; make the new performance convincingly " +
+            "human, with relaxed breathing, genuine playful smiling, natural head motion, no stiff gestures. " +
+            "IMPORTANT: entirely REPLACE the recorded head-scratching/hair-touching motion. " +
+            "The man MUST NOT touch his hair, face, head or ears. " +
+            "0-1.5s: sitting naturally and looking slightly away, he turns his head to look directly " +
+            "into the webcam and makes warm eye contact. " +
+            "1.5-4.8s: he looks straight at us with an amused, expressive questioning face and clearly " +
+            "speaks the Russian phrase 'А вы всё ещё кипятите?' Slowly, with animated eyebrows and " +
+            "distinct speech mouth movement. " +
+            "4.8-5.5s: deliberate short silent pause; mouth closed, engaging eye contact. " +
+            "5.5-8.5s: he confidently and playfully speaks 'Тогда мы идём к вам!' with a broad genuine " +
+            "smile, looking straight into the lens. " +
+            "8.5-10s: he raises his RIGHT hand clearly in front of his chest, close to the lens and " +
+            "fully visible, gives an unmistakable THUMBS-UP (only thumb extended vertically, other " +
+            "four fingers curled), holds it long enough to recognize, and smiles. " +
+            "10-11s: he lowers that hand naturally. " +
+            "11-12.5s: raises his open right hand again, gives a clear friendly SIDE-TO-SIDE GOODBYE WAVE " +
+            "toward the camera. Five fingers spread, palm facing camera, hand moves left and right. " +
+            "12.5-15s: lowers his hand, pushes back from his chair, clearly STANDS UP and WALKS AWAY " +
+            "toward the side of the room, fully leaving the webcam view. The chair remains empty. " +
+            "One seamless static shot, real hands and fingers, photorealistic identity, unbroken room. " +
+            "Mouth should move ONLY while the two sentences are spoken; mouth closed in the rest. " +
+            "NO hair grooming, NO frozen head pose, NO camera movement, NO jump cut, " +
+            "NO duplicate person, NO subtitles, NO extra objects, NO alternate dialogue.";
     private final ObjectMapper json;
     // Package-private HTTP injection seam enables a complete no-charge provider
     // simulation in JUnit. Production still uses the real pinned endpoint.
@@ -676,8 +703,10 @@ public class NeuroReplacementPilotService {
                     "wav", false, startSeconds);
             job.stage = "Видео и озвучка";
             checkpoint(job);
-            // Editing follows the input video's exact duration. Sending
-            // "duration" together with edit-video is invalid for Kling O3.
+            // A fresh performance is required: video-to-video edit tends
+            // to reproduce the original head-scratching gestures. O3
+            // reference-to-video instead directs new motion from a 10s
+            // appearance/room sample into a new 15s acting sequence.
             // Finish the expensive video step before ordering TTS/voice transfer:
             // do not charge for audio if Kling rejects the input.
             String videoUrl = paidStage(job, VIDEO_MODEL_ID,
@@ -685,8 +714,16 @@ public class NeuroReplacementPilotService {
                             "video_url", "webcam.mp4", "video/mp4", klingCamera));
             job.stage = "Подготовка речи";
             checkpoint(job);
-            String tts = paidStage(job, "tts", () -> submitJson("tts", Map.of(
-                    "input", SPOKEN_TEXT, "voice", "nova", "response_format", "mp3", "speed", 1.35)));
+            // "tts" is the durable logical checkpoint key used by legacy
+            // paid jobs. New tasks use expressive native-Russian Gemini TTS;
+            // old paid TTS IDs are always read with GET, never billed again.
+            String tts = paidStage(job, "tts", () -> submitJson(TTS_MODEL_ID, Map.of(
+                    "prompt", SPOKEN_TEXT,
+                    "voice", "Charon",
+                    "style_instructions", SPEECH_STYLE,
+                    "language_code", "Russian (Russia)",
+                    "model", "gemini-2.5-flash-tts",
+                    "output_format", "mp3")));
             job.stage = "Копирование голоса";
             checkpoint(job);
             String voiceUrl = paidStage(job, "chatterbox-speech", () -> submitMultipart(
@@ -740,12 +777,15 @@ public class NeuroReplacementPilotService {
      * FFmpeg is installed in the Railway runtime image. Uploads are capped
      * before and after transcoding so a malformed video cannot exhaust RAM.
      */
-    /** GenAPI Kling O3 video editing uses the uploaded clip length, not a duration field. */
+    /** O3 reference-to-video creates a new directed 15s performance. */
     private Map<String, String> klingEditFields() {
         return Map.of(
-                "model", "edit-video",
+                "model", VIDEO_ACTING_MODE,
                 "prompt", VIDEO_PROMPT,
+                "duration", String.valueOf(VIDEO_DURATION_SECONDS),
+                "aspect_ratio", "16:9",
                 "pro", "true",
+                "generate_audio", "false",
                 "keep_audio", "false"
         );
     }
