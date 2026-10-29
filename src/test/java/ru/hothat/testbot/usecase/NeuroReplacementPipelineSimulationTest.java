@@ -316,6 +316,119 @@ class NeuroReplacementPipelineSimulationTest {
         assertTrue(requested.stream().anyMatch(p -> p.endsWith("/request/get/voice-paid")));
     }
 
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void checkingCompletedPaidProviderStatusDoesNotDownloadOrReencodeMp4() throws Exception {
+        HttpClient provider = mock(HttpClient.class);
+        List<String> visited = new ArrayList<>();
+        when(provider.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(call -> {
+                    HttpRequest request = call.getArgument(0);
+                    assertEquals("GET",request.method(), "status must never charge the user");
+                    assertTrue(request.uri().getPath().startsWith("/api/v1/request/get/"),
+                            "status must not fetch large result files or run FFmpeg");
+                    visited.add(request.uri().getPath());
+                    return response("{\"status\":\"success\",\"progress\":100,"
+                            + "\"result\":[\"https://gen-api.storage.yandexcloud.net/paid.mp4\"]}");
+                });
+        pilot = new NeuroReplacementPilotService(new ObjectMapper(), provider);
+        ReflectionTestUtils.setField(pilot,"key","local-test");
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        ResultSet saved=mock(ResultSet.class);
+        when(saved.getString(1)).thenReturn("existing-paid");
+        when(saved.getString(2)).thenReturn("hat-a1ece4688a6e8389");
+        when(saved.getString(3)).thenReturn("owner-1");
+        when(saved.getString(4)).thenReturn("failed");
+        when(saved.getString(5)).thenReturn("Ошибка генерации");
+        when(saved.getString(6)).thenReturn(
+                "{\"kling-video-o3\":\"56854976\",\"tts\":\"56855655\","
+                + "\"chatterbox-speech\":\"56855661\",\"lipsync\":\"56862413\"}");
+        when(saved.getString(8)).thenReturn("NEURO_RESULT_MISSING_VIDEO_AUDIO_OR_DURATION");
+        when(db.query(anyString(),any(RowMapper.class),eq("existing-paid")))
+                .thenAnswer(call -> List.of(((RowMapper)call.getArgument(1)).mapRow(saved,0)));
+        pilot.setJdbcTemplate(db);
+        ObjectStore storage=mock(ObjectStore.class);
+        when(storage.configured()).thenReturn(true);
+        pilot.setObjectStore(storage);
+
+        Map<String,Object> info=pilot.inspectProvider("owner-1","existing-paid");
+        assertEquals("failed",info.get("status"));
+        assertTrue(String.valueOf(info.get("note")).contains("без оплаты"));
+        assertEquals(4,visited.size());
+        verify(storage,never()).put(anyString(),any(byte[].class),anyString());
+        verify(db,never()).update(anyString(),any(Object[].class));
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes","unchecked"})
+    void freeAsyncRecoveryClaimsOnceAndReusesAllFourPaidRequestIds() throws Exception {
+        byte[] lip=generatedMedia(".mp4",List.of(
+                "-f","lavfi","-i","color=c=blue:size=320x180:rate=24",
+                "-t","6","-an","-c:v","libx264","-preset","ultrafast"));
+        byte[] kling=generatedMedia(".mp4",List.of(
+                "-f","lavfi","-i","color=c=red:size=320x180:rate=24",
+                "-t","10","-an","-c:v","libx264","-preset","ultrafast"));
+        byte[] voice=generatedMedia(".wav",List.of(
+                "-f","lavfi","-i","sine=frequency=440:sample_rate=24000",
+                "-t","6","-ac","1","-c:a","pcm_s16le"));
+        List<String> requested=java.util.Collections.synchronizedList(new ArrayList<>());
+        HttpClient provider=mock(HttpClient.class);
+        when(provider.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(call -> {
+                    HttpRequest request=call.getArgument(0);
+                    assertEquals("GET",request.method(),"free restoration cannot submit paid POST");
+                    String path=request.uri().getPath();
+                    requested.add(path);
+                    if(path.endsWith("/request/get/56862413"))
+                        return response("{\"status\":\"success\",\"result\":[\"https://gen-api.storage.yandexcloud.net/paid-lipsync.mp4\"]}");
+                    if(path.endsWith("/request/get/56854976"))
+                        return response("{\"status\":\"success\",\"result\":[\"https://gen-api.storage.yandexcloud.net/paid-kling.mp4\"]}");
+                    if(path.endsWith("/request/get/56855661"))
+                        return response("{\"status\":\"success\",\"result\":[\"https://gen-api.storage.yandexcloud.net/paid-voice.wav\"]}");
+                    if(path.endsWith("/paid-lipsync.mp4")) return response(lip);
+                    if(path.endsWith("/paid-kling.mp4")) return response(kling);
+                    if(path.endsWith("/paid-voice.wav")) return response(voice);
+                    throw new IOException("Unexpected free recovery request: "+path);
+                });
+        pilot=new NeuroReplacementPilotService(new ObjectMapper(),provider);
+        ReflectionTestUtils.setField(pilot,"key","test-key");
+        String jobId="existing-paid",owner="owner-1",room="hat-a1ece4688a6e8389";
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        ResultSet saved=mock(ResultSet.class);
+        when(saved.getString(1)).thenReturn(jobId);
+        when(saved.getString(2)).thenReturn(room);
+        when(saved.getString(3)).thenReturn(owner);
+        when(saved.getString(4)).thenReturn("failed");
+        when(saved.getString(5)).thenReturn("Ошибка генерации");
+        when(saved.getString(6)).thenReturn(
+                "{\"kling-video-o3\":\"56854976\",\"tts\":\"56855655\","
+                + "\"chatterbox-speech\":\"56855661\",\"lipsync\":\"56862413\"}");
+        when(saved.getString(8)).thenReturn("NEURO_RESULT_MISSING_VIDEO_AUDIO_OR_DURATION");
+        when(db.query(anyString(),any(RowMapper.class),eq(jobId)))
+                .thenAnswer(call -> List.of(((RowMapper)call.getArgument(1)).mapRow(saved,0)));
+        when(db.update(anyString(),eq(jobId),eq(owner))).thenReturn(1,0);
+        pilot.setJdbcTemplate(db);
+        ObjectStore storage=mock(ObjectStore.class);
+        when(storage.configured()).thenReturn(true);
+        pilot.setObjectStore(storage);
+
+        Map<String,Object> accepted=pilot.recoverPaidOutput(owner,jobId);
+        assertEquals(jobId,accepted.get("jobId"));
+        assertThrows(ResponseStatusException.class,()->pilot.recoverPaidOutput(owner,jobId),
+                "Second click or another instance must not start a second repair job");
+        Map<String,Object> cached=(Map<String,Object>)ReflectionTestUtils.getField(pilot,"byRoom");
+        Object job=cached.get(room);
+        long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(35);
+        while(System.nanoTime()<until &&
+                "processing".equals(ReflectionTestUtils.getField(job,"state"))) Thread.sleep(100);
+        assertEquals("ready",ReflectionTestUtils.getField(job,"state"),
+                String.valueOf(ReflectionTestUtils.getField(job,"error")));
+        verify(storage,times(1)).put(eq("neuro-replacements/owner-1/existing-paid.mp4"),
+                any(byte[].class),eq("video/mp4"));
+        assertEquals(6,requested.size(),"All HTTP calls are free GETs of paid results");
+    }
+
     private static Object newJob(String id, String room, String owner) throws Exception {
         Class<?> type = Class.forName(NeuroReplacementPilotService.class.getName() + "$Job");
         var ctor = type.getDeclaredConstructor(String.class, String.class, String.class);
