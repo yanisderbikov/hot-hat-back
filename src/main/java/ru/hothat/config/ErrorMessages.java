@@ -12,6 +12,13 @@ public final class ErrorMessages {
     }
 
     public static final Map<String, String> BY_CODE = Map.ofEntries(
+            Map.entry("CODE_TEAM_CLASS_INVALID", "Выберите существующий класс команды."),
+            Map.entry("CODE_TEAM_EVIDENCE_INVALID", "Переданы некорректные сведения о матче."),
+            Map.entry("CODE_TEAM_NOT_ENOUGH_REAL_EVIDENCE", "Недостаточно подтверждённых событий настоящей игры для отчёта."),
+            Map.entry("CODE_TEAM_PILOT_COOLDOWN", "Повторный запрос отчёта пока недоступен. Подождите перед новой попыткой."),
+            Map.entry("CODE_TEAM_PILOT_DISABLED", "Тестовый анализ команды выключен."),
+            Map.entry("CODE_TEAM_PROVIDER_UNAVAILABLE", "Сервис анализа команды временно недоступен."),
+            Map.entry("CODE_TEAM_TWO_CONSENTING_PLAYERS_REQUIRED", "Для анализа нужны два согласившихся игрока."),
             Map.entry("AUTH_REQUIRED", "Требуется вход в аккаунт."),
             Map.entry("AUTH_INVALID", "Сессия истекла. Войдите снова."),
             Map.entry("REGISTRATION_REQUIRED", "Для этой функции нужна регистрация."),
