@@ -1,6 +1,6 @@
 name: Refresh API contract snapshot
 
-# One-off maintenance job: runs automatically when first introduced in new-dev.
+# One-off maintenance job: re-run after adding typed Neuro API responses to new-dev.
 # Generated files are committed only to new-dev; no main branch writes.
 on:
   push:
