@@ -529,6 +529,13 @@ public class NeuroReplacementPilotService {
             checkpoint(job);
             LOG.info("Neuro finished job={} room={} providerRequests={}", job.id, job.roomId, job.providerRequests);
         } catch (Exception error) {
+            // Railway shutdown interrupts the polling thread. That is NOT a
+            // provider failure: leave a resumable processing checkpoint in
+            // PostgreSQL for the next app instance, with the same request ID.
+            if (error instanceof InterruptedException || Thread.currentThread().isInterrupted()) {
+                LOG.info("Neuro worker paused for deployment; will resume from existing GenAPI ID: {}", job.id);
+                return;
+            }
             job.state = "failed";
             job.stage = "Ошибка генерации";
             // CompletionException -> RuntimeException -> provider IOException.
