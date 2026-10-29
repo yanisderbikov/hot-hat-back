@@ -291,6 +291,7 @@ public class NeuroReplacementPilotService {
                     validatedResultUri(url);
                     if (objectStore != null && objectStore.configured()) {
                         byte[] mp4 = download(url,MAX_RESULT_BYTES);
+                        verifyPlayableMp4(mp4);
                         String keyPath="neuro-replacements/"+ownerUid+"/"+job.id+".mp4";
                         objectStore.put(keyPath,mp4,"video/mp4");
                         job.finalVideo=url;
@@ -518,6 +519,7 @@ public class NeuroReplacementPilotService {
             job.finalVideo = finalVideo;
             if (objectStore != null && objectStore.configured()) {
                 byte[] archive = download(finalVideo, MAX_RESULT_BYTES);
+                verifyPlayableMp4(archive);
                 String archiveKey = "neuro-replacements/" + job.ownerUid + "/" + job.id + ".mp4";
                 objectStore.put(archiveKey, archive, "video/mp4");
                 job.finalVideoKey = archiveKey;
@@ -627,6 +629,42 @@ public class NeuroReplacementPilotService {
         } finally {
             Files.deleteIfExists(input);
             Files.deleteIfExists(output);
+        }
+    }
+
+
+    /**
+     * Never announce a completed AI replacement for a broken/silent MP4.
+     * The synced clip must contain both playable video and an audible track.
+     * This check is local and free; it never calls GenAPI.
+     */
+    private void verifyPlayableMp4(byte[] data) throws Exception {
+        if (data == null || data.length < 256) throw new IOException("NEURO_RESULT_EMPTY");
+        Path file = Files.createTempFile("neuro-result-check-", ".mp4");
+        try {
+            Files.write(file, data);
+            Process probe = new ProcessBuilder("ffprobe", "-v", "error",
+                    "-show_entries", "stream=codec_type",
+                    "-show_entries", "format=duration",
+                    "-of", "json", file.toString())
+                    .redirectErrorStream(true).start();
+            if (!probe.waitFor(15, TimeUnit.SECONDS)) {
+                probe.destroyForcibly();
+                throw new IOException("NEURO_RESULT_MEDIA_PROBE_TIMEOUT");
+            }
+            if (probe.exitValue() != 0) throw new IOException("NEURO_RESULT_INVALID_MP4");
+            JsonNode result = json.readTree(probe.getInputStream().readAllBytes());
+            boolean video = false, audio = false;
+            for (JsonNode stream : result.path("streams")) {
+                video |= "video".equals(stream.path("codec_type").asText());
+                audio |= "audio".equals(stream.path("codec_type").asText());
+            }
+            double seconds = result.path("format").path("duration").asDouble(0);
+            if (!video || !audio || seconds < 8.0 || seconds > 15.0) {
+                throw new IOException("NEURO_RESULT_MISSING_VIDEO_AUDIO_OR_DURATION");
+            }
+        } finally {
+            Files.deleteIfExists(file);
         }
     }
 
