@@ -252,6 +252,70 @@ class NeuroReplacementPipelineSimulationTest {
                 aryEq(finalMp4),eq("video/mp4"));
     }
 
+
+    @Test
+    void alreadyPaidCutOffVideoShorterThanEightSecondsIsRestoredToTenWithoutPaidPosts() throws Exception {
+        assertRecoveryFromPaidStages(false);
+    }
+
+    @Test
+    void alreadyPaidSilentLipSyncVideoIsMuxedWithSavedChatterboxVoiceForTenSeconds() throws Exception {
+        assertRecoveryFromPaidStages(true);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void assertRecoveryFromPaidStages(boolean missingAudio) throws Exception {
+        byte[] shortened = generatedMedia(".mp4", missingAudio ? List.of(
+                "-f", "lavfi", "-i", "color=c=blue:size=320x180:rate=24",
+                "-t", "6", "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p") : List.of(
+                "-f", "lavfi", "-i", "color=c=blue:size=320x180:rate=24",
+                "-f", "lavfi", "-i", "sine=frequency=550:sample_rate=16000",
+                "-t", "6", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"));
+        byte[] kling = generatedMedia(".mp4", List.of(
+                "-f", "lavfi", "-i", "color=c=red:size=320x180:rate=24",
+                "-t", "10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"));
+        byte[] voice = generatedMedia(".wav", List.of(
+                "-f", "lavfi", "-i", "sine=frequency=450:sample_rate=24000",
+                "-t", "6", "-ac", "1", "-c:a", "pcm_s16le"));
+        List<String> requested = new ArrayList<>();
+        HttpClient provider = mock(HttpClient.class);
+        when(provider.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(call -> {
+                    HttpRequest request = call.getArgument(0);
+                    assertEquals("GET",request.method(), "no paid POST while recovering successful paid IDs");
+                    String path = request.uri().getPath();
+                    requested.add(path);
+                    if (path.endsWith("/paid-lipsync.mp4")) return response(shortened);
+                    if (path.endsWith("/paid-kling.mp4")) return response(kling);
+                    if (path.endsWith("/paid-voice.wav")) return response(voice);
+                    if (path.endsWith("/request/get/kling-paid")) {
+                        return response("{\"status\":\"success\",\"result\":[\"https://gen-api.storage.yandexcloud.net/paid-kling.mp4\"]}");
+                    }
+                    if (path.endsWith("/request/get/voice-paid")) {
+                        return response("{\"status\":\"success\",\"result\":[\"https://gen-api.storage.yandexcloud.net/paid-voice.wav\"]}");
+                    }
+                    throw new IOException("Unexpected paid recovery HTTP call: "+path);
+                });
+        pilot = new NeuroReplacementPilotService(new ObjectMapper(),provider);
+        ReflectionTestUtils.setField(pilot,"key","simulated-api-key");
+        Object job = newJob("already-paid", "hat-a1ece4688a6e8389","owner-1");
+        Map<String,String> requests = (Map<String,String>)ReflectionTestUtils.getField(job,"providerRequests");
+        requests.put("kling-video-o3","kling-paid");
+        requests.put("chatterbox-speech","voice-paid");
+        requests.put("lipsync","56862413");
+        byte[] normalized = ReflectionTestUtils.invokeMethod(pilot,"recoverPaidLipSyncVideo",job,
+                "https://gen-api.storage.yandexcloud.net/paid-lipsync.mp4");
+        assertNotNull(normalized);
+        assertTrue(normalized.length>1000);
+        ReflectionTestUtils.invokeMethod(pilot,"verifyPlayableMp4",normalized);
+        assertEquals(5,requested.size());
+        assertTrue(requested.contains("/paid-lipsync.mp4"));
+        assertTrue(requested.contains("/request/get/kling-paid"));
+        assertTrue(requested.contains("/request/get/voice-paid"));
+    }
+
     private static Object newJob(String id, String room, String owner) throws Exception {
         Class<?> type = Class.forName(NeuroReplacementPilotService.class.getName() + "$Job");
         var ctor = type.getDeclaredConstructor(String.class, String.class, String.class);
