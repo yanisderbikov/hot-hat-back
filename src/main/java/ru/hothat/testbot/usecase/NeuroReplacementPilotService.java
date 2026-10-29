@@ -180,7 +180,10 @@ public class NeuroReplacementPilotService {
                     checkpoint(job);
                     continue;
                 }
-                byRoom.putIfAbsent(job.roomId, job);
+                // Replace any pre-startup cached snapshot with the authoritative
+                // job that the recovery worker will update. Otherwise a GET
+                // racing ApplicationReadyEvent can cache an orphaned object.
+                byRoom.put(job.roomId, job);
                 executor.execute(() -> {
                     try {
                         process(job, objectStore.get(job.sourceCameraKey), job.cameraMime,
@@ -329,28 +332,17 @@ public class NeuroReplacementPilotService {
     private Job existingRoomJob(String roomId) {
         Job current = byRoom.get(roomId);
         if (current != null || jdbc == null) return current;
-        List<Job> found = jdbc.query("""
-            SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
-                   final_video_url,error_message,final_video_key
-            FROM neuro_replacement_job WHERE room_id=? ORDER BY created_at DESC LIMIT 1
-            """, (rs,n) -> {
-            Job restored = new Job(rs.getString(1),rs.getString(2),rs.getString(3));
-            restored.state = rs.getString(4);
-            restored.stage = rs.getString(5);
-            try {
-                JsonNode providerIds = json.readTree(rs.getString(6));
-                providerIds.fields().forEachRemaining(entry -> restored.providerRequests.put(entry.getKey(), entry.getValue().asText()));
-            } catch (Exception ignored) {}
-            restored.finalVideo = rs.getString(7);
-            restored.error = rs.getString(8);
-            restored.finalVideoKey = rs.getString(9);
-            // Restoring a row is not proof that its remote processing stopped.
-            // Startup recovery determines which jobs can resume or need review.
-            return restored;
-        }, roomId);
-        if (found.isEmpty()) return null;
-        Job raced = byRoom.putIfAbsent(roomId, found.get(0));
-        return raced == null ? found.get(0) : raced;
+        List<String> ids = jdbc.query("""
+            SELECT job_id FROM neuro_replacement_job
+            WHERE room_id=? ORDER BY created_at DESC LIMIT 1
+            """, (rs,n) -> rs.getString(1), roomId);
+        if (ids.isEmpty()) return null;
+        // Load the full checkpoint, including S3 keys and the in-flight paid
+        // submission marker. A partial row must never enter the cache.
+        Job restored = loadJobById(ids.get(0));
+        if (restored == null) return null;
+        Job raced = byRoom.putIfAbsent(roomId, restored);
+        return raced == null ? restored : raced;
     }
 
 
@@ -378,7 +370,9 @@ public class NeuroReplacementPilotService {
         if (!consented) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "EXPLICIT_IMAGE_VOICE_PAYMENT_CONSENT_REQUIRED");
         if (key == null || key.isBlank()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "GENAPI_API_KEY_NOT_CONFIGURED");
         Job existing = existingRoomJob(roomId);
-        if (existing != null && !"failed".equals(existing.state) && !"interrupted".equals(existing.state)) return snapshot(existing);
+        // One payment authorization per room, even after a failed/interrupted task.
+        // Return the original checkpoint; never create a second billable job.
+        if (existing != null) return snapshot(existing);
         if (video == null || video.isEmpty() || video.getSize() > MAX_VIDEO_BYTES ||
                 voice == null || voice.isEmpty() || voice.getSize() > MAX_VOICE_BYTES) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_CAMERA_OR_VOICE_SAMPLE");
@@ -400,7 +394,7 @@ public class NeuroReplacementPilotService {
         }
         // Paid experiments must be downloadable after the game ends.
         // Fail free preflight rather than charging Kling when S3 is missing.
-        if (jdbc != null && (objectStore == null || !objectStore.configured())) {
+        if (jdbc == null || objectStore == null || !objectStore.configured()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "NEURO_RESULT_ARCHIVE_NOT_CONFIGURED");
         }
