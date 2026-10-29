@@ -17,6 +17,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -58,6 +60,16 @@ public class NeuroReplacementHistoryController {
     public Map<String,Object> providerStatus(@AuthenticationPrincipal HotHatUser owner,
                                              @Parameter(description = "Сохранённый ID задания Hot Hat") @PathVariable String jobId) {
         return pilot.inspectProvider(owner.uid(),jobId);
+    }
+
+    @PostMapping("/{jobId}/resume")
+    @ApiResponse(responseCode = "200", description = "Продолжить задание после отказа провайдера 402",
+            content = @Content(mediaType = "application/json",
+                    schema = @Schema(implementation = NeuroJobResponseDTO.class)))
+    public Map<String,Object> resume(@AuthenticationPrincipal HotHatUser owner,
+                                      @PathVariable String jobId,
+                                      @RequestParam(name="consented", defaultValue="false") boolean consented) {
+        return pilot.resumeAfterLimit(owner.uid(),jobId,consented);
     }
 
     @GetMapping("/{jobId}/video")
