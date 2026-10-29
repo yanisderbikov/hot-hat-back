@@ -161,7 +161,7 @@ class NeuroReplacementPipelineSimulationTest {
                 fail("Timed out generating synthetic fixture");
             }
             assertEquals(0, process.exitValue(),
-                    () -> "Could not generate test media: " + new String(process.getInputStream().readAllBytes()));
+                    "Could not generate test media: " + new String(process.getInputStream().readAllBytes()));
             return Files.readAllBytes(file);
         } finally {
             Files.deleteIfExists(file);
