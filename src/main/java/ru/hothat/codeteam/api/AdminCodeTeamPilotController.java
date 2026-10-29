@@ -2,6 +2,7 @@ package ru.hothat.codeteam.api;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
@@ -19,6 +20,7 @@ import ru.hothat.codeteam.usecase.RunCodeTeamPilotUseCase;
 @RequiredArgsConstructor
 @RequestMapping("/api/v2/admin/code-team/pilot")
 @PreAuthorize("hasRole('OWNER')")
+@SecurityRequirement(name = "Bearer")
 public class AdminCodeTeamPilotController {
 
     private final RunCodeTeamPilotUseCase runPilot;
