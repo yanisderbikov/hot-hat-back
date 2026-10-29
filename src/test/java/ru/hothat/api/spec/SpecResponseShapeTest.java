@@ -46,7 +46,15 @@ class SpecResponseShapeTest {
                 }
                 content.fieldNames().forEachRemaining(mediaType -> {
                     JsonNode schema = content.path(mediaType).path("schema");
-                    if (!schema.hasNonNull("$ref")) {
+                    // A typed array of a named DTO is as precise as a single
+                    // named DTO. MP4 streaming is binary, not a JSON schema.
+                    boolean named = schema.hasNonNull("$ref");
+                    boolean arrayOfNamed = "array".equals(schema.path("type").asText())
+                            && schema.path("items").hasNonNull("$ref");
+                    boolean binaryVideo = "video/mp4".equals(mediaType)
+                            && "string".equals(schema.path("type").asText())
+                            && "binary".equals(schema.path("format").asText());
+                    if (!named && !arrayOfNamed && !binaryVideo) {
                         shapeless.add(operation.address() + " → " + status + " (" + mediaType + "): " + schema);
                     }
                 });
