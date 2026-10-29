@@ -2,6 +2,11 @@ package ru.hothat.testbot.api;
 
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import ru.hothat.testbot.api.dto.NeuroJobResponseDTO;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -45,10 +50,16 @@ public class NeuroReplacementPilotController {
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ApiResponse(responseCode = "202", description = "Создано долговечное задание с сохранёнными исходниками",
+            content = @Content(mediaType = "application/json",
+                    schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public ResponseEntity<Map<String, Object>> start(
             @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description = "Тестовая комната, принадлежащая владельцу")
             @PathVariable @RoomId String roomId,
+            @Parameter(description = "Отдельное согласие на платную обработку видео и голоса")
             @RequestParam(name = "consented", defaultValue = "false") boolean consented,
+            @Parameter(description = "Начало выбранного десятисекундного фрагмента в исходной записи")
             @RequestParam(name = "windowStartSeconds", defaultValue = "0") double windowStartSeconds,
             @RequestPart("video") MultipartFile video,
             @RequestPart("voice") MultipartFile voice) {
@@ -58,18 +69,28 @@ public class NeuroReplacementPilotController {
     }
 
     @GetMapping("/{jobId}")
+    @ApiResponse(responseCode = "200", description = "Статус генерации и идентификаторы оплаченных этапов",
+            content = @Content(mediaType = "application/json",
+                    schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String, Object> status(
             @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description = "Тестовая комната, принадлежащая владельцу")
             @PathVariable @RoomId String roomId,
+            @Parameter(description = "Постоянный ID задания Hot Hat")
             @PathVariable @NotBlank String jobId) {
         check(owner, roomId);
         return pilot.status(roomId, owner.uid(), jobId);
     }
 
     @GetMapping("/{jobId}/video")
+    @ApiResponse(responseCode = "200", description = "Готовый AI MP4, доступен только владельцу",
+            content = @Content(mediaType = "video/mp4",
+                    schema = @Schema(type = "string", format = "binary")))
     public ResponseEntity<byte[]> video(
             @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description = "Тестовая комната, принадлежащая владельцу")
             @PathVariable @RoomId String roomId,
+            @Parameter(description = "Постоянный ID задания Hot Hat")
             @PathVariable @NotBlank String jobId) {
         check(owner, roomId);
         byte[] bytes = pilot.video(roomId, owner.uid(), jobId);
