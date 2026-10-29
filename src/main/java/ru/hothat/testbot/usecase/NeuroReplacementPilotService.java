@@ -82,6 +82,13 @@ public class NeuroReplacementPilotService {
         worker.setDaemon(true);
         return worker;
     });
+    // A paid MP4 recovery can decode/encode HD video. Never perform that work
+    // in an HTTP GET handler or run concurrent heavyweight repair processes.
+    private final ExecutorService recoveryExecutor = Executors.newSingleThreadExecutor(task -> {
+        Thread worker = new Thread(task, "neuro-paid-mp4-recovery");
+        worker.setDaemon(true);
+        return worker;
+    });
     private final Map<String, Job> byRoom = new ConcurrentHashMap<>();
     private JdbcTemplate jdbc;
     private ObjectStore objectStore;
@@ -283,23 +290,9 @@ public class NeuroReplacementPilotService {
                 item.put("cost", data.path("cost").isNumber()?data.path("cost").asDouble():null);
                 item.put("error",errorCode(data));
                 results.put(entry.getKey(),item);
-                if ("lipsync".equals(entry.getKey()) &&
-                        "success".equalsIgnoreCase(data.path("status").asText()) &&
-                        !"ready".equals(job.state)) {
-                    JsonNode urls = data.path("result");
-                    String url = urls.isArray() && !urls.isEmpty()?urls.get(0).asText(""):urls.asText("");
-                    validatedResultUri(url);
-                    if (objectStore != null && objectStore.configured()) {
-                        byte[] mp4 = recoverPaidLipSyncVideo(job,url);
-                        String keyPath="neuro-replacements/"+ownerUid+"/"+job.id+".mp4";
-                        objectStore.put(keyPath,mp4,"video/mp4");
-                        job.finalVideo=url;
-                        job.finalVideoKey=keyPath;
-                        job.state="ready";job.stage="Готово (восстановлено из GenAPI)";
-                        job.error=null;
-                        persist(job);
-                    }
-                }
+                // This endpoint must stay a fast, side-effect-free GET.
+                // Large MP4 downloads/FFmpeg belong to the explicit async
+                // no-charge /recover action, not to health/status polling.
             } catch (Exception error) {
                 Map<String,Object> item = new LinkedHashMap<>();
                 Object previous = results.get(entry.getKey());
@@ -319,6 +312,9 @@ public class NeuroReplacementPilotService {
         response.put("providerRequests",results);
         if (results.isEmpty()) {
             response.put("note","Сервер не получил ни одного ID GenAPI: платная отправка не подтверждена.");
+        } else if (job.providerRequests.containsKey("lipsync") &&
+                !"ready".equals(job.state)) {
+            response.put("note", "Lip Sync уже оплачен. Проверка GenAPI не скачивает большие файлы и не запускает FFmpeg. Для восстановления MP4 используйте отдельную кнопку «Восстановить MP4 без оплаты».");
         } else if (!job.providerRequests.containsKey("lipsync")) {
             boolean prerequisitesSucceeded = true;
             for (String model : new String[]{VIDEO_MODEL_ID, "tts", "chatterbox-speech"}) {
@@ -334,6 +330,82 @@ public class NeuroReplacementPilotService {
                     : "ID Lip Sync пока отсутствует. Итоговый MP4 не подтверждён; проверка выполнена без новых платных запросов.");
         }
         return response;
+    }
+
+
+    /**
+     * Restore an ALREADY PAID lip-synced result. No model POST is issued:
+     * only previously saved request IDs are read with GET. Heavy media
+     * processing happens on a single background worker, not the HTTP thread.
+     * A PostgreSQL conditional claim makes browser double-clicks and separate
+     * Railway instances safe; incomplete or unverifiable outputs stay failed.
+     */
+    public synchronized Map<String,Object> recoverPaidOutput(String ownerUid, String jobId) {
+        if (jdbc == null || objectStore == null || !objectStore.configured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_RESULT_ARCHIVE_NOT_CONFIGURED");
+        }
+        if (key == null || key.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "GENAPI_API_KEY_NOT_CONFIGURED");
+        }
+        Job job = loadJobById(jobId);
+        if (job == null || !ownerUid.equals(job.ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "NEURO_JOB_NOT_FOUND");
+        }
+        if (!("failed".equals(job.state) || "interrupted".equals(job.state)) ||
+                job.finalVideoKey != null ||
+                !job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+                !job.providerRequests.containsKey("tts") ||
+                !job.providerRequests.containsKey("chatterbox-speech") ||
+                !job.providerRequests.containsKey("lipsync")) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_PAID_RESULT_RECOVERY_NOT_ELIGIBLE");
+        }
+        int claimed = jdbc.update("""
+                UPDATE neuro_replacement_job
+                   SET state='processing', stage='Восстановление уже оплаченного MP4',
+                       error_message=NULL
+                 WHERE job_id=? AND owner_uid=?
+                   AND state IN ('failed','interrupted')
+                   AND final_video_key IS NULL
+                   AND jsonb_exists(provider_requests, 'kling-video-o3')
+                   AND jsonb_exists(provider_requests, 'tts')
+                   AND jsonb_exists(provider_requests, 'chatterbox-speech')
+                   AND jsonb_exists(provider_requests, 'lipsync')
+                """, jobId, ownerUid);
+        if (claimed != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_PAID_RESULT_RECOVERY_ALREADY_CLAIMED");
+        }
+        job.state="processing";
+        job.stage="Восстановление уже оплаченного MP4";
+        job.error=null;
+        byRoom.put(job.roomId, job);
+        recoveryExecutor.execute(() -> {
+            try {
+                String url = completedPaidResultUrl("lipsync", job.providerRequests.get("lipsync"));
+                byte[] mp4 = recoverPaidLipSyncVideo(job, url);
+                String archiveKey="neuro-replacements/"+ownerUid+"/"+job.id+".mp4";
+                objectStore.put(archiveKey,mp4,"video/mp4");
+                job.finalVideo=url;
+                job.finalVideoKey=archiveKey;
+                job.stage="Готово (восстановлено без GenAPI POST)";
+                job.state="ready";
+                job.error=null;
+                checkpoint(job);
+                LOG.info("Recovered paid neuro result job={} from existing lip-sync ID without POST",job.id);
+            } catch (Exception error) {
+                job.state="failed";
+                job.stage="Ошибка бесплатного восстановления оплаченного MP4";
+                String details = String.valueOf(error.getMessage());
+                job.error = details.substring(0, Math.min(350, details.length()));
+                checkpoint(job);
+                LOG.warn("Paid result recovery failed job={} lipSyncId={} reason={}",
+                        job.id,job.providerRequests.get("lipsync"),job.error);
+            }
+        });
+        return snapshot(job);
     }
 
     /**
@@ -823,7 +895,8 @@ public class NeuroReplacementPilotService {
                     "-i", lip.toString(), "-i", klingFile.toString(), "-i", voiceFile.toString(),
                     "-filter_complex", filter,
                     "-map", "[v]", "-map", "[a]", "-t", "10",
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+                    "-threads", "1", "-filter_complex_threads", "1",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
                     "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", output.toString()));
             Process tool = new ProcessBuilder(command).redirectErrorStream(true).start();
             if (!tool.waitFor(120, TimeUnit.SECONDS)) {
@@ -1055,7 +1128,10 @@ public class NeuroReplacementPilotService {
     }
 
     @PreDestroy
-    public void close() { executor.shutdownNow(); }
+    public void close() {
+        executor.shutdownNow();
+        recoveryExecutor.shutdownNow();
+    }
 
     private static final class Job {
         final String id;
