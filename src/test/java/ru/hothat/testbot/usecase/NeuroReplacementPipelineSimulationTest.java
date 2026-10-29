@@ -312,8 +312,8 @@ class NeuroReplacementPipelineSimulationTest {
         ReflectionTestUtils.invokeMethod(pilot,"verifyPlayableMp4",normalized);
         assertEquals(5,requested.size());
         assertTrue(requested.contains("/paid-lipsync.mp4"));
-        assertTrue(requested.contains("/request/get/kling-paid"));
-        assertTrue(requested.contains("/request/get/voice-paid"));
+        assertTrue(requested.stream().anyMatch(p -> p.endsWith("/request/get/kling-paid")));
+        assertTrue(requested.stream().anyMatch(p -> p.endsWith("/request/get/voice-paid")));
     }
 
     private static Object newJob(String id, String room, String owner) throws Exception {
