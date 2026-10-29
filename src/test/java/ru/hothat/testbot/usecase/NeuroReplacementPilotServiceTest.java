@@ -105,6 +105,13 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void lipSyncRetainsFullVideoWhenTransferredSpeechIsShorter() {
+        assertEquals("silence", ReflectionTestUtils.getField(
+                NeuroReplacementPilotService.class, "LIPSYNC_SYNC_MODE"),
+                "cut_off shortens the paid result to the speech duration");
+    }
+
+    @Test
     void klingO3EditVideoNeverSendsUnsupportedDuration() {
         Map<?, ?> fields = ReflectionTestUtils.invokeMethod(pilot, "klingEditFields");
         assertEquals("edit-video", fields.get("model"));
