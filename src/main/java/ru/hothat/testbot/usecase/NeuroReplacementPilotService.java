@@ -59,6 +59,9 @@ public class NeuroReplacementPilotService {
     // Match the successfully tested GenAPI website configuration: Kling O3,
     // video-to-video edit, ten seconds, PRO, source audio disabled.
     private static final String VIDEO_MODEL_ID = "kling-video-o3";
+    // Preserve the full ten-second Kling clip when speech is shorter; cut_off
+    // truncated a successfully paid Lip Sync result in the 29-Oct pilot.
+    private static final String LIPSYNC_SYNC_MODE = "silence";
     private static final String VIDEO_PROMPT =
             "Edit the supplied webcam video, preserving the same person, face, hair, clothes, " +
             "lighting, room, furniture and camera framing. Keep one continuous static webcam shot. " +
@@ -615,7 +618,7 @@ public class NeuroReplacementPilotService {
             checkpoint(job);
             String finalVideo = paidStage(job, "lipsync", () -> submitJson("lipsync", Map.of(
                     "video_url", videoUrl, "audio_url", voiceUrl,
-                    "model", "lipsync-1.9.0-beta", "sync_mode", "cut_off")));
+                    "model", "lipsync-1.9.0-beta", "sync_mode", LIPSYNC_SYNC_MODE)));
             validatedResultUri(finalVideo);
             job.finalVideo = finalVideo;
             if (objectStore != null && objectStore.configured()) {
