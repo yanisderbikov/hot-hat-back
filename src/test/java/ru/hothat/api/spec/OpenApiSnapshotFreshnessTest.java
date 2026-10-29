@@ -61,6 +61,12 @@ class OpenApiSnapshotFreshnessTest {
     void snapshotMatchesTheAssembledSpecification() throws Exception {
         JsonNode assembled = new ObjectMapper().readTree(
                 http.getForObject("/v3/api-docs", String.class));
+        // Explicit maintainer-only regeneration path for the CI fixture workflow.
+        // Regular tests always compare the snapshot, never silently rewrite it.
+        if (Boolean.getBoolean("hot-hat.refresh-openapi-snapshot")) {
+            java.nio.file.Files.writeString(ApiSpec.SNAPSHOT_FILE, assembled.toString());
+            return;
+        }
         ApiSpec live = ApiSpec.of(assembled);
         ApiSpec snapshot = ApiSpec.fromSnapshot();
 
