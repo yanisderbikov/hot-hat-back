@@ -249,16 +249,9 @@ public class NeuroReplacementPilotService {
             result.put("roomId",job.roomId);
             result.put("createdAt",rs.getTimestamp(10).toInstant().toString());
             result.put("archived",job.finalVideoKey != null);
-            // An active in-memory worker is definitive proof the task is
-            // running. Never present "processing" as "interrupted" merely
-            // because the history is loaded from PostgreSQL.
-            Job active = byRoom.get(job.roomId);
-            if (active != null && active.id.equals(job.id)) {
-                result = snapshot(active);
-                result.put("roomId",job.roomId);
-                result.put("createdAt",rs.getTimestamp(10).toInstant().toString());
-                result.put("archived",active.finalVideoKey != null);
-            }
+            // PostgreSQL is authoritative. A cached worker snapshot can be
+            // stale after another instance advances a paid task (or restores it).
+            // Never hide a real failure/ready state behind cached "processing".
             return result;
         }, ownerUid);
     }
@@ -309,8 +302,25 @@ public class NeuroReplacementPilotService {
         Map<String,Object> response=new LinkedHashMap<>();
         response.put("jobId",jobId);
         response.put("status",job.state);
+        response.put("stage",job.stage);
+        if (job.error != null) response.put("error",job.error);
         response.put("providerRequests",results);
-        if(results.isEmpty())response.put("note","Сервер не получил ни одного ID GenAPI: платная отправка не подтверждена.");
+        if (results.isEmpty()) {
+            response.put("note","Сервер не получил ни одного ID GenAPI: платная отправка не подтверждена.");
+        } else if (!job.providerRequests.containsKey("lipsync")) {
+            boolean prerequisitesSucceeded = true;
+            for (String model : new String[]{VIDEO_MODEL_ID, "tts", "chatterbox-speech"}) {
+                Object info = results.get(model);
+                if (!(info instanceof Map<?,?> stage) ||
+                        !"success".equalsIgnoreCase(String.valueOf(stage.get("status")))) {
+                    prerequisitesSucceeded = false;
+                    break;
+                }
+            }
+            response.put("note", prerequisitesSucceeded
+                    ? "Kling, TTS и Chatterbox завершены. Но ID Lip Sync отсутствует: итогового MP4 пока нет. Эта проверка не запускала новую платную генерацию."
+                    : "ID Lip Sync пока отсутствует. Итоговый MP4 не подтверждён; проверка выполнена без новых платных запросов.");
+        }
         return response;
     }
 
@@ -454,9 +464,12 @@ public class NeuroReplacementPilotService {
     }
 
     private Job find(String roomId, String ownerUid, String jobId) {
-        Job job = existingRoomJob(roomId);
-        if (job == null || !job.id.equals(jobId)) job = findOwnerJob(ownerUid, jobId);
-        if (job == null || !job.roomId.equals(roomId) || !job.ownerUid.equals(ownerUid)) {
+        // Resolve from the durable checkpoint first. Cached room jobs may be
+        // stale on this Railway instance while another worker progresses.
+        Job job = findOwnerJob(ownerUid, jobId);
+        if (job == null) job = existingRoomJob(roomId);
+        if (job == null || !job.id.equals(jobId) ||
+                !job.roomId.equals(roomId) || !job.ownerUid.equals(ownerUid)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "NEURO_REPLACEMENT_JOB_NOT_FOUND");
         }
         return job;
