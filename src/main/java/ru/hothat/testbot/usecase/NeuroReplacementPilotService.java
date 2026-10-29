@@ -733,12 +733,122 @@ public class NeuroReplacementPilotService {
     }
 
 
+
     /**
-     * Never announce a completed AI replacement for a broken/silent MP4.
-     * The synced clip must contain both playable video and an audible track.
-     * This check is local and free; it never calls GenAPI.
+     * Recover the ALREADY-PAID Lip Sync output without any new generation.
+     * The "cut_off" provider option can shorten a valid 10-second Kling video
+     * to the voice duration. Recover the original 10-second timeline by using
+     * the paid Kling tail and the paid Chatterbox voice, never new POST requests.
+     * Keep strict validation: a malformed/empty video cannot be passed off as
+     * a complete replacement.
      */
-    private void verifyPlayableMp4(byte[] data) throws Exception {
+    private byte[] recoverPaidLipSyncVideo(Job job, String lipSyncUrl) throws Exception {
+        byte[] result = download(lipSyncUrl, MAX_RESULT_BYTES);
+        MediaProbe media = probeMp4(result);
+        if (media.video && media.audio && media.seconds >= 8.0 && media.seconds <= 15.0) {
+            verifyPlayableMp4(result);
+            return result;
+        }
+        if (!media.video || media.seconds < 3.0 || media.seconds > 15.0) {
+            throw new IOException("NEURO_PAID_LIPSYNC_UNRECOVERABLE video=" + media.video +
+                    " audio=" + media.audio + " duration=" + media.seconds);
+        }
+        String klingId = job.providerRequests.get(VIDEO_MODEL_ID);
+        String voiceId = job.providerRequests.get("chatterbox-speech");
+        if (klingId == null || voiceId == null) {
+            throw new IOException("NEURO_PAID_LIPSYNC_RECOVERY_IDS_MISSING");
+        }
+        // GET only: these are the original successful provider task IDs.
+        String klingUrl = completedPaidResultUrl(VIDEO_MODEL_ID, klingId);
+        String voiceUrl = completedPaidResultUrl("chatterbox-speech", voiceId);
+        byte[] kling = download(klingUrl, MAX_RESULT_BYTES);
+        byte[] voice = download(voiceUrl, MAX_RESULT_BYTES);
+        byte[] repaired = composePaidLipSyncWithOriginalTail(result, kling, voice, media.seconds);
+        verifyPlayableMp4(repaired);
+        LOG.info("Recovered paid Lip Sync without provider POST: job={} lipSyncSeconds={} audioPresent={}",
+                job.id, media.seconds, media.audio);
+        return repaired;
+    }
+
+    private String completedPaidResultUrl(String model, String id) throws Exception {
+        JsonNode data = send(baseRequest(GENAPI.resolve("request/get/" + id)).GET().build());
+        String status = data.path("status").asText("");
+        if (!"success".equalsIgnoreCase(status) && !"completed".equalsIgnoreCase(status)) {
+            throw new IOException("NEURO_RECOVERY_ORIGINAL_NOT_READY " + model + " " + status);
+        }
+        JsonNode output = data.path("result");
+        String url = output.isArray() && !output.isEmpty() ?
+                output.get(0).asText("") : output.asText("");
+        validatedResultUri(url);
+        return url;
+    }
+
+    /**
+     * Keep the actual lip-synced opening, append the remaining edited Kling
+     * gestures when cut_off shortened it, and retain the exact Chatterbox
+     * voice provided to Lip Sync. No synthesis or billable remote operation.
+     */
+    private byte[] composePaidLipSyncWithOriginalTail(byte[] lipSync, byte[] kling,
+                                                       byte[] voice, double lipSeconds) throws Exception {
+        Path lip = Files.createTempFile("neuro-paid-lipsync-", ".mp4");
+        Path klingFile = Files.createTempFile("neuro-paid-kling-", ".mp4");
+        Path voiceFile = Files.createTempFile("neuro-paid-voice-", ".audio");
+        Path output = Files.createTempFile("neuro-paid-recovered-", ".mp4");
+        try {
+            Files.write(lip, lipSync);
+            Files.write(klingFile, kling);
+            Files.write(voiceFile, voice);
+            double lead = Math.min(10.0, lipSeconds);
+            String standardize = "fps=24,scale=1280:720:force_original_aspect_ratio=decrease,"
+                    + "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,";
+            String filter;
+            if (lead < 9.8) {
+                filter = "[0:v]" + standardize + "trim=duration=" + lead +
+                        ",setpts=PTS-STARTPTS[lead];" +
+                        "[1:v]" + standardize + "trim=start=" + lead +
+                        ":duration=" + (10.0 - lead) + ",setpts=PTS-STARTPTS[tail];" +
+                        "[lead][tail]concat=n=2:v=1:a=0," +
+                        "tpad=stop_mode=clone:stop_duration=10,trim=duration=10[v];" +
+                        "[2:a]aresample=48000,apad,atrim=duration=10[a]";
+            } else {
+                filter = "[0:v]" + standardize +
+                        "tpad=stop_mode=clone:stop_duration=10,trim=duration=10,setpts=PTS-STARTPTS[v];" +
+                        "[2:a]aresample=48000,apad,atrim=duration=10[a]";
+            }
+            List<String> command = new ArrayList<>(List.of(
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                    "-i", lip.toString(), "-i", klingFile.toString(), "-i", voiceFile.toString(),
+                    "-filter_complex", filter,
+                    "-map", "[v]", "-map", "[a]", "-t", "10",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", output.toString()));
+            Process tool = new ProcessBuilder(command).redirectErrorStream(true).start();
+            if (!tool.waitFor(120, TimeUnit.SECONDS)) {
+                tool.destroyForcibly();
+                throw new IOException("NEURO_PAID_LIPSYNC_MUX_TIMEOUT");
+            }
+            if (tool.exitValue() != 0) {
+                String details = new String(tool.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                throw new IOException("NEURO_PAID_LIPSYNC_MUX_FAILED " +
+                        details.replaceAll("[^\p{L}\p{N} _.,:;!()#-]", " ")
+                               .substring(0, Math.min(180, details.length())));
+            }
+            long bytes = Files.size(output);
+            if (bytes <= 256 || bytes > MAX_RESULT_BYTES) {
+                throw new IOException("NEURO_PAID_LIPSYNC_MUX_SIZE_INVALID " + bytes);
+            }
+            return Files.readAllBytes(output);
+        } finally {
+            Files.deleteIfExists(lip);
+            Files.deleteIfExists(klingFile);
+            Files.deleteIfExists(voiceFile);
+            Files.deleteIfExists(output);
+        }
+    }
+
+    private record MediaProbe(boolean video, boolean audio, double seconds) {}
+
+    private MediaProbe probeMp4(byte[] data) throws Exception {
         if (data == null || data.length < 256) throw new IOException("NEURO_RESULT_EMPTY");
         Path file = Files.createTempFile("neuro-result-check-", ".mp4");
         try {
@@ -753,18 +863,29 @@ public class NeuroReplacementPilotService {
                 throw new IOException("NEURO_RESULT_MEDIA_PROBE_TIMEOUT");
             }
             if (probe.exitValue() != 0) throw new IOException("NEURO_RESULT_INVALID_MP4");
-            JsonNode result = json.readTree(probe.getInputStream().readAllBytes());
+            JsonNode info = json.readTree(probe.getInputStream().readAllBytes());
             boolean video = false, audio = false;
-            for (JsonNode stream : result.path("streams")) {
+            for (JsonNode stream : info.path("streams")) {
                 video |= "video".equals(stream.path("codec_type").asText());
                 audio |= "audio".equals(stream.path("codec_type").asText());
             }
-            double seconds = result.path("format").path("duration").asDouble(0);
-            if (!video || !audio || seconds < 8.0 || seconds > 15.0) {
-                throw new IOException("NEURO_RESULT_MISSING_VIDEO_AUDIO_OR_DURATION");
-            }
+            double duration = info.path("format").path("duration").asDouble(0);
+            return new MediaProbe(video, audio, duration);
         } finally {
             Files.deleteIfExists(file);
+        }
+    }
+
+    /**
+     * Never announce a completed AI replacement for a broken/silent MP4.
+     * The synced clip must contain both playable video and an audible track.
+     * This check is local and free; it never calls GenAPI.
+     */
+    private void verifyPlayableMp4(byte[] data) throws Exception {
+        MediaProbe info = probeMp4(data);
+        if (!info.video || !info.audio || info.seconds < 8.0 || info.seconds > 15.0) {
+            throw new IOException("NEURO_RESULT_MISSING_VIDEO_AUDIO_OR_DURATION video=" +
+                    info.video + " audio=" + info.audio + " duration=" + info.seconds);
         }
     }
 
