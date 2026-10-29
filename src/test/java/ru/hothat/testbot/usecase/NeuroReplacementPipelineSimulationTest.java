@@ -90,6 +90,9 @@ class NeuroReplacementPipelineSimulationTest {
         JdbcTemplate database = mock(JdbcTemplate.class);
         ObjectStore archive = mock(ObjectStore.class);
         when(archive.configured()).thenReturn(true);
+        when(archive.presignGet(anyString(),any(java.time.Duration.class),
+                eq("audio/wav"),isNull(),anyString()))
+                .thenReturn("https://signed.example.test/valid-audio.wav");
         pilot.setJdbcTemplate(database);
         pilot.setObjectStore(archive);
         ReflectionTestUtils.setField(pilot, "enabled", true);
@@ -112,6 +115,8 @@ class NeuroReplacementPipelineSimulationTest {
         assertEquals(4, ((Map<?, ?>) status.get("providerRequests")).size());
         verify(archive, times(1)).put(eq("neuro-replacements/owner-1/simulation-job.mp4"),
                 aryEq(finalMp4), eq("video/mp4"));
+        verify(archive).put(eq("neuro-replacements/owner-1/simulation-job-lipsync-voice.wav"),
+                any(byte[].class),eq("audio/wav"));
 
         // A user retry in the same room must return the existing result,
         // without a fifth paid submission and without even examining media.
@@ -225,6 +230,9 @@ class NeuroReplacementPipelineSimulationTest {
         pilot.setJdbcTemplate(db);
         ObjectStore archive = mock(ObjectStore.class);
         when(archive.configured()).thenReturn(true);
+        when(archive.presignGet(anyString(),any(java.time.Duration.class),
+                eq("audio/wav"),isNull(),anyString()))
+                .thenReturn("https://signed.example.test/valid-audio.wav");
         when(archive.get("neuro-replacements/owner-1/input-camera.webm")).thenReturn(camera);
         when(archive.get("neuro-replacements/owner-1/input-voice.wav")).thenReturn(voice);
         pilot.setObjectStore(archive);
