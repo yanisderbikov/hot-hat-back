@@ -71,7 +71,7 @@ class NeuroReplacementPipelineSimulationTest {
                     }
                     if (path.startsWith("/api/v1/request/get/sim-")) {
                         String model = path.substring(path.lastIndexOf("sim-") + 4);
-                        String extension = model.equals("tts") ? "mp3"
+                        String extension = model.equals("gemini-tts") ? "mp3"
                                 : model.equals("chatterbox-speech") ? "wav" : "mp4";
                         String url = "https://gen-api.storage.yandexcloud.net/sim-" + model + "." + extension;
                         return response("{\"status\":\"success\",\"result\":[\"" + url + "\"]}");
@@ -104,8 +104,8 @@ class NeuroReplacementPipelineSimulationTest {
         Map<String, Object> status = pilot.status(room, owner, "simulation-job");
         assertEquals("ready", status.get("status"), status.toString());
         assertEquals(Boolean.TRUE, status.get("ready"));
-        assertEquals(List.of("kling-video-o3", "tts", "chatterbox-speech", "lipsync"),
-                paid, "no model stage is silently omitted or reordered");
+        assertEquals(List.of("kling-video-o3", "gemini-tts", "chatterbox-speech", "lipsync"),
+                paid, "new performance must use emotionally directed Russian Gemini speech");
         assertEquals(4, ((Map<?, ?>) status.get("providerRequests")).size());
         verify(archive, times(1)).put(eq("neuro-replacements/owner-1/simulation-job.mp4"),
                 aryEq(finalMp4), eq("video/mp4"));
