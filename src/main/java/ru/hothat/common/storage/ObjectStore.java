@@ -120,6 +120,12 @@ public class ObjectStore {
                 RequestBody.fromBytes(body));
     }
 
+    /** Private retrieval after server-side owner authorization. */
+    public byte[] get(String key) {
+        return client().getObjectAsBytes(GetObjectRequest.builder()
+                .bucket(bucket).key(key).build()).asByteArray();
+    }
+
     public void delete(String key) {
         client().deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build());
     }
