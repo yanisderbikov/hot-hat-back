@@ -71,10 +71,9 @@ public class NeuroReplacementPilotService {
             "no captions and no added objects. Ten seconds total.";
 
     private final ObjectMapper json;
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(25))
-            .followRedirects(HttpClient.Redirect.NEVER)
-            .build();
+    // Package-private HTTP injection seam enables a complete no-charge provider
+    // simulation in JUnit. Production still uses the real pinned endpoint.
+    private final HttpClient http;
     private final ExecutorService executor = Executors.newCachedThreadPool(task -> {
         Thread worker = new Thread(task, "neuro-replacement-pilot");
         worker.setDaemon(true);
@@ -353,7 +352,15 @@ public class NeuroReplacementPilotService {
     private String key;
 
     public NeuroReplacementPilotService(ObjectMapper json) {
+        this(json, HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(25))
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build());
+    }
+
+    NeuroReplacementPilotService(ObjectMapper json, HttpClient http) {
         this.json = json;
+        this.http = http;
     }
 
     public synchronized Map<String, Object> start(String roomId, String ownerUid, boolean consented,
