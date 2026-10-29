@@ -37,6 +37,12 @@ public class NeuroReplacementHistoryController {
         return pilot.history(owner.uid());
     }
 
+    @GetMapping("/{jobId}/provider-status")
+    public Map<String,Object> providerStatus(@AuthenticationPrincipal HotHatUser owner,
+                                             @PathVariable String jobId) {
+        return pilot.inspectProvider(owner.uid(),jobId);
+    }
+
     @GetMapping("/{jobId}/video")
     public ResponseEntity<byte[]> video(@AuthenticationPrincipal HotHatUser owner,
                                        @PathVariable String jobId) {
