@@ -51,6 +51,10 @@ class NeuroReplacementPipelineSimulationTest {
         byte[] voice = generatedMedia(".wav", List.of(
                 "-f", "lavfi", "-i", "sine=frequency=500:sample_rate=16000",
                 "-t", "10", "-ac", "1", "-c:a", "pcm_s16le"));
+        byte[] directedPerformance = generatedMedia(".mp4", List.of(
+                "-f", "lavfi", "-i", "color=c=red:size=320x180:rate=24",
+                "-t", "15", "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p"));
         byte[] finalMp4 = generatedMedia(".mp4", List.of(
                 "-f", "lavfi", "-i", "color=c=blue:size=320x180:rate=24",
                 "-f", "lavfi", "-i", "sine=frequency=500:sample_rate=16000",
@@ -79,6 +83,9 @@ class NeuroReplacementPipelineSimulationTest {
                     if ("gen-api.storage.yandexcloud.net".equals(request.uri().getHost())) {
                         if (path.endsWith("sim-chatterbox-speech.wav")) {
                             return response(voice); // free speech duration preflight
+                        }
+                        if (path.endsWith("sim-kling-video-o3.mp4")) {
+                            return response(directedPerformance); // free 15s acting validation
                         }
                         assertTrue(path.endsWith("sim-lipsync.mp4"),
                                 "only the final lip-synced video is downloaded for archive");
