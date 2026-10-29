@@ -140,6 +140,17 @@ class NeuroReplacementPipelineSimulationTest {
         assertEquals(List.of("GET /api/v1/request/get/already-paid-request"), requests);
     }
 
+    @Test
+    void videoWithoutSynthesizedSpeechIsNeverAcceptedAsReady() throws Exception {
+        byte[] silent = generatedMedia(".mp4", List.of(
+                "-f", "lavfi", "-i", "color=c=black:size=320x180:rate=24",
+                "-t", "10", "-an", "-c:v", "libx264", "-preset", "ultrafast"));
+        pilot = new NeuroReplacementPilotService(new ObjectMapper());
+        assertThrows(Exception.class,
+                () -> ReflectionTestUtils.invokeMethod(pilot, "verifyPlayableMp4", silent),
+                "A silent Kling clip is not a completed voice-and-lips Neuro replacement");
+    }
+
     private static Object newJob(String id, String room, String owner) throws Exception {
         Class<?> type = Class.forName(NeuroReplacementPilotService.class.getName() + "$Job");
         var ctor = type.getDeclaredConstructor(String.class, String.class, String.class);
