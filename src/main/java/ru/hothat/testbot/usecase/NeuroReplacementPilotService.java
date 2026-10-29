@@ -829,9 +829,9 @@ public class NeuroReplacementPilotService {
             }
             if (tool.exitValue() != 0) {
                 String details = new String(tool.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                String safe = details.replaceAll("[^A-Za-z0-9 _.,:;!()#-]", " ").trim();
                 throw new IOException("NEURO_PAID_LIPSYNC_MUX_FAILED " +
-                        details.replaceAll("[^\p{L}\p{N} _.,:;!()#-]", " ")
-                               .substring(0, Math.min(180, details.length())));
+                        safe.substring(0, Math.min(180, safe.length())));
             }
             long bytes = Files.size(output);
             if (bytes <= 256 || bytes > MAX_RESULT_BYTES) {
