@@ -6,6 +6,10 @@ import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import ru.hothat.common.storage.ObjectStore;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -75,6 +79,10 @@ public class NeuroReplacementPilotService {
     });
     private final Map<String, Job> byRoom = new ConcurrentHashMap<>();
     private JdbcTemplate jdbc;
+    private ObjectStore objectStore;
+
+    @Autowired(required = false)
+    public void setObjectStore(ObjectStore objectStore) { this.objectStore = objectStore; }
 
     @Autowired(required = false)
     public void setJdbcTemplate(JdbcTemplate jdbc) {
@@ -87,17 +95,17 @@ public class NeuroReplacementPilotService {
         try {
             jdbc.update("""
                 INSERT INTO neuro_replacement_job
-                 (job_id,room_id,owner_uid,state,stage,provider_requests,final_video_url,error_message,updated_at)
-                VALUES (?,?,?,?,?,CAST(? AS jsonb),?,?,now())
-                ON CONFLICT (room_id) DO UPDATE SET
+                 (job_id,room_id,owner_uid,state,stage,provider_requests,final_video_url,final_video_key,error_message,updated_at)
+                VALUES (?,?,?,?,?,CAST(? AS jsonb),?,?,?,now())
+                ON CONFLICT (job_id) DO UPDATE SET
                  state=EXCLUDED.state,stage=EXCLUDED.stage,
                  provider_requests=EXCLUDED.provider_requests,
                  final_video_url=EXCLUDED.final_video_url,
+                 final_video_key=EXCLUDED.final_video_key,
                  error_message=EXCLUDED.error_message,updated_at=now()
-                WHERE neuro_replacement_job.job_id=EXCLUDED.job_id
                 """,job.id,job.roomId,job.ownerUid,job.state,job.stage,
                 json.writeValueAsString(new LinkedHashMap<>(job.providerRequests)),
-                job.finalVideo,job.error);
+                job.finalVideo,job.finalVideoKey,job.error);
         } catch (Exception e) {
             throw new IllegalStateException("NEURO_JOB_PERSIST_FAILED", e);
         }
@@ -108,13 +116,79 @@ public class NeuroReplacementPilotService {
         catch (RuntimeException e) { LOG.error("Neuro paid task checkpoint failed room={} job={}", job.roomId, job.id, e); }
     }
 
+    /** Read a historical task for this owner, independent of room lifecycle. */
+    private Job findOwnerJob(String ownerUid, String jobId) {
+        if (jdbc == null) return null;
+        List<Job> rows = jdbc.query("""
+            SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
+                   final_video_url,error_message,final_video_key
+            FROM neuro_replacement_job WHERE job_id=? AND owner_uid=?
+            """, (rs, rowNum) -> {
+            Job job = new Job(rs.getString(1), rs.getString(2), rs.getString(3));
+            job.state = rs.getString(4);
+            job.stage = rs.getString(5);
+            try {
+                JsonNode ids = json.readTree(rs.getString(6));
+                ids.fields().forEachRemaining(e -> job.providerRequests.put(e.getKey(),e.getValue().asText()));
+            } catch (Exception ignored) {}
+            job.finalVideo = rs.getString(7);
+            job.error = rs.getString(8);
+            job.finalVideoKey = rs.getString(9);
+            return job;
+        }, jobId, ownerUid);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /** All paid attempts, latest first, including failures and interrupted tasks. */
+    public List<Map<String,Object>> history(String ownerUid) {
+        if (jdbc == null) return List.of();
+        return jdbc.query("""
+            SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
+                   final_video_url,error_message,final_video_key,created_at
+            FROM neuro_replacement_job WHERE owner_uid=? ORDER BY created_at DESC LIMIT 200
+            """, (rs, rowNum) -> {
+            Job job = new Job(rs.getString(1),rs.getString(2),rs.getString(3));
+            job.state = rs.getString(4); job.stage = rs.getString(5);
+            try {
+                JsonNode ids = json.readTree(rs.getString(6));
+                ids.fields().forEachRemaining(e -> job.providerRequests.put(e.getKey(),e.getValue().asText()));
+            } catch (Exception ignored) {}
+            job.finalVideo = rs.getString(7);
+            job.error = rs.getString(8); job.finalVideoKey = rs.getString(9);
+            Map<String,Object> result = snapshot(job);
+            result.put("roomId",job.roomId);
+            result.put("createdAt",rs.getTimestamp(10).toInstant().toString());
+            result.put("archived",job.finalVideoKey != null);
+            if (!"ready".equals(job.state) && !"failed".equals(job.state)) {
+                result.put("status","interrupted");
+                result.put("stage","Поток прервался при перезапуске сервера; ID GenAPI сохранены");
+            }
+            return result;
+        }, ownerUid);
+    }
+
+    public byte[] archivedVideo(String ownerUid, String jobId) {
+        Job job = findOwnerJob(ownerUid,jobId);
+        if (job == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if (!"ready".equals(job.state))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_REPLACEMENT_NOT_READY");
+        try {
+            if (job.finalVideoKey != null && objectStore != null && objectStore.configured())
+                return objectStore.get(job.finalVideoKey);
+            if (job.finalVideo != null) return download(job.finalVideo, MAX_RESULT_BYTES);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"NEURO_VIDEO_DOWNLOAD_FAILED",e);
+        }
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_VIDEO_UNAVAILABLE");
+    }
+
     private Job existingRoomJob(String roomId) {
         Job current = byRoom.get(roomId);
         if (current != null || jdbc == null) return current;
         List<Job> found = jdbc.query("""
             SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
-                   final_video_url,error_message
-            FROM neuro_replacement_job WHERE room_id=?
+                   final_video_url,error_message,final_video_key
+            FROM neuro_replacement_job WHERE room_id=? ORDER BY created_at DESC LIMIT 1
             """, (rs,n) -> {
             Job restored = new Job(rs.getString(1),rs.getString(2),rs.getString(3));
             restored.state = rs.getString(4);
@@ -125,6 +199,7 @@ public class NeuroReplacementPilotService {
             } catch (Exception ignored) {}
             restored.finalVideo = rs.getString(7);
             restored.error = rs.getString(8);
+            restored.finalVideoKey = rs.getString(9);
             if (!"ready".equals(restored.state) && !"failed".equals(restored.state)) {
                 restored.state = "interrupted";
                 restored.stage = "После перезапуска автоматическая генерация прервана. ID GenAPI сохранены.";
@@ -161,7 +236,7 @@ public class NeuroReplacementPilotService {
         if (!consented) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "EXPLICIT_IMAGE_VOICE_PAYMENT_CONSENT_REQUIRED");
         if (key == null || key.isBlank()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "GENAPI_API_KEY_NOT_CONFIGURED");
         Job existing = existingRoomJob(roomId);
-        if (existing != null) return snapshot(existing);
+        if (existing != null && !"failed".equals(existing.state) && !"interrupted".equals(existing.state)) return snapshot(existing);
         if (video == null || video.isEmpty() || video.getSize() > MAX_VIDEO_BYTES ||
                 voice == null || voice.isEmpty() || voice.getSize() > MAX_VOICE_BYTES) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_CAMERA_OR_VOICE_SAMPLE");
@@ -198,10 +273,13 @@ public class NeuroReplacementPilotService {
 
     public byte[] video(String roomId, String ownerUid, String jobId) {
         Job job = find(roomId, ownerUid, jobId);
-        if (!"ready".equals(job.state) || job.finalVideo == null) {
+        if (!"ready".equals(job.state) || (job.finalVideo == null && job.finalVideoKey == null)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "NEURO_REPLACEMENT_NOT_READY");
         }
         try {
+            if (job.finalVideoKey != null && objectStore != null && objectStore.configured()) {
+                return objectStore.get(job.finalVideoKey);
+            }
             return download(job.finalVideo, MAX_RESULT_BYTES);
         } catch (Exception exception) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "NEURO_REPLACEMENT_DOWNLOAD_FAILED");
@@ -210,7 +288,8 @@ public class NeuroReplacementPilotService {
 
     private Job find(String roomId, String ownerUid, String jobId) {
         Job job = existingRoomJob(roomId);
-        if (job == null || !job.id.equals(jobId) || !job.ownerUid.equals(ownerUid)) {
+        if (job == null || !job.id.equals(jobId)) job = findOwnerJob(ownerUid, jobId);
+        if (job == null || !job.roomId.equals(roomId) || !job.ownerUid.equals(ownerUid)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "NEURO_REPLACEMENT_JOB_NOT_FOUND");
         }
         return job;
@@ -272,6 +351,15 @@ public class NeuroReplacementPilotService {
                     "model", "lipsync-1.9.0-beta", "sync_mode", "cut_off")));
             validatedResultUri(finalVideo);
             job.finalVideo = finalVideo;
+            if (objectStore != null && objectStore.configured()) {
+                byte[] archive = download(finalVideo, MAX_RESULT_BYTES);
+                String archiveKey = "neuro-replacements/" + job.ownerUid + "/" + job.id + ".mp4";
+                objectStore.put(archiveKey, archive, "video/mp4");
+                job.finalVideoKey = archiveKey;
+                checkpoint(job);
+            } else {
+                LOG.warn("Neuro MP4 durable archive unavailable: S3 not configured, job={}", job.id);
+            }
             job.stage = "Готово";
             job.state = "ready";
             checkpoint(job);
@@ -519,6 +607,7 @@ public class NeuroReplacementPilotService {
         volatile String state = "queued";
         volatile String stage = "В очереди";
         volatile String finalVideo;
+        volatile String finalVideoKey;
         volatile String error;
         final Map<String, String> providerRequests = new ConcurrentHashMap<>();
 
