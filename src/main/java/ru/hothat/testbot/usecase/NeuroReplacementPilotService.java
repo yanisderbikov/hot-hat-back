@@ -731,9 +731,21 @@ public class NeuroReplacementPilotService {
             checkpoint(job);
             // Never copy the source's hair-scratching movement; use the
             // original webcam shot as a reference for face/person/room only.
+            boolean videoWasPaidBeforeThisRun = job.providerRequests.containsKey(VIDEO_MODEL_ID);
             String videoUrl = paidStage(job, VIDEO_MODEL_ID,
                     () -> submitMultipart(VIDEO_MODEL_ID, klingEditFields(),
                             "video_url", "webcam.mp4", "video/mp4", klingCamera));
+            // For newly purchased reference-mode performances require the
+            // promised 15s file before paying for lip synchronization.
+            // Older paid edit-video jobs are still recoverable by their IDs.
+            if (!videoWasPaidBeforeThisRun) {
+                byte[] directed = download(videoUrl,MAX_RESULT_BYTES);
+                MediaProbe videoInfo = probeMp4(directed);
+                if (!videoInfo.video || videoInfo.seconds < 14 || videoInfo.seconds > 16) {
+                    throw new IOException("NEURO_DIRECTED_ACTING_VIDEO_LENGTH_INVALID " +
+                            videoInfo.seconds + "s; Lip Sync not ordered");
+                }
+            }
             job.stage = "Согласование речи и жестов";
             checkpoint(job);
             // The new actor looks at the webcam first, so speech must not
