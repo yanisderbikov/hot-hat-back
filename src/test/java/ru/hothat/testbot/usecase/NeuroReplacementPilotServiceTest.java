@@ -7,8 +7,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -89,6 +91,18 @@ class NeuroReplacementPilotServiceTest {
                 NeuroReplacementPilotService.class, "VIDEO_PROMPT");
         assertTrue(prompt.contains("thumbs-up"));
         assertTrue(prompt.contains("one continuous static webcam shot"));
+    }
+
+    @Test
+    void klingO3EditVideoNeverSendsUnsupportedDuration() {
+        Map<?, ?> fields = ReflectionTestUtils.invokeMethod(pilot, "klingEditFields");
+        assertEquals("edit-video", fields.get("model"));
+        assertEquals("true", fields.get("pro"));
+        assertEquals("false", fields.get("keep_audio"));
+        assertFalse(fields.containsKey("duration"),
+                "Kling edit-video must inherit duration from its reference video");
+        assertFalse(fields.containsKey("generate_audio"),
+                "Video edit should not request separate generated sound");
     }
 
     @Test
