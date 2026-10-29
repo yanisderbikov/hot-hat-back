@@ -67,7 +67,9 @@ public class NeuroReplacementHistoryController {
             content = @Content(mediaType = "application/json",
                     schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> resume(@AuthenticationPrincipal HotHatUser owner,
+                                      @Parameter(description = "Сохранённый ID задания Нейроподмены после отказа 402")
                                       @PathVariable String jobId,
+                                      @Parameter(description = "Явное согласие владельца на оплату только недостающего Lip Sync")
                                       @RequestParam(name="consented", defaultValue="false") boolean consented) {
         return pilot.resumeAfterLimit(owner.uid(),jobId,consented);
     }
