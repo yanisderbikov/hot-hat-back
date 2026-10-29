@@ -324,6 +324,83 @@ public class NeuroReplacementPilotService {
         return response;
     }
 
+    /**
+     * Explicitly approved continuation after a definite GenAPI HTTP 402.
+     * The already-paid Kling/TTS/Chatterbox request IDs remain untouched;
+     * process() uses only GET for them, then submits ONE new lip-sync POST.
+     * The conditional SQL claim prevents two API calls on double-click or
+     * concurrent owner sessions / application instances.
+     */
+    public synchronized Map<String,Object> resumeAfterLimit(String ownerUid, String jobId,
+                                                              boolean consented) {
+        if (!consented) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "EXPLICIT_LIPSYNC_PAYMENT_CONSENT_REQUIRED");
+        }
+        if (!enabled) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "NEURO_REPLACEMENT_DISABLED");
+        }
+        if (key == null || key.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "GENAPI_API_KEY_NOT_CONFIGURED");
+        }
+        if (jdbc == null || objectStore == null || !objectStore.configured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_RESULT_ARCHIVE_NOT_CONFIGURED");
+        }
+        Job job = loadJobById(jobId);
+        if (job == null || !job.ownerUid.equals(ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "NEURO_JOB_NOT_FOUND");
+        }
+        // 402 proves that the provider refused the lip-sync POST; an ambiguous
+        // timeout is NEVER sufficient evidence for a safe retry.
+        if (!"failed".equals(job.state) || job.error == null ||
+                !job.error.startsWith("GENAPI_HTTP_402") ||
+                job.providerRequests.containsKey("lipsync") ||
+                !(job.submittingModel == null || "lipsync".equals(job.submittingModel)) ||
+                !job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+                !job.providerRequests.containsKey("tts") ||
+                !job.providerRequests.containsKey("chatterbox-speech") ||
+                job.sourceCameraKey == null || job.sourceVoiceKey == null ||
+                job.cameraMime == null || job.voiceMime == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_NOT_ELIGIBLE_FOR_402_LIPSYNC_RESUME");
+        }
+        // Atomic PostgreSQL check: the old 402 error must still be there and
+        // no lip-sync ID may have appeared since the owner opened the page.
+        int claimed = jdbc.update("""
+                UPDATE neuro_replacement_job
+                   SET state='processing', stage='Продолжение после лимита: проверка оплаченных этапов',
+                       error_message=NULL, submitting_model=NULL
+                 WHERE job_id=? AND owner_uid=? AND state='failed'
+                   AND error_message LIKE 'GENAPI_HTTP_402%'
+                   AND NOT (provider_requests ? 'lipsync')
+                """, jobId, ownerUid);
+        if (claimed != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_LIPSYNC_RESUME_ALREADY_CLAIMED");
+        }
+        job.state="processing";
+        job.stage="Продолжение после лимита: проверка оплаченных этапов";
+        job.error=null;
+        job.submittingModel=null; // Clear only the definitively refused 402 POST.
+        byRoom.put(job.roomId, job);
+        executor.execute(() -> {
+            try {
+                // Read original archived media; never request a new webcam
+                // sample or redo any of the three successful paid stages.
+                byte[] camera = objectStore.get(job.sourceCameraKey);
+                byte[] voice = objectStore.get(job.sourceVoiceKey);
+                process(job,camera,job.cameraMime,voice,job.voiceMime,job.startSeconds);
+            } catch (Exception e) {
+                job.state="failed";
+                job.stage="Не удалось продолжить после лимита";
+                job.error="NEURO_RESUME_INPUT_FAILED: " + e.getClass().getSimpleName();
+                checkpoint(job);
+            }
+        });
+        return snapshot(job);
+    }
+
     public byte[] archivedVideo(String ownerUid, String jobId) {
         Job job = findOwnerJob(ownerUid,jobId);
         if (job == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
