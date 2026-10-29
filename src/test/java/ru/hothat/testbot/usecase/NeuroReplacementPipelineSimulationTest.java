@@ -62,14 +62,14 @@ class NeuroReplacementPipelineSimulationTest {
                         assertTrue(path.startsWith("/api/v1/networks/"));
                         String model = path.substring(path.lastIndexOf('/') + 1);
                         paid.add(model);
-                        return response("{\\\"request_id\\\":\\\"sim-" + model + "\\\"}");
+                        return response("{\"request_id\":\"sim-" + model + "\"}");
                     }
                     if (path.startsWith("/api/v1/request/get/sim-")) {
                         String model = path.substring(path.lastIndexOf("sim-") + 4);
                         String extension = model.equals("tts") ? "mp3"
                                 : model.equals("chatterbox-speech") ? "wav" : "mp4";
                         String url = "https://gen-api.storage.yandexcloud.net/sim-" + model + "." + extension;
-                        return response("{\\\"status\\\":\\\"success\\\",\\\"result\\\":[\\\"" + url + "\\\"]}");
+                        return response("{\"status\":\"success\",\"result\":[\"" + url + "\"]}");
                     }
                     if ("gen-api.storage.yandexcloud.net".equals(request.uri().getHost())) {
                         assertTrue(path.endsWith("sim-lipsync.mp4"),
@@ -122,8 +122,8 @@ class NeuroReplacementPipelineSimulationTest {
                     HttpRequest request = call.getArgument(0);
                     requests.add(request.method() + " " + request.uri().getPath());
                     assertEquals("GET", request.method(), "recovery must not submit another paid POST");
-                    return response("{\\\"status\\\" : \\\"success\\\","
-                            + "\\\"result\\\":[\\\"https://gen-api.storage.yandexcloud.net/resumed.mp4\\\"]}");
+                    return response("{\"status\" : \"success\","
+                            + "\"result\":[\"https://gen-api.storage.yandexcloud.net/resumed.mp4\"]}");
                 });
         pilot = new NeuroReplacementPilotService(new ObjectMapper(), client);
         pilot.setJdbcTemplate(mock(JdbcTemplate.class));
