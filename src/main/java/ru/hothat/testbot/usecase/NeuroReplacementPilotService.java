@@ -352,6 +352,7 @@ public class NeuroReplacementPilotService {
     @Value("${GENAPI_API_KEY:}")
     private String key;
 
+    @Autowired
     public NeuroReplacementPilotService(ObjectMapper json) {
         this(json, HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(25))
