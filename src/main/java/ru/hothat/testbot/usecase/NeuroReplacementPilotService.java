@@ -153,9 +153,11 @@ public class NeuroReplacementPilotService {
         result.put("status", job.state);
         result.put("stage", job.stage);
         result.put("ready", "ready".equals(job.state));
+        // Expose provider IDs to the authenticated owner while still processing.
+        // They can recover the paid work in GenAPI if Railway restarts.
+        result.put("providerRequests", new LinkedHashMap<>(job.providerRequests));
         if (job.error != null) {
             result.put("error", job.error);
-            result.put("providerRequests", new LinkedHashMap<>(job.providerRequests));
         }
         return result;
     }
