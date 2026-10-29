@@ -234,10 +234,12 @@ public class NeuroReplacementPilotService {
     private void process(Job job, byte[] camera, String cameraMime, byte[] voice, String voiceMime, double startSeconds) {
         try {
             job.state = "processing";
+            checkpoint(job);
             // Browser MediaRecorder usually gives WebM. Kling's video editor
             // requires MP4/MOV; Chatterbox is most reliable with PCM WAV.
             // Convert both *before* starting any billable GenAPI task.
             job.stage = "Подготовка записи";
+            checkpoint(job);
             // Only the best ten seconds selected locally by the player device
             // leave our backend. The full observation is never sent to Kling.
             byte[] klingCamera = transcodeMedia(camera,
@@ -246,6 +248,7 @@ public class NeuroReplacementPilotService {
                     voiceMime.contains("wav") ? "wav" : voiceMime.equals("audio/mp4") ? "m4a" : "webm",
                     "wav", false, startSeconds);
             job.stage = "Видео и озвучка";
+            checkpoint(job);
             // Editing follows the input video's exact duration. Sending
             // "duration" together with edit-video is invalid for Kling O3.
             // Finish the expensive video step before ordering TTS/voice transfer:
@@ -254,13 +257,16 @@ public class NeuroReplacementPilotService {
                     submitMultipart(VIDEO_MODEL_ID, klingEditFields(),
                             "video_url", "webcam.mp4", "video/mp4", klingCamera));
             job.stage = "Подготовка речи";
+            checkpoint(job);
             String tts = awaitResult(job, "tts", submitJson("tts", Map.of(
                     "input", SPOKEN_TEXT, "voice", "nova", "response_format", "mp3", "speed", 1.35)));
             job.stage = "Копирование голоса";
+            checkpoint(job);
             String voiceUrl = awaitResult(job, "chatterbox-speech", submitMultipart(
                     "chatterbox-speech", Map.of("source_audio_url", tts),
                     "target_voice_audio_url", "reference.wav", "audio/wav", chatterboxVoice));
             job.stage = "Синхронизация губ";
+            checkpoint(job);
             String finalVideo = awaitResult(job, "lipsync", submitJson("lipsync", Map.of(
                     "video_url", videoUrl, "audio_url", voiceUrl,
                     "model", "lipsync-1.9.0-beta", "sync_mode", "cut_off")));
@@ -268,6 +274,8 @@ public class NeuroReplacementPilotService {
             job.finalVideo = finalVideo;
             job.stage = "Готово";
             job.state = "ready";
+            checkpoint(job);
+            LOG.info("Neuro finished job={} room={} providerRequests={}", job.id, job.roomId, job.providerRequests);
         } catch (Exception error) {
             job.state = "failed";
             job.stage = "Ошибка генерации";
@@ -278,6 +286,7 @@ public class NeuroReplacementPilotService {
             while (root.getCause() != null && root.getCause() != root) root = root.getCause();
             String message = String.valueOf(root.getMessage());
             job.error = message.length() > 350 ? message.substring(0, 350) : message;
+            checkpoint(job);
             LOG.warn("Neuro replacement failed: room={} job={} providerRequests={} reason={}",
                     job.roomId, job.id, job.providerRequests, job.error);
         }
@@ -422,6 +431,8 @@ public class NeuroReplacementPilotService {
 
     private String awaitResult(Job job, String model, String id) throws Exception {
         job.providerRequests.put(model, id);
+        checkpoint(job);
+        LOG.info("Neuro provider started job={} model={} request_id={}", job.id, model, id);
         long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(30);
         while (System.nanoTime() < deadline) {
             JsonNode data = send(baseRequest(GENAPI.resolve("request/get/" + id)).GET().build());
