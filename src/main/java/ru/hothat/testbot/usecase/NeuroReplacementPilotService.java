@@ -329,7 +329,8 @@ public class NeuroReplacementPilotService {
      * The already-paid Kling/TTS/Chatterbox request IDs remain untouched;
      * process() uses only GET for them, then submits ONE new lip-sync POST.
      * The conditional SQL claim prevents two API calls on double-click or
-     * concurrent owner sessions / application instances.
+     * concurrent owner sessions / application instances. No automatic retry
+     * occurs for an ambiguous POST, a provider timeout or a generic failure.
      */
     public synchronized Map<String,Object> resumeAfterLimit(String ownerUid, String jobId,
                                                               boolean consented) {
