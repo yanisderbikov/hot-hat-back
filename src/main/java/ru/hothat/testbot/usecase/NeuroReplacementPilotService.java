@@ -446,21 +446,21 @@ public class NeuroReplacementPilotService {
             // "duration" together with edit-video is invalid for Kling O3.
             // Finish the expensive video step before ordering TTS/voice transfer:
             // do not charge for audio if Kling rejects the input.
-            String videoUrl = awaitResult(job, VIDEO_MODEL_ID,
-                    submitMultipart(VIDEO_MODEL_ID, klingEditFields(),
+            String videoUrl = paidStage(job, VIDEO_MODEL_ID,
+                    () -> submitMultipart(VIDEO_MODEL_ID, klingEditFields(),
                             "video_url", "webcam.mp4", "video/mp4", klingCamera));
             job.stage = "Подготовка речи";
             checkpoint(job);
-            String tts = awaitResult(job, "tts", submitJson("tts", Map.of(
+            String tts = paidStage(job, "tts", () -> submitJson("tts", Map.of(
                     "input", SPOKEN_TEXT, "voice", "nova", "response_format", "mp3", "speed", 1.35)));
             job.stage = "Копирование голоса";
             checkpoint(job);
-            String voiceUrl = awaitResult(job, "chatterbox-speech", submitMultipart(
+            String voiceUrl = paidStage(job, "chatterbox-speech", () -> submitMultipart(
                     "chatterbox-speech", Map.of("source_audio_url", tts),
                     "target_voice_audio_url", "reference.wav", "audio/wav", chatterboxVoice));
             job.stage = "Синхронизация губ";
             checkpoint(job);
-            String finalVideo = awaitResult(job, "lipsync", submitJson("lipsync", Map.of(
+            String finalVideo = paidStage(job, "lipsync", () -> submitJson("lipsync", Map.of(
                     "video_url", videoUrl, "audio_url", voiceUrl,
                     "model", "lipsync-1.9.0-beta", "sync_mode", "cut_off")));
             validatedResultUri(finalVideo);
@@ -631,9 +631,32 @@ public class NeuroReplacementPilotService {
         return id;
     }
 
+    /**
+     * Exactly-once guard for each billable stage: after a deploy use the saved
+     * GenAPI request ID and GET its result; never submit a second paid POST.
+     * Persist an ambiguous-submission checkpoint BEFORE sending a paid POST.
+     */
+    private String paidStage(Job job, String model, Callable<String> submit) throws Exception {
+        String existing = job.providerRequests.get(model);
+        if (existing != null && !existing.isBlank()) return awaitResult(job, model, existing);
+        if (job.submittingModel != null) {
+            throw new IOException("PAID_SUBMISSION_UNCERTAIN_"+job.submittingModel+
+                    " — automatic re-submission forbidden");
+        }
+        job.submittingModel = model;
+        persist(job);
+        String id = submit.call();
+        // Store provider ID BEFORE any polling or additional paid operation.
+        job.providerRequests.put(model, id);
+        job.submittingModel = null;
+        persist(job);
+        return awaitResult(job, model, id);
+    }
+
     private String awaitResult(Job job, String model, String id) throws Exception {
         job.providerRequests.put(model, id);
-        checkpoint(job);
+        // This ID is the durable guard against a duplicate paid submission.
+        persist(job);
         LOG.info("Neuro provider started job={} model={} request_id={}", job.id, model, id);
         long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(30);
         while (System.nanoTime() < deadline) {
