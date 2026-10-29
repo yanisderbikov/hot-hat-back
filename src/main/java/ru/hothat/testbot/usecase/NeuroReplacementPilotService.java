@@ -256,6 +256,12 @@ public class NeuroReplacementPilotService {
                         voiceMime.equals("audio/wav") || voiceMime.equals("audio/x-wav"))) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "UNSUPPORTED_MEDIARECORDER_FORMAT");
         }
+        // Paid experiments must be downloadable after the game ends.
+        // Fail free preflight rather than charging Kling when S3 is missing.
+        if (jdbc != null && (objectStore == null || !objectStore.configured())) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_RESULT_ARCHIVE_NOT_CONFIGURED");
+        }
         Job job = new Job(UUID.randomUUID().toString(), roomId, ownerUid);
         try { persist(job); }
         catch (RuntimeException e) {
