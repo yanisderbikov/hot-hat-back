@@ -62,6 +62,16 @@ public class NeuroReplacementHistoryController {
         return pilot.inspectProvider(owner.uid(),jobId);
     }
 
+    @PostMapping("/{jobId}/recover")
+    @ApiResponse(responseCode = "200", description = "Бесплатно восстановить уже оплаченный Lip Sync MP4 по сохранённым ID, без новых запросов генерации",
+            content = @Content(mediaType = "application/json",
+                    schema = @Schema(implementation = NeuroJobResponseDTO.class)))
+    public Map<String,Object> recover(@AuthenticationPrincipal HotHatUser owner,
+                                      @Parameter(description = "ID уже оплаченного задания Нейроподмены с Lip Sync")
+                                      @PathVariable String jobId) {
+        return pilot.recoverPaidOutput(owner.uid(), jobId);
+    }
+
     @PostMapping("/{jobId}/resume")
     @ApiResponse(responseCode = "200", description = "Продолжить задание после отказа провайдера 402",
             content = @Content(mediaType = "application/json",
