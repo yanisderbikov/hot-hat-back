@@ -711,7 +711,7 @@ public class NeuroReplacementPilotService {
             // old paid TTS IDs are always read with GET, never billed again.
             String tts = paidStage(job, "tts", () -> submitJson(TTS_MODEL_ID, Map.of(
                     "prompt", SPOKEN_TEXT,
-                    "voice", "Charon",
+                    "voice", "Puck",
                     "style_instructions", SPEECH_STYLE,
                     "language_code", "Russian (Russia)",
                     "model", "gemini-2.5-flash-tts",
