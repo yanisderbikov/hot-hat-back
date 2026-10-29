@@ -373,7 +373,7 @@ public class NeuroReplacementPilotService {
                        error_message=NULL, submitting_model=NULL
                  WHERE job_id=? AND owner_uid=? AND state='failed'
                    AND error_message LIKE 'GENAPI_HTTP_402%'
-                   AND NOT (provider_requests ? 'lipsync')
+                   AND NOT jsonb_exists(provider_requests, 'lipsync')
                 """, jobId, ownerUid);
         if (claimed != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
