@@ -443,11 +443,18 @@ public class TestBotsServiceImpl implements TestBotsService {
             saverRoom.save(room);
             return step(room, "turn_ended", 10000);
         }
-        // In the owner's two-person team, the bot teammate never guesses
-        // or skips. Only the owner controls the words. In other teams, bots
-        // may solve no more than one word in their own turn.
+        // The owner controls every word in their own two-person team.
         if (GameRules.rosterForTeam(room, room.getCurrentTeamId()).contains(user.uid())) {
             return step(room, "owner_controls_words", 3000);
+        }
+
+        // A bot is allowed to guess at most one word, but MUST NOT shorten
+        // the normal 60-second turn. Keep the clock running until deadline.
+        // This is test-only: the ordinary multiplayer engine is untouched.
+        if (room.getCurrentTurnScore() >= 1) {
+            long remaining = deadline > 0 ? deadline - now : 1000;
+            return step(room, "bot_one_word_waiting_for_full_turn",
+                    Math.max(500, Math.min(3000, remaining)));
         }
 
         List<String> bag = new ArrayList<>(room.getBag());
@@ -468,15 +475,15 @@ public class TestBotsServiceImpl implements TestBotsService {
             room.setLastActionType("guessed");
             room.setLastActionWord(currentWord);
             room.setLastActionAtMs(now);
-            // Test-room bots should never exhaust the shared hat before the
-            // human's next explaining turn. One successful word is the hard
-            // limit for each bot's own turn; unused words stay in the bag.
+            // One solved word is the limit for this bot turn, NOT its duration.
+            // Preserve all unused words and stay in phase=active until the
+            // original clock reaches zero; only then open the appeal period.
             room.setBag(bag);
             room.setCurrentWord(null);
             room.setWordsLeft(bag.size());
-            applyAppealPatch(room, now);
+            room.setTestBotNextActionAt(now + 1000);
             saverRoom.save(room);
-            return step(room, "guessed_one_word", 10000);
+            return step(room, "guessed_one_word_waiting", 1000);
         }
 
         long waitMs = delay(3500, 7500);
