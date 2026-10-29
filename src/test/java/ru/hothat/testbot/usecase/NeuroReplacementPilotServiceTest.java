@@ -122,4 +122,38 @@ class NeuroReplacementPilotServiceTest {
                 () -> pilot.start("hat-0123456789abcdef", "owner-1", true, null, null, Double.NaN));
         assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
     }
+
+    @Test
+    void refusesPaidWorkWhenDurableDatabaseOrArchiveIsUnavailable() {
+        ReflectionTestUtils.setField(pilot, "enabled", true);
+        ReflectionTestUtils.setField(pilot, "key", "local-test-token");
+        MockMultipartFile video = new MockMultipartFile("video", "camera.webm", "video/webm", new byte[]{1, 2});
+        MockMultipartFile voice = new MockMultipartFile("voice", "voice.webm", "audio/webm", new byte[]{1, 2});
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> pilot.start("hat-0123456789abcdef", "owner-1", true, video, voice));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, error.getStatusCode());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void interruptedJobCannotBeBilledAgainInTheSameRoom() throws Exception {
+        ReflectionTestUtils.setField(pilot, "enabled", true);
+        ReflectionTestUtils.setField(pilot, "key", "local-test-token");
+        Class<?> jobClass = Class.forName(NeuroReplacementPilotService.class.getName() + "$Job");
+        var ctor = jobClass.getDeclaredConstructor(String.class, String.class, String.class);
+        ctor.setAccessible(true);
+        Object oldJob = ctor.newInstance("existing-hot-hat-id", "hat-0123456789abcdef", "owner-1");
+        ReflectionTestUtils.setField(oldJob, "state", "interrupted");
+        Map<String, Object> byRoom = (Map<String, Object>) ReflectionTestUtils.getField(pilot, "byRoom");
+        byRoom.put("hat-0123456789abcdef", oldJob);
+
+        // Even new, valid uploaded media must not authorize a second POST.
+        MockMultipartFile video = new MockMultipartFile("video", "camera.webm", "video/webm", new byte[]{1, 2});
+        MockMultipartFile voice = new MockMultipartFile("voice", "voice.webm", "audio/webm", new byte[]{1, 2});
+        Map<String, Object> result = pilot.start("hat-0123456789abcdef", "owner-1", true, video, voice);
+        assertEquals("existing-hot-hat-id", result.get("jobId"));
+        assertEquals("interrupted", result.get("status"));
+        assertEquals(1, byRoom.size());
+    }
 }
