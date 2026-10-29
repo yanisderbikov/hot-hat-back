@@ -704,17 +704,6 @@ public class NeuroReplacementPilotService {
             byte[] chatterboxVoice = transcodeMedia(voice,
                     voiceMime.contains("wav") ? "wav" : voiceMime.equals("audio/mp4") ? "m4a" : "webm",
                     "wav", false, 0);
-            job.stage = "Видео и озвучка";
-            checkpoint(job);
-            // A fresh performance is required: video-to-video edit tends
-            // to reproduce the original head-scratching gestures. O3
-            // reference-to-video instead directs new motion from a 10s
-            // appearance/room sample into a new 15s acting sequence.
-            // Finish the expensive video step before ordering TTS/voice transfer:
-            // do not charge for audio if Kling rejects the input.
-            String videoUrl = paidStage(job, VIDEO_MODEL_ID,
-                    () -> submitMultipart(VIDEO_MODEL_ID, klingEditFields(),
-                            "video_url", "webcam.mp4", "video/mp4", klingCamera));
             job.stage = "Подготовка речи";
             checkpoint(job);
             // "tts" is the durable logical checkpoint key used by legacy
@@ -732,6 +721,19 @@ public class NeuroReplacementPilotService {
             String voiceUrl = paidStage(job, "chatterbox-speech", () -> submitMultipart(
                     "chatterbox-speech", Map.of("source_audio_url", tts),
                     "target_voice_audio_url", "reference.wav", "audio/wav", chatterboxVoice));
+            // Cheap speech models run before expensive O3. If the generated
+            // Russian voice rushes through both phrases in ~3 seconds, reject
+            // it before paying for new video and lip sync.
+            job.stage = "Проверка дикции и темпа речи";
+            checkpoint(job);
+            verifyExpressiveSpeechDuration(voiceUrl);
+            job.stage = "Новая игра актёра: поворот, речь, палец, взмах, уход";
+            checkpoint(job);
+            // Never copy the source's hair-scratching movement; use the
+            // original webcam shot as a reference for face/person/room only.
+            String videoUrl = paidStage(job, VIDEO_MODEL_ID,
+                    () -> submitMultipart(VIDEO_MODEL_ID, klingEditFields(),
+                            "video_url", "webcam.mp4", "video/mp4", klingCamera));
             job.stage = "Синхронизация губ";
             checkpoint(job);
             String finalVideo = paidStage(job, "lipsync", () -> submitJson("lipsync", Map.of(
@@ -998,6 +1000,62 @@ public class NeuroReplacementPilotService {
             return new MediaProbe(video, audio, duration);
         } finally {
             Files.deleteIfExists(file);
+        }
+    }
+
+
+    /**
+     * Reject the exact failure seen in the owner's 29-Oct MP4: almost all
+     * speech crammed into 2.6 seconds followed by silence. This local
+     * speech-energy gate costs zero additional GenAPI requests.
+     * It cannot validate pronunciation or acting; that still needs visual
+     * and listening review of the actual generated file.
+     */
+    private void verifyExpressiveSpeechDuration(String voiceUrl) throws Exception {
+        byte[] voiceBytes = download(voiceUrl, MAX_VOICE_BYTES);
+        Path input = Files.createTempFile("neuro-speech-", ".audio");
+        Path decoded = Files.createTempFile("neuro-speech-", ".pcm");
+        try {
+            Files.write(input, voiceBytes);
+            Process ffmpeg = new ProcessBuilder("ffmpeg", "-hide_banner", "-loglevel", "error",
+                    "-nostdin", "-y", "-i", input.toString(), "-vn", "-ar", "8000",
+                    "-ac", "1", "-f", "s16le", decoded.toString()).redirectErrorStream(true).start();
+            if (!ffmpeg.waitFor(30, TimeUnit.SECONDS)) {
+                ffmpeg.destroyForcibly();
+                throw new IOException("NEURO_SPEECH_DECODE_TIMEOUT");
+            }
+            if (ffmpeg.exitValue() != 0) {
+                throw new IOException("NEURO_SPEECH_DECODE_FAILED");
+            }
+            byte[] pcm = Files.readAllBytes(decoded);
+            // 0.1s frames of mono 8kHz signed 16bit PCM.
+            int frameSize = 800 * 2;
+            int activeFrames = 0;
+            double lastActiveSeconds = 0;
+            for (int offset=0; offset + frameSize <= pcm.length; offset+=frameSize) {
+                double squares = 0;
+                for (int j=offset; j < offset+frameSize; j+=2) {
+                    int low = pcm[j] & 0xFF;
+                    int high = pcm[j+1];
+                    short sample = (short)((high << 8) | low);
+                    double normalized = sample / 32768.0;
+                    squares += normalized * normalized;
+                }
+                double rms = Math.sqrt(squares / 800.0);
+                if (rms > 0.012) {
+                    activeFrames++;
+                    lastActiveSeconds = (offset + frameSize) / 16000.0;
+                }
+            }
+            if (activeFrames < 35 || lastActiveSeconds < 4.2 ||
+                    pcm.length / 16000.0 > 16) {
+                throw new IOException("NEURO_SPEECH_TOO_FAST_OR_SILENT voiced=" +
+                        (activeFrames/10.0) + "s lastSpeech=" + lastActiveSeconds +
+                        "s; no expensive video ordered");
+            }
+        } finally {
+            Files.deleteIfExists(input);
+            Files.deleteIfExists(decoded);
         }
     }
 
