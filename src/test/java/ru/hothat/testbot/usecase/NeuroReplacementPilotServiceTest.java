@@ -8,6 +8,17 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 import java.util.Map;
+import java.util.List;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.time.Instant;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -155,5 +166,46 @@ class NeuroReplacementPilotServiceTest {
         assertEquals("existing-hot-hat-id", result.get("jobId"));
         assertEquals("interrupted", result.get("status"));
         assertEquals(1, byRoom.size());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void databaseCheckpointBeatsStaleCachedProcessingStateInHistoryAndStatus() throws Exception {
+        String room = "hat-a1ece4688a6e8389";
+        String id = "paid-job-previously-completed";
+        String owner = "owner-1";
+        Class<?> jobType = Class.forName(NeuroReplacementPilotService.class.getName() + "$Job");
+        var ctor = jobType.getDeclaredConstructor(String.class, String.class, String.class);
+        ctor.setAccessible(true);
+        Object stale = ctor.newInstance(id, room, owner);
+        ReflectionTestUtils.setField(stale, "state", "processing");
+        ReflectionTestUtils.setField(stale, "stage", "Видео и озвучка");
+        Map<String, Object> byRoom = (Map<String, Object>) ReflectionTestUtils.getField(pilot, "byRoom");
+        byRoom.put(room, stale);
+
+        JdbcTemplate db = mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        ResultSet saved = mock(ResultSet.class);
+        when(saved.getString(1)).thenReturn(id);
+        when(saved.getString(2)).thenReturn(room);
+        when(saved.getString(3)).thenReturn(owner);
+        when(saved.getString(4)).thenReturn("ready");
+        when(saved.getString(5)).thenReturn("Готово");
+        when(saved.getString(6)).thenReturn("{\"lipsync\":\"567890\"}");
+        when(saved.getString(9)).thenReturn("neuro-replacements/owner-1/result.mp4");
+        when(saved.getTimestamp(10)).thenReturn(Timestamp.from(Instant.parse("2026-10-29T13:16:56Z")));
+
+        when(db.query(anyString(), any(RowMapper.class), eq(owner)))
+                .thenAnswer(call -> List.of(((RowMapper) call.getArgument(1)).mapRow(saved, 0)));
+        when(db.query(anyString(), any(RowMapper.class), eq(id), eq(owner)))
+                .thenAnswer(call -> List.of(((RowMapper) call.getArgument(1)).mapRow(saved, 0)));
+
+        Map<String, Object> archived = pilot.history(owner).get(0);
+        assertEquals("ready", archived.get("status"));
+        assertEquals("Готово", archived.get("stage"));
+        assertEquals(true, archived.get("archived"));
+        Map<String, Object> direct = pilot.status(room, owner, id);
+        assertEquals("ready", direct.get("status"));
+        assertEquals("Готово", direct.get("stage"));
     }
 }
