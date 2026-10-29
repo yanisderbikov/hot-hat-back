@@ -421,7 +421,10 @@ public class TestBotsServiceImpl implements TestBotsService {
         room.setGuesserName(Json.str(names.getOrDefault(guesserUid, "Тест-бот")));
         room.setCurrentTurnScore(0);
         room.setTurnStartedAt(Instant.ofEpochMilli(now));
-        room.setTurnDurationSeconds((double) (room.getTurnDuration() == null ? 60 : room.getTurnDuration()));
+        // Bot turns last the full requested minute even after one solved word.
+        // Human turns keep the configured duration.
+        room.setTurnDurationSeconds(ownerInRoster == null ? 60.0
+                : (double) (room.getTurnDuration() == null ? 60 : room.getTurnDuration()));
         room.setTurnEndsAt(0L);
         // Формат тот же, что у MatchEngine (TurnIds): «Угадали»/«Пропустить» живого
         // объясняющего идут через /api/v2/game, и turn_[a-f0-9]{16} там обязателен.
