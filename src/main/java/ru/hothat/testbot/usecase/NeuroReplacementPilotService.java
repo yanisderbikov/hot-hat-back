@@ -261,6 +261,56 @@ public class NeuroReplacementPilotService {
         }, ownerUid);
     }
 
+    /**
+     * Read-only provider investigation. Only GET /request/get/{id}, NEVER
+     * networks/{model} POST, so checking an old paid attempt is free.
+     * If the final lip-sync result already exists, save its MP4 now.
+     */
+    public Map<String,Object> inspectProvider(String ownerUid, String jobId) {
+        Job job = findOwnerJob(ownerUid, jobId);
+        if (job == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "NEURO_JOB_NOT_FOUND");
+        Map<String,Object> results = new LinkedHashMap<>();
+        for (Map.Entry<String,String> entry : new LinkedHashMap<>(job.providerRequests).entrySet()) {
+            try {
+                String id = entry.getValue();
+                JsonNode data = send(baseRequest(GENAPI.resolve("request/get/"+id)).GET().build());
+                Map<String,Object> item = new LinkedHashMap<>();
+                item.put("requestId", id);
+                item.put("status", data.path("status").asText("unknown"));
+                item.put("progress", data.path("progress").asInt(0));
+                item.put("cost", data.path("cost").isNumber()?data.path("cost").asDouble():null);
+                item.put("error",errorCode(data));
+                results.put(entry.getKey(),item);
+                if ("lipsync".equals(entry.getKey()) &&
+                        "success".equalsIgnoreCase(data.path("status").asText()) &&
+                        !"ready".equals(job.state)) {
+                    JsonNode urls = data.path("result");
+                    String url = urls.isArray() && !urls.isEmpty()?urls.get(0).asText(""):urls.asText("");
+                    validatedResultUri(url);
+                    if (objectStore != null && objectStore.configured()) {
+                        byte[] mp4 = download(url,MAX_RESULT_BYTES);
+                        String keyPath="neuro-replacements/"+ownerUid+"/"+job.id+".mp4";
+                        objectStore.put(keyPath,mp4,"video/mp4");
+                        job.finalVideo=url;
+                        job.finalVideoKey=keyPath;
+                        job.state="ready";job.stage="Готово (восстановлено из GenAPI)";
+                        job.error=null;
+                        persist(job);
+                    }
+                }
+            } catch (Exception error) {
+                results.put(entry.getKey(),Map.of("requestId",entry.getValue(),
+                        "error",String.valueOf(error.getMessage())));
+            }
+        }
+        Map<String,Object> response=new LinkedHashMap<>();
+        response.put("jobId",jobId);
+        response.put("status",job.state);
+        response.put("providerRequests",results);
+        if(results.isEmpty())response.put("note","Сервер не получил ни одного ID GenAPI: платная отправка не подтверждена.");
+        return response;
+    }
+
     public byte[] archivedVideo(String ownerUid, String jobId) {
         Job job = findOwnerJob(ownerUid,jobId);
         if (job == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
