@@ -396,6 +396,12 @@ public class NeuroReplacementPilotService {
                 checkpoint(job);
                 LOG.info("Recovered paid neuro result job={} from existing lip-sync ID without POST",job.id);
             } catch (Exception error) {
+                // Railway deployment interrupts workers. Leave the durable
+                // processing checkpoint for free recovery after restart.
+                if (error instanceof InterruptedException || Thread.currentThread().isInterrupted()) {
+                    LOG.info("Paid MP4 recovery paused by deployment job={}",job.id);
+                    return;
+                }
                 job.state="failed";
                 job.stage="Ошибка бесплатного восстановления оплаченного MP4";
                 String details = String.valueOf(error.getMessage());
