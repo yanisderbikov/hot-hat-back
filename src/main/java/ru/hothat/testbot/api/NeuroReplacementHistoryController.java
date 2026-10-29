@@ -27,6 +27,11 @@ import java.util.Map;
 public class NeuroReplacementHistoryController {
     private final NeuroReplacementPilotService pilot;
 
+    @GetMapping("/readiness")
+    public Map<String,Boolean> readiness(@AuthenticationPrincipal HotHatUser owner) {
+        return pilot.readiness();
+    }
+
     @GetMapping
     public List<Map<String,Object>> history(@AuthenticationPrincipal HotHatUser owner) {
         return pilot.history(owner.uid());
