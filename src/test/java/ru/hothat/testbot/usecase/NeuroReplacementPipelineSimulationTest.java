@@ -4,6 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+import java.sql.ResultSet;
 import org.springframework.test.util.ReflectionTestUtils;
 import ru.hothat.common.storage.ObjectStore;
 
@@ -149,6 +153,103 @@ class NeuroReplacementPipelineSimulationTest {
         assertThrows(Exception.class,
                 () -> ReflectionTestUtils.invokeMethod(pilot, "verifyPlayableMp4", silent),
                 "A silent Kling clip is not a completed voice-and-lips Neuro replacement");
+    }
+
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void resumedAfterDefinite402UsesExistingThreePaidIdsAndOnlySubmitsLipSyncOnce() throws Exception {
+        byte[] camera = generatedMedia(".webm", List.of(
+                "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=15",
+                "-t", "10", "-an", "-c:v", "libvpx", "-deadline", "realtime",
+                "-b:v", "160k"));
+        byte[] voice = generatedMedia(".wav", List.of(
+                "-f", "lavfi", "-i", "sine=frequency=500:sample_rate=16000",
+                "-t", "10", "-ac", "1", "-c:a", "pcm_s16le"));
+        byte[] finalMp4 = generatedMedia(".mp4", List.of(
+                "-f", "lavfi", "-i", "color=c=blue:size=320x180:rate=24",
+                "-f", "lavfi", "-i", "sine=frequency=500:sample_rate=16000",
+                "-t", "10", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"));
+
+        List<String> paid = new ArrayList<>();
+        List<String> inspected = new ArrayList<>();
+        HttpClient client = mock(HttpClient.class);
+        when(client.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(call -> {
+                    HttpRequest req = call.getArgument(0);
+                    String path = req.uri().getPath();
+                    if ("POST".equals(req.method())) {
+                        String model = path.substring(path.lastIndexOf('/') + 1);
+                        assertEquals("lipsync", model, "previous paid stages must never be resubmitted");
+                        paid.add(model);
+                        return response("{\"request_id\":\"sim-lipsync\"}");
+                    }
+                    if (path.startsWith("/api/v1/request/get/")) {
+                        String id = path.substring(path.lastIndexOf('/') + 1);
+                        inspected.add(id);
+                        return response("{\"status\":\"success\",\"result\":[\"https://gen-api.storage.yandexcloud.net/"
+                                + id + ".mp4\"]}");
+                    }
+                    if ("gen-api.storage.yandexcloud.net".equals(req.uri().getHost())) {
+                        return response(finalMp4);
+                    }
+                    throw new IOException("Unexpected provider request: " + req.uri());
+                });
+        pilot = new NeuroReplacementPilotService(new ObjectMapper(), client);
+        ReflectionTestUtils.setField(pilot, "enabled", true);
+        ReflectionTestUtils.setField(pilot, "key", "simulated-key");
+
+        String id = "402-original-job", owner = "owner-1", room = "hat-0123456789abcdef";
+        JdbcTemplate db = mock(JdbcTemplate.class);
+        ResultSet saved = mock(ResultSet.class);
+        when(saved.getString(1)).thenReturn(id);
+        when(saved.getString(2)).thenReturn(room);
+        when(saved.getString(3)).thenReturn(owner);
+        when(saved.getString(4)).thenReturn("failed");
+        when(saved.getString(5)).thenReturn("Ошибка генерации");
+        when(saved.getString(6)).thenReturn(
+                "{\"kling-video-o3\":\"56854976\",\"tts\":\"56855655\",\"chatterbox-speech\":\"56855661\"}");
+        when(saved.getString(8)).thenReturn("GENAPI_HTTP_402 Исчерпан лимит расходов по API-ключу");
+        when(saved.getString(10)).thenReturn("neuro-replacements/owner-1/input-camera.webm");
+        when(saved.getString(11)).thenReturn("neuro-replacements/owner-1/input-voice.wav");
+        when(saved.getString(12)).thenReturn("video/webm");
+        when(saved.getString(13)).thenReturn("audio/wav");
+        when(saved.getString(15)).thenReturn("lipsync");
+        when(db.query(anyString(), any(RowMapper.class), eq(id)))
+                .thenAnswer(call -> List.of(((RowMapper)call.getArgument(1)).mapRow(saved,0)));
+        when(db.update(anyString(),eq(id),eq(owner))).thenReturn(1,0);
+        pilot.setJdbcTemplate(db);
+        ObjectStore archive = mock(ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        when(archive.get("neuro-replacements/owner-1/input-camera.webm")).thenReturn(camera);
+        when(archive.get("neuro-replacements/owner-1/input-voice.wav")).thenReturn(voice);
+        pilot.setObjectStore(archive);
+
+        ResponseStatusException noConsent = assertThrows(ResponseStatusException.class,
+                () -> pilot.resumeAfterLimit(owner,id,false));
+        assertEquals(HttpStatus.BAD_REQUEST,noConsent.getStatusCode());
+        assertEquals(List.of(),paid);
+
+        Map<String,Object> resumed = pilot.resumeAfterLimit(owner,id,true);
+        assertEquals("processing",resumed.get("status"));
+        // A double click must fail at the conditional claim, even across instances.
+        ResponseStatusException again = assertThrows(ResponseStatusException.class,
+                () -> pilot.resumeAfterLimit(owner,id,true));
+        assertEquals(HttpStatus.CONFLICT,again.getStatusCode());
+
+        Map<String,Object> rooms = (Map<String,Object>)ReflectionTestUtils.getField(pilot,"byRoom");
+        Object job = rooms.get(room);
+        long until = System.nanoTime()+TimeUnit.SECONDS.toNanos(35);
+        while(System.nanoTime()<until && "processing".equals(ReflectionTestUtils.getField(job,"state"))) {
+            Thread.sleep(100);
+        }
+        assertEquals("ready",ReflectionTestUtils.getField(job,"state"),
+                String.valueOf(ReflectionTestUtils.getField(job,"error")));
+        assertEquals(List.of("lipsync"),paid);
+        assertEquals(List.of("56854976","56855655","56855661","sim-lipsync"),inspected);
+        verify(archive).put(eq("neuro-replacements/owner-1/402-original-job.mp4"),
+                aryEq(finalMp4),eq("video/mp4"));
     }
 
     private static Object newJob(String id, String room, String owner) throws Exception {
