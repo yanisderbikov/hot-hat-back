@@ -262,8 +262,12 @@ public class NeuroReplacementPilotService {
      * If the final lip-sync result already exists, save its MP4 now.
      */
     public Map<String,Object> inspectProvider(String ownerUid, String jobId) {
-        Job job = findOwnerJob(ownerUid, jobId);
-        if (job == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "NEURO_JOB_NOT_FOUND");
+        // Load the full checkpoint: findOwnerJob() omits S3 input references,
+        // and persisting that partial row could erase previously paid inputs.
+        Job job = loadJobById(jobId);
+        if (job == null || !ownerUid.equals(job.ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "NEURO_JOB_NOT_FOUND");
+        }
         Map<String,Object> results = new LinkedHashMap<>();
         for (Map.Entry<String,String> entry : new LinkedHashMap<>(job.providerRequests).entrySet()) {
             try {
@@ -283,8 +287,7 @@ public class NeuroReplacementPilotService {
                     String url = urls.isArray() && !urls.isEmpty()?urls.get(0).asText(""):urls.asText("");
                     validatedResultUri(url);
                     if (objectStore != null && objectStore.configured()) {
-                        byte[] mp4 = download(url,MAX_RESULT_BYTES);
-                        verifyPlayableMp4(mp4);
+                        byte[] mp4 = recoverPaidLipSyncVideo(job,url);
                         String keyPath="neuro-replacements/"+ownerUid+"/"+job.id+".mp4";
                         objectStore.put(keyPath,mp4,"video/mp4");
                         job.finalVideo=url;
@@ -295,8 +298,14 @@ public class NeuroReplacementPilotService {
                     }
                 }
             } catch (Exception error) {
-                results.put(entry.getKey(),Map.of("requestId",entry.getValue(),
-                        "error",String.valueOf(error.getMessage())));
+                Map<String,Object> item = new LinkedHashMap<>();
+                Object previous = results.get(entry.getKey());
+                if (previous instanceof Map<?,?> previousInfo) {
+                    previousInfo.forEach((k,v) -> item.put(String.valueOf(k),v));
+                }
+                item.put("requestId",entry.getValue());
+                item.put("recoveryError",String.valueOf(error.getMessage()));
+                results.put(entry.getKey(),item);
             }
         }
         Map<String,Object> response=new LinkedHashMap<>();
@@ -610,8 +619,7 @@ public class NeuroReplacementPilotService {
             validatedResultUri(finalVideo);
             job.finalVideo = finalVideo;
             if (objectStore != null && objectStore.configured()) {
-                byte[] archive = download(finalVideo, MAX_RESULT_BYTES);
-                verifyPlayableMp4(archive);
+                byte[] archive = recoverPaidLipSyncVideo(job, finalVideo);
                 String archiveKey = "neuro-replacements/" + job.ownerUid + "/" + job.id + ".mp4";
                 objectStore.put(archiveKey, archive, "video/mp4");
                 job.finalVideoKey = archiveKey;
