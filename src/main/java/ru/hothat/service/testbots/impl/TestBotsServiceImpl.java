@@ -466,21 +466,15 @@ public class TestBotsServiceImpl implements TestBotsService {
             room.setLastActionType("guessed");
             room.setLastActionWord(currentWord);
             room.setLastActionAtMs(now);
-            if (bag.isEmpty()) {
-                room.setBag(bag);
-                room.setCurrentWord(null);
-                applyAppealPatch(room, now);
-                saverRoom.save(room);
-                return step(room, "guessed_last", 10000);
-            }
-            String nextWord = Shuffle.take(bag);
-            long waitMs = delay(4500, 9500);
+            // Test-room bots should never exhaust the shared hat before the
+            // human's next explaining turn. One successful word is the hard
+            // limit for each bot's own turn; unused words stay in the bag.
             room.setBag(bag);
-            room.setCurrentWord(nextWord);
-            room.setWordsLeft(bag.size() + 1);
-            room.setTestBotNextActionAt(now + waitMs);
+            room.setCurrentWord(null);
+            room.setWordsLeft(bag.size());
+            applyAppealPatch(room, now);
             saverRoom.save(room);
-            return step(room, "guessed", waitMs);
+            return step(room, "guessed_one_word", 10000);
         }
 
         long waitMs = delay(3500, 7500);
