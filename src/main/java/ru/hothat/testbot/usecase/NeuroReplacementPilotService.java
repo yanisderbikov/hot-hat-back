@@ -26,7 +26,6 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -176,28 +175,20 @@ public class NeuroReplacementPilotService {
                     voiceMime.contains("wav") ? "wav" : voiceMime.equals("audio/mp4") ? "m4a" : "webm",
                     "wav", false, startSeconds);
             job.stage = "Видео и озвучка";
-            // Both models start at once. Only one operation per model: retrying a
-            // submission after an HTTP timeout could charge the user twice.
-            CompletableFuture<String> videoFuture = CompletableFuture.supplyAsync(() -> {
-                try {
-                    return awaitResult(job, VIDEO_MODEL_ID, submitMultipart(VIDEO_MODEL_ID, Map.of(
-                            "model", "edit-video", "prompt", VIDEO_PROMPT, "duration", "10",
-                            "pro", "true", "keep_audio", "false", "generate_audio", "false"),
+            // Editing follows the input video's exact duration. Sending
+            // "duration" together with edit-video is invalid for Kling O3.
+            // Finish the expensive video step before ordering TTS/voice transfer:
+            // do not charge for audio if Kling rejects the input.
+            String videoUrl = awaitResult(job, VIDEO_MODEL_ID,
+                    submitMultipart(VIDEO_MODEL_ID, klingEditFields(),
                             "video_url", "webcam.mp4", "video/mp4", klingCamera));
-                } catch (Exception exception) { throw new RuntimeException(exception); }
-            }, executor);
-            CompletableFuture<String> audioFuture = CompletableFuture.supplyAsync(() -> {
-                try {
-                    String tts = awaitResult(job, "tts", submitJson("tts", Map.of(
-                            "input", SPOKEN_TEXT, "voice", "nova", "response_format", "mp3", "speed", 1.35)));
-                    job.stage = "Копирование голоса";
-                    return awaitResult(job, "chatterbox-speech", submitMultipart("chatterbox-speech", Map.of(
-                            "source_audio_url", tts), "target_voice_audio_url",
-                            "reference.wav", "audio/wav", chatterboxVoice));
-                } catch (Exception exception) { throw new RuntimeException(exception); }
-            }, executor);
-            String videoUrl = videoFuture.join();
-            String voiceUrl = audioFuture.join();
+            job.stage = "Подготовка речи";
+            String tts = awaitResult(job, "tts", submitJson("tts", Map.of(
+                    "input", SPOKEN_TEXT, "voice", "nova", "response_format", "mp3", "speed", 1.35)));
+            job.stage = "Копирование голоса";
+            String voiceUrl = awaitResult(job, "chatterbox-speech", submitMultipart(
+                    "chatterbox-speech", Map.of("source_audio_url", tts),
+                    "target_voice_audio_url", "reference.wav", "audio/wav", chatterboxVoice));
             job.stage = "Синхронизация губ";
             String finalVideo = awaitResult(job, "lipsync", submitJson("lipsync", Map.of(
                     "video_url", videoUrl, "audio_url", voiceUrl,
@@ -226,6 +217,16 @@ public class NeuroReplacementPilotService {
      * FFmpeg is installed in the Railway runtime image. Uploads are capped
      * before and after transcoding so a malformed video cannot exhaust RAM.
      */
+    /** GenAPI Kling O3 video editing uses the uploaded clip length, not a duration field. */
+    private Map<String, String> klingEditFields() {
+        return Map.of(
+                "model", "edit-video",
+                "prompt", VIDEO_PROMPT,
+                "pro", "true",
+                "keep_audio", "false"
+        );
+    }
+
     private byte[] transcodeMedia(byte[] source, String inputExtension,
                                   String outputExtension, boolean video, double startSeconds) throws Exception {
         Path input = Files.createTempFile("hat-neuro-input-", "." + inputExtension);
@@ -237,9 +238,14 @@ public class NeuroReplacementPilotService {
                     "-nostdin", "-y", "-ss", String.valueOf(startSeconds), "-i", input.toString(),
                     "-t", "10"));
             if (video) {
-                command.addAll(List.of("-map", "0:v:0", "-an", "-c:v", "libx264",
-                        "-preset", "veryfast", "-crf", "19", "-pix_fmt", "yuv420p",
-                        "-movflags", "+faststart"));
+                // Kling video editing requires >=720px on BOTH dimensions,
+                // H.264 MP4, and 24-60fps. A fallback LiveKit stream may be
+                // only 640x360 / 15fps. Normalize it BEFORE the paid request.
+                command.addAll(List.of("-map", "0:v:0", "-an",
+                        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease:flags=lanczos,"
+                                + "pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=24,setsar=1",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
+                        "-pix_fmt", "yuv420p", "-movflags", "+faststart"));
             } else {
                 command.addAll(List.of("-vn", "-ac", "1", "-ar", "24000",
                         "-c:a", "pcm_s16le"));
