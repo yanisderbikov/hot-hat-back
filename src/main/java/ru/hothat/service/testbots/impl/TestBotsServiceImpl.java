@@ -443,8 +443,10 @@ public class TestBotsServiceImpl implements TestBotsService {
             saverRoom.save(room);
             return step(room, "turn_ended", 10000);
         }
-        // Кнопки «Угадали»/«Пропустить» принадлежат живому объясняющему: бот их не нажимает.
-        if (user.uid().equals(Json.str(room.getExplainerUid()))) {
+        // In the owner's two-person team, the bot teammate never guesses
+        // or skips. Only the owner controls the words. In other teams, bots
+        // may solve no more than one word in their own turn.
+        if (GameRules.rosterForTeam(room, room.getCurrentTeamId()).contains(user.uid())) {
             return step(room, "owner_controls_words", 3000);
         }
 
