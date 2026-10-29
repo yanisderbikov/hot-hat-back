@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import java.util.concurrent.Callable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import ru.hothat.common.storage.ObjectStore;
 import java.sql.ResultSet;
@@ -95,17 +98,26 @@ public class NeuroReplacementPilotService {
         try {
             jdbc.update("""
                 INSERT INTO neuro_replacement_job
-                 (job_id,room_id,owner_uid,state,stage,provider_requests,final_video_url,final_video_key,error_message,updated_at)
-                VALUES (?,?,?,?,?,CAST(? AS jsonb),?,?,?,now())
+                 (job_id,room_id,owner_uid,state,stage,provider_requests,final_video_url,final_video_key,error_message,
+                  source_camera_key,source_voice_key,source_camera_mime,source_voice_mime,window_start_seconds,submitting_model,updated_at)
+                VALUES (?,?,?,?,?,CAST(? AS jsonb),?,?,?,?,?,?,?,?,?,now())
                 ON CONFLICT (job_id) DO UPDATE SET
                  state=EXCLUDED.state,stage=EXCLUDED.stage,
                  provider_requests=EXCLUDED.provider_requests,
                  final_video_url=EXCLUDED.final_video_url,
                  final_video_key=EXCLUDED.final_video_key,
-                 error_message=EXCLUDED.error_message,updated_at=now()
+                 error_message=EXCLUDED.error_message,
+                 source_camera_key=EXCLUDED.source_camera_key,
+                 source_voice_key=EXCLUDED.source_voice_key,
+                 source_camera_mime=EXCLUDED.source_camera_mime,
+                 source_voice_mime=EXCLUDED.source_voice_mime,
+                 window_start_seconds=EXCLUDED.window_start_seconds,
+                 submitting_model=EXCLUDED.submitting_model,updated_at=now()
                 """,job.id,job.roomId,job.ownerUid,job.state,job.stage,
                 json.writeValueAsString(new LinkedHashMap<>(job.providerRequests)),
-                job.finalVideo,job.finalVideoKey,job.error);
+                job.finalVideo,job.finalVideoKey,job.error,
+                job.sourceCameraKey,job.sourceVoiceKey,job.cameraMime,job.voiceMime,
+                job.startSeconds,job.submittingModel);
         } catch (Exception e) {
             throw new IllegalStateException("NEURO_JOB_PERSIST_FAILED", e);
         }
@@ -621,6 +633,12 @@ public class NeuroReplacementPilotService {
         volatile String finalVideo;
         volatile String finalVideoKey;
         volatile String error;
+        volatile String sourceCameraKey;
+        volatile String sourceVoiceKey;
+        volatile String cameraMime;
+        volatile String voiceMime;
+        volatile double startSeconds;
+        volatile String submittingModel;
         final Map<String, String> providerRequests = new ConcurrentHashMap<>();
 
         Job(String id, String roomId, String ownerUid) {
