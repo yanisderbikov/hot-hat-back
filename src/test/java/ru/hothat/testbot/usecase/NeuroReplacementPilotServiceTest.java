@@ -100,8 +100,12 @@ class NeuroReplacementPilotServiceTest {
                 ReflectionTestUtils.getField(NeuroReplacementPilotService.class, "VIDEO_MODEL_ID"));
         String prompt = (String) ReflectionTestUtils.getField(
                 NeuroReplacementPilotService.class, "VIDEO_PROMPT");
-        assertTrue(prompt.contains("thumbs-up"));
-        assertTrue(prompt.contains("one continuous static webcam shot"));
+        assertTrue(prompt.contains("THUMBS-UP"));
+        assertTrue(prompt.contains("GOODBYE WAVE"));
+        assertTrue(prompt.contains("STANDS UP"));
+        assertTrue(prompt.contains("WALKS AWAY"));
+        assertTrue(prompt.contains("APPEARANCE AND SET REFERENCE ONLY"));
+        assertFalse(prompt.contains("Edit the supplied webcam video"));
     }
 
     @Test
@@ -112,15 +116,30 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
-    void klingO3EditVideoNeverSendsUnsupportedDuration() {
+    void klingO3ReferenceVideoUsesExplicitFifteenSecondActingDuration() {
         Map<?, ?> fields = ReflectionTestUtils.invokeMethod(pilot, "klingEditFields");
-        assertEquals("edit-video", fields.get("model"));
+        assertEquals("reference-to-video", fields.get("model"),
+                "edit-video copies head grooming instead of creating ordered gestures");
+        assertEquals("15", fields.get("duration"));
         assertEquals("true", fields.get("pro"));
         assertEquals("false", fields.get("keep_audio"));
-        assertFalse(fields.containsKey("duration"),
-                "Kling edit-video must inherit duration from its reference video");
-        assertFalse(fields.containsKey("generate_audio"),
-                "Video edit should not request separate generated sound");
+        assertEquals("false", fields.get("generate_audio"));
+        assertEquals("16:9", fields.get("aspect_ratio"));
+        assertTrue(((String)fields.get("prompt")).length() <= 2500,
+                "Kling reference prompt may not exceed provider limit");
+    }
+
+    @Test
+    void voiceScriptHasOnlyTheRequestedCatchphraseAndExpressiveSourceTts() {
+        String phrase=(String) ReflectionTestUtils.getField(
+                NeuroReplacementPilotService.class,"SPOKEN_TEXT");
+        assertTrue(phrase.contains("А вы всё ещё кипятите?"));
+        assertTrue(phrase.contains("Тогда мы идём к вам!"));
+        assertFalse(phrase.contains("не бойся"));
+        assertEquals("gemini-tts",ReflectionTestUtils.getField(
+                NeuroReplacementPilotService.class,"TTS_MODEL_ID"));
+        assertTrue(((String)ReflectionTestUtils.getField(
+                NeuroReplacementPilotService.class,"SPEECH_STYLE")).contains("unhurriedly"));
     }
 
     @Test
