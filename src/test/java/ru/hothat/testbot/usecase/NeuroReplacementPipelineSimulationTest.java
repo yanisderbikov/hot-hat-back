@@ -77,6 +77,9 @@ class NeuroReplacementPipelineSimulationTest {
                         return response("{\"status\":\"success\",\"result\":[\"" + url + "\"]}");
                     }
                     if ("gen-api.storage.yandexcloud.net".equals(request.uri().getHost())) {
+                        if (path.endsWith("sim-chatterbox-speech.wav")) {
+                            return response(voice); // free speech duration preflight
+                        }
                         assertTrue(path.endsWith("sim-lipsync.mp4"),
                                 "only the final lip-synced video is downloaded for archive");
                         return response(finalMp4);
@@ -104,8 +107,8 @@ class NeuroReplacementPipelineSimulationTest {
         Map<String, Object> status = pilot.status(room, owner, "simulation-job");
         assertEquals("ready", status.get("status"), status.toString());
         assertEquals(Boolean.TRUE, status.get("ready"));
-        assertEquals(List.of("kling-video-o3", "gemini-tts", "chatterbox-speech", "lipsync"),
-                paid, "new performance must use emotionally directed Russian Gemini speech");
+        assertEquals(List.of("gemini-tts", "chatterbox-speech", "kling-video-o3", "lipsync"),
+                paid, "check expressive Russian speech before expensive video");
         assertEquals(4, ((Map<?, ?>) status.get("providerRequests")).size());
         verify(archive, times(1)).put(eq("neuro-replacements/owner-1/simulation-job.mp4"),
                 aryEq(finalMp4), eq("video/mp4"));
@@ -247,7 +250,7 @@ class NeuroReplacementPipelineSimulationTest {
         assertEquals("ready",ReflectionTestUtils.getField(job,"state"),
                 String.valueOf(ReflectionTestUtils.getField(job,"error")));
         assertEquals(List.of("lipsync"),paid);
-        assertEquals(List.of("56854976","56855655","56855661","sim-lipsync"),inspected);
+        assertEquals(List.of("56855655","56855661","56854976","sim-lipsync"),inspected);
         verify(archive).put(eq("neuro-replacements/owner-1/402-original-job.mp4"),
                 aryEq(finalMp4),eq("video/mp4"));
     }
@@ -427,6 +430,27 @@ class NeuroReplacementPipelineSimulationTest {
         verify(storage,times(1)).put(eq("neuro-replacements/owner-1/existing-paid.mp4"),
                 any(byte[].class),eq("video/mp4"));
         assertEquals(6,requested.size(),"All HTTP calls are free GETs of paid results");
+    }
+
+    @Test
+    void rejectsRushedTwoPointSixSecondSpeechBeforePayingForVideo() throws Exception {
+        byte[] rushed = generatedMedia(".wav", List.of(
+                "-f", "lavfi", "-i", "sine=frequency=500:sample_rate=24000",
+                "-t", "2.6", "-ac", "1", "-c:a", "pcm_s16le"));
+        HttpClient provider=mock(HttpClient.class);
+        when(provider.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(call -> {
+                    HttpRequest req=call.getArgument(0);
+                    assertEquals("GET",req.method(),"the voice quality check must not bill GenAPI");
+                    return response(rushed);
+                });
+        pilot=new NeuroReplacementPilotService(new ObjectMapper(),provider);
+        ReflectionTestUtils.setField(pilot,"key","simulation");
+        Exception e=assertThrows(Exception.class,() ->
+                ReflectionTestUtils.invokeMethod(pilot,"verifyExpressiveSpeechDuration",
+                        "https://gen-api.storage.yandexcloud.net/rushed.wav"));
+        assertTrue(String.valueOf(e.getMessage()).contains("NEURO_SPEECH_TOO_FAST_OR_SILENT")
+                || (e.getCause()!=null && String.valueOf(e.getCause().getMessage()).contains("NEURO_SPEECH_TOO_FAST_OR_SILENT")));
     }
 
     private static Object newJob(String id, String room, String owner) throws Exception {
