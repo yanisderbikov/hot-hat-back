@@ -234,4 +234,21 @@ class NeuroReplacementPilotServiceTest {
         assertEquals("ready", direct.get("status"));
         assertEquals("Готово", direct.get("stage"));
     }
+    @Test
+    void dynamicSceneIsPassedToKlingWithoutChangingLegacyPilotFields() {
+        NeuroScenePlan scene = NeuroScenePlan.plan(
+                "Этот игрок должен сказать - а вы все еще кипятите? пауза тогда мы идем к вам "
+                + "и показывает большой палец, затем грозит кулаком, встаёт и уходит.");
+        Map<String, String> dynamicFields = ReflectionTestUtils.invokeMethod(
+                pilot, "klingEditFields", scene);
+        Map<String, String> legacyFields = ReflectionTestUtils.invokeMethod(
+                pilot, "klingEditFields");
+        assertEquals(String.valueOf(scene.durationSeconds()), dynamicFields.get("duration"));
+        assertTrue(scene.durationSeconds() >= 4 && scene.durationSeconds() <= 10);
+        assertTrue(dynamicFields.get("prompt").contains("BACKGROUND LOCK"));
+        assertTrue(dynamicFields.get("prompt").contains("грозит кулаком"));
+        assertEquals("reference-to-video", dynamicFields.get("model"));
+        assertEquals("15", legacyFields.get("duration"), "Old paid jobs must not be rewritten");
+    }
+
 }
