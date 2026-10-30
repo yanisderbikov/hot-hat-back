@@ -84,4 +84,21 @@ class NeuroScenePlanTest {
         assertTrue(error.getReason().contains("NOT_UNAMBIGUOUS"));
     }
 
+    @Test
+    void presetOwnerBotSceneFitsTenSecondsWithExactSpeechAndOriginalRoom() {
+        var plan = NeuroScenePlan.plan(
+                "Повернуться к веб-камере и смотреть прямо в камеру. "
+                + "Выразительно произнести «А вы всё ещё кипятите?», выдержать паузу, "
+                + "затем выразительно произнести «Тогда мы идём к вам!», "
+                + "показать большой палец прямо в камеру. "
+                + "Затем угрожающе погрозить кулаком прямо в камеру, встать со стула и уйти из кадра.");
+        assertEquals("А вы всё ещё кипятите? ... Тогда мы идём к вам!", plan.spokenText());
+        assertTrue(plan.durationSeconds() <= 10);
+        assertTrue(plan.durationSeconds() >= 4);
+        assertTrue(plan.videoPrompt().contains("BACKGROUND LOCK"));
+        assertTrue(plan.videoPrompt().contains("показать большой палец"));
+        assertTrue(plan.videoPrompt().contains("погрозить кулаком"));
+        assertTrue(plan.videoPrompt().contains("уйти из кадра"));
+    }
+
 }
