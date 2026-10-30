@@ -59,7 +59,7 @@ public class NeuroReplacementPilotController {
             @Parameter(description = "Задание для нейросцены; точные слова для речи заключаются в кавычки")
             @RequestParam("assignment") String assignment) {
         check(owner, roomId);
-        return pilot.planAssignment(assignment);
+        return NeuroScenePlan.plan(assignment);
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
