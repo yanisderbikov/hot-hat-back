@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
 /**
  * Deterministic no-charge staging of a player-authored webcam performance.
  * Never sends words to TTS by guessing what the actor should say: the exact
- * dialog must be placed inside «...» or "..." in the assignment.
+ * dialogue can be written naturally after a speech verb, without quotation marks.
  * A long brief is refused BEFORE contacting paid video or audio providers.
  */
 public record NeuroScenePlan(
@@ -26,6 +26,14 @@ public record NeuroScenePlan(
 
     private static final Pattern QUOTED = Pattern.compile("«([^»]+)»|\"([^\"\\n]+)\"");
     private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]+");
+    private static final Pattern SPEECH_CUE = Pattern.compile(
+            "(?iu)(?:сказать|скажи|сказал|скажет|говорит|произнести|произносит|произнес[её]т)\\s*(?:[:—–-]\\s*)?(.+)");
+    private static final Pattern ACTION_AFTER_SPEECH = Pattern.compile(
+            "(?iu)\\s*(?:[,;.]\\s*)?(?:(?:и|затем|после этого)\\s+)?"
+            + "(?:показыва[\\p{L}]*|показать|грозит|погроз[\\p{L}]*|поднима[\\p{L}]*|"
+            + "вста[\\p{L}]*|уход[\\p{L}]*|уходит|выходит|машет|помаш[\\p{L}]*|"
+            + "смотря\\s+в\\s+камер[\\p{L}]*|глядя\\s+в\\s+камер[\\p{L}]*|"
+            + "всё\\s+это\\s+говорит|все\\s+это\\s+говорит)\\b");
     private static final String BASE =
             "Create a NEW ultra-photorealistic uncut webcam performance. Use @Video1 only " +
             "to preserve the real player's appearance, age, facial proportions, hair, clothes, " +
@@ -51,10 +59,11 @@ public record NeuroScenePlan(
             String phrase = (quotes.group(1) != null ? quotes.group(1) : quotes.group(2)).trim();
             if (!phrase.isEmpty()) lines.add(phrase);
         }
-        String spoken = String.join(" ... ", lines);
+        String spoken = lines.isEmpty() ? extractUnquotedSpeech(brief)
+                : String.join(" ... ", lines);
         String lc = brief.toLowerCase(Locale.ROOT);
-        if (lines.isEmpty()) {
-            throw invalid("NEURO_SPEECH_NEEDS_QUOTATION_MARKS");
+        if (spoken.isBlank()) {
+            throw invalid("NEURO_SPEECH_NOT_UNAMBIGUOUS");
         }
         if (spoken.length() > 220) throw invalid("NEURO_SPEECH_TOO_LONG");
         int words = countWords(spoken);
@@ -67,7 +76,7 @@ public record NeuroScenePlan(
         if (has(lc,"палец","thumbs","лайк")) movement += .95;
         if (has(lc,"кулак","грозит","угрож")) movement += .85;
         if (has(lc,"машет","помах","прощан")) movement += 1.0;
-        if (has(lc,"вста","поднимается со стула","встает")) movement += .8;
+        if (has(lc,"вста","поднимается со стула","встает","встаёт")) movement += .8;
         if (has(lc,"уход","уйти","выход","покида")) movement += 1.05;
         if (has(lc,"улыб","смеет")) movement += .25;
         if (has(lc,"пауз","помолч","замира")) movement += .55;
@@ -77,7 +86,14 @@ public record NeuroScenePlan(
         }
         seconds = Math.max(4, seconds);
         double start = turn ? .6 : .3;
-        String videoPrompt = BASE + "Total duration EXACTLY " + seconds +
+        boolean changeBackground = has(lc, "смени фон", "сменить фон", "изменить фон",
+                "поменяй фон", "замени фон", "на фоне", "в другой комнате", "переместись");
+        String sceneRule = changeBackground
+                ? "Only the explicitly instructed background change is allowed; preserve the person's identity, camera realism and continuity. "
+                : "BACKGROUND LOCK: The original webcam room, wall, furniture, objects, lighting, "
+                  + "camera angle, focal length, framing and background MUST remain unchanged in every frame. "
+                  + "Do not move the camera, replace the room, or invent objects even if the actor stands or exits. ";
+        String videoPrompt = BASE + sceneRule + "Total duration EXACTLY " + seconds +
                 " seconds. Directed actor instructions in Russian, in the exact requested order: " +
                 brief + ". The ONLY spoken dialogue is «" + spoken + "». " +
                 "The actor mouths the words while actually speaking them, not before or after; " +
@@ -89,6 +105,23 @@ public record NeuroScenePlan(
                 "Do not hurry or read stage directions aloud. No extra words. " +
                 "Delivery directions: " + brief;
         return new NeuroScenePlan(brief, spoken, seconds, start, videoPrompt, speechStyle);
+    }
+
+    /**
+     * Natural-language speech extraction. No quotation marks are required.
+     * Reject unclear input instead of synthesizing directions as dialogue.
+     * Stage actions bound speech, while a spoken pause becomes silence.
+     */
+    private static String extractUnquotedSpeech(String brief) {
+        Matcher cue = SPEECH_CUE.matcher(brief);
+        if (!cue.find()) return "";
+        String candidate = cue.group(1).trim();
+        Matcher action = ACTION_AFTER_SPEECH.matcher(candidate);
+        if (action.find()) candidate = candidate.substring(0, action.start()).trim();
+        candidate = candidate.replaceAll("(?iu)\\b(?:делает\\s+)?пауз[ауеы]\\b", " ... ");
+        candidate = candidate.replaceAll("\\s*\\.\\.\\.\\s*", " ... ")
+                .replaceAll("\\s+", " ").replaceAll("^[\\s:—–-]+|[\\s,;—–-]+$", "").trim();
+        return candidate;
     }
 
     private static boolean has(String input, String... candidates) {
