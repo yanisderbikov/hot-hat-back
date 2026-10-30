@@ -1103,6 +1103,11 @@ public class NeuroReplacementPilotService {
      * It cannot validate pronunciation or acting; that still needs visual
      * and listening review of the actual generated file.
      */
+    // Legacy 15-second owner pilot and its quality regression test use the original gate.
+    private void verifyExpressiveSpeechDuration(String voiceUrl) throws Exception {
+        verifyExpressiveSpeechDuration(voiceUrl, null);
+    }
+
     private void verifyExpressiveSpeechDuration(String voiceUrl, NeuroScenePlan scene) throws Exception {
         byte[] voiceBytes = download(voiceUrl, MAX_VOICE_BYTES);
         Path input = Files.createTempFile("neuro-speech-", ".audio");
