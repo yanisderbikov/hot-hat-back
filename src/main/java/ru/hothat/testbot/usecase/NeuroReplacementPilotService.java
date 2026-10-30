@@ -135,8 +135,8 @@ public class NeuroReplacementPilotService {
             jdbc.update("""
                 INSERT INTO neuro_replacement_job
                  (job_id,room_id,owner_uid,state,stage,provider_requests,final_video_url,final_video_key,error_message,
-                  source_camera_key,source_voice_key,source_camera_mime,source_voice_mime,window_start_seconds,submitting_model,updated_at)
-                VALUES (?,?,?,?,?,CAST(? AS jsonb),?,?,?,?,?,?,?,?,?,now())
+                  source_camera_key,source_voice_key,source_camera_mime,source_voice_mime,window_start_seconds,submitting_model,scene_assignment,updated_at)
+                VALUES (?,?,?,?,?,CAST(? AS jsonb),?,?,?,?,?,?,?,?,?,?,now())
                 ON CONFLICT (job_id) DO UPDATE SET
                  state=EXCLUDED.state,stage=EXCLUDED.stage,
                  provider_requests=EXCLUDED.provider_requests,
@@ -148,12 +148,12 @@ public class NeuroReplacementPilotService {
                  source_camera_mime=EXCLUDED.source_camera_mime,
                  source_voice_mime=EXCLUDED.source_voice_mime,
                  window_start_seconds=EXCLUDED.window_start_seconds,
-                 submitting_model=EXCLUDED.submitting_model,updated_at=now()
+                 submitting_model=EXCLUDED.submitting_model,scene_assignment=EXCLUDED.scene_assignment,updated_at=now()
                 """,job.id,job.roomId,job.ownerUid,job.state,job.stage,
                 json.writeValueAsString(new LinkedHashMap<>(job.providerRequests)),
                 job.finalVideo,job.finalVideoKey,job.error,
                 job.sourceCameraKey,job.sourceVoiceKey,job.cameraMime,job.voiceMime,
-                job.startSeconds,job.submittingModel);
+                job.startSeconds,job.submittingModel,job.sceneAssignment);
         } catch (Exception e) {
             throw new IllegalStateException("NEURO_JOB_PERSIST_FAILED", e);
         }
@@ -170,7 +170,7 @@ public class NeuroReplacementPilotService {
             SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
                    final_video_url,error_message,final_video_key,
                    source_camera_key,source_voice_key,source_camera_mime,source_voice_mime,
-                   window_start_seconds,submitting_model
+                   window_start_seconds,submitting_model,scene_assignment
               FROM neuro_replacement_job WHERE job_id=?
             """, (rs,n) -> {
             Job job = new Job(rs.getString(1), rs.getString(2), rs.getString(3));
@@ -183,6 +183,7 @@ public class NeuroReplacementPilotService {
             job.sourceCameraKey=rs.getString(10);job.sourceVoiceKey=rs.getString(11);
             job.cameraMime=rs.getString(12);job.voiceMime=rs.getString(13);
             job.startSeconds=rs.getDouble(14);job.submittingModel=rs.getString(15);
+            job.sceneAssignment=rs.getString(16);
             return job;
         }, id);
         return jobs.isEmpty()?null:jobs.get(0);
@@ -577,6 +578,15 @@ public class NeuroReplacementPilotService {
 
     public synchronized Map<String, Object> start(String roomId, String ownerUid, boolean consented,
                                                    MultipartFile video, MultipartFile voice, double windowStartSeconds) {
+        return start(roomId, ownerUid, consented, video, voice, windowStartSeconds, null);
+    }
+
+    /** Dynamic scene for the owner/bot test. Null preserves paid legacy 15s jobs unchanged. */
+    public synchronized Map<String, Object> start(String roomId, String ownerUid, boolean consented,
+                                                   MultipartFile video, MultipartFile voice,
+                                                   double windowStartSeconds, String assignment) {
+        NeuroScenePlan newScene = assignment == null || assignment.isBlank()
+                ? null : NeuroScenePlan.plan(assignment);
         if (!Double.isFinite(windowStartSeconds) || windowStartSeconds < 0 || windowStartSeconds > 25) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_REFERENCE_WINDOW");
         }
@@ -613,6 +623,7 @@ public class NeuroReplacementPilotService {
                     "NEURO_RESULT_ARCHIVE_NOT_CONFIGURED");
         }
         Job job = new Job(UUID.randomUUID().toString(), roomId, ownerUid);
+        job.sceneAssignment = newScene == null ? null : newScene.assignment();
         job.cameraMime=videoMime;
         job.voiceMime=voiceMime;
         job.startSeconds=windowStartSeconds;
@@ -676,6 +687,8 @@ public class NeuroReplacementPilotService {
         result.put("status", job.state);
         result.put("stage", job.stage);
         result.put("ready", "ready".equals(job.state));
+        result.put("durationSeconds", job.sceneAssignment == null ? VIDEO_DURATION_SECONDS
+                : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds());
         // Expose provider IDs to the authenticated owner while still processing.
         // They can recover the paid work in GenAPI if Railway restarts.
         result.put("providerRequests", new LinkedHashMap<>(job.providerRequests));
@@ -687,6 +700,8 @@ public class NeuroReplacementPilotService {
 
     private void process(Job job, byte[] camera, String cameraMime, byte[] voice, String voiceMime, double startSeconds) {
         try {
+            NeuroScenePlan scene = job.sceneAssignment == null ? null : NeuroScenePlan.plan(job.sceneAssignment);
+            int expectedSeconds = scene == null ? VIDEO_DURATION_SECONDS : scene.durationSeconds();
             job.state = "processing";
             checkpoint(job);
             // Browser MediaRecorder usually gives WebM. Kling's video editor
@@ -710,9 +725,9 @@ public class NeuroReplacementPilotService {
             // paid jobs. New tasks use expressive native-Russian Gemini TTS;
             // old paid TTS IDs are always read with GET, never billed again.
             String tts = paidStage(job, "tts", () -> submitJson(TTS_MODEL_ID, Map.of(
-                    "prompt", SPOKEN_TEXT,
+                    "prompt", scene == null ? SPOKEN_TEXT : scene.spokenText(),
                     "voice", "Puck",
-                    "style_instructions", SPEECH_STYLE,
+                    "style_instructions", scene == null ? SPEECH_STYLE : scene.speechStyle(),
                     "language_code", "Russian (Russia)",
                     "model", "gemini-2.5-flash-tts",
                     "output_format", "mp3")));
@@ -726,14 +741,15 @@ public class NeuroReplacementPilotService {
             // it before paying for new video and lip sync.
             job.stage = "Проверка дикции и темпа речи";
             checkpoint(job);
-            verifyExpressiveSpeechDuration(voiceUrl);
-            job.stage = "Новая игра актёра: поворот, речь, палец, взмах, уход";
+            verifyExpressiveSpeechDuration(voiceUrl, scene);
+            job.stage = scene == null ? "Новая игра актёра: поворот, речь, палец, взмах, уход"
+                    : "Новая игра актёра по заданию пользователя";
             checkpoint(job);
             // Never copy the source's hair-scratching movement; use the
             // original webcam shot as a reference for face/person/room only.
             boolean videoWasPaidBeforeThisRun = job.providerRequests.containsKey(VIDEO_MODEL_ID);
             String videoUrl = paidStage(job, VIDEO_MODEL_ID,
-                    () -> submitMultipart(VIDEO_MODEL_ID, klingEditFields(),
+                    () -> submitMultipart(VIDEO_MODEL_ID, klingEditFields(scene),
                             "video_url", "webcam.mp4", "video/mp4", klingCamera));
             // For newly purchased reference-mode performances require the
             // promised 15s file before paying for lip synchronization.
@@ -741,7 +757,8 @@ public class NeuroReplacementPilotService {
             if (!videoWasPaidBeforeThisRun) {
                 byte[] directed = download(videoUrl,MAX_RESULT_BYTES);
                 MediaProbe videoInfo = probeMp4(directed);
-                if (!videoInfo.video || videoInfo.seconds < 14 || videoInfo.seconds > 16) {
+                if (!videoInfo.video || videoInfo.seconds < expectedSeconds - 0.7
+                        || videoInfo.seconds > expectedSeconds + 0.7) {
                     throw new IOException("NEURO_DIRECTED_ACTING_VIDEO_LENGTH_INVALID " +
                             videoInfo.seconds + "s; Lip Sync not ordered");
                 }
@@ -754,7 +771,7 @@ public class NeuroReplacementPilotService {
             // Old paid Lip Sync IDs are never submitted again, so do not
             // regenerate/swap their original provider input on recovery.
             String alignedVoiceUrl = job.providerRequests.containsKey("lipsync")
-                    ? voiceUrl : alignSpeechToActingTimeline(job, voiceUrl);
+                    ? voiceUrl : alignSpeechToActingTimeline(job, voiceUrl, scene);
             job.stage = "Синхронизация губ";
             checkpoint(job);
             String finalVideo = paidStage(job, "lipsync", () -> submitJson("lipsync", Map.of(
@@ -804,11 +821,11 @@ public class NeuroReplacementPilotService {
      * before and after transcoding so a malformed video cannot exhaust RAM.
      */
     /** O3 reference-to-video creates a new directed 15s performance. */
-    private Map<String, String> klingEditFields() {
+    private Map<String, String> klingEditFields(NeuroScenePlan scene) {
         return Map.of(
                 "model", VIDEO_ACTING_MODE,
-                "prompt", VIDEO_PROMPT,
-                "duration", String.valueOf(VIDEO_DURATION_SECONDS),
+                "prompt", scene == null ? VIDEO_PROMPT : scene.videoPrompt(),
+                "duration", String.valueOf(scene == null ? VIDEO_DURATION_SECONDS : scene.durationSeconds()),
                 "aspect_ratio", "16:9",
                 "pro", "true",
                 "generate_audio", "false",
@@ -1032,7 +1049,7 @@ public class NeuroReplacementPilotService {
      * with silence. Uses private S3 + expiring signed URL for the Lip Sync
      * provider to fetch; no new provider request is made at this step.
      */
-    private String alignSpeechToActingTimeline(Job job, String voiceUrl) throws Exception {
+    private String alignSpeechToActingTimeline(Job job, String voiceUrl, NeuroScenePlan scene) throws Exception {
         byte[] inputBytes = download(voiceUrl,MAX_VOICE_BYTES);
         Path source = Files.createTempFile("neuro-voice-render-", ".audio");
         Path output = Files.createTempFile("neuro-voice-render-", ".wav");
@@ -1040,7 +1057,8 @@ public class NeuroReplacementPilotService {
             Files.write(source,inputBytes);
             Process tool = new ProcessBuilder("ffmpeg", "-hide_banner", "-loglevel", "error",
                     "-nostdin", "-y", "-i", source.toString(), "-vn",
-                    "-af", "adelay=1500,apad", "-t", String.valueOf(VIDEO_DURATION_SECONDS),
+                    "-af", "adelay="+(scene == null ? 1500 : (int)Math.round(scene.speechStartSeconds()*1000))+",apad",
+                    "-t", String.valueOf(scene == null ? VIDEO_DURATION_SECONDS : scene.durationSeconds()),
                     "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le",
                     output.toString()).redirectErrorStream(true).start();
             if (!tool.waitFor(40,TimeUnit.SECONDS)) {
@@ -1073,7 +1091,7 @@ public class NeuroReplacementPilotService {
      * It cannot validate pronunciation or acting; that still needs visual
      * and listening review of the actual generated file.
      */
-    private void verifyExpressiveSpeechDuration(String voiceUrl) throws Exception {
+    private void verifyExpressiveSpeechDuration(String voiceUrl, NeuroScenePlan scene) throws Exception {
         byte[] voiceBytes = download(voiceUrl, MAX_VOICE_BYTES);
         Path input = Files.createTempFile("neuro-speech-", ".audio");
         Path decoded = Files.createTempFile("neuro-speech-", ".pcm");
@@ -1109,8 +1127,13 @@ public class NeuroReplacementPilotService {
                     lastActiveSeconds = (offset + frameSize) / 16000.0;
                 }
             }
-            if (activeFrames < 35 || lastActiveSeconds < 4.2 ||
-                    pcm.length / 16000.0 > 16) {
+            int minimumVoicedFrames = scene == null ? 35 : Math.max(8,
+                    Math.min(24, scene.spokenText().split("\\s+").length * 2));
+            double minimumLastSpeech = scene == null ? 4.2 : 0.9;
+            double maximumVoiceSeconds = scene == null ? 16
+                    : scene.durationSeconds() - scene.speechStartSeconds();
+            if (activeFrames < minimumVoicedFrames || lastActiveSeconds < minimumLastSpeech ||
+                    pcm.length / 16000.0 > maximumVoiceSeconds + 0.25) {
                 throw new IOException("NEURO_SPEECH_TOO_FAST_OR_SILENT voiced=" +
                         (activeFrames/10.0) + "s lastSpeech=" + lastActiveSeconds +
                         "s; no expensive video ordered");
@@ -1317,6 +1340,7 @@ public class NeuroReplacementPilotService {
         volatile String voiceMime;
         volatile double startSeconds;
         volatile String submittingModel;
+        volatile String sceneAssignment;
         final Map<String, String> providerRequests = new ConcurrentHashMap<>();
 
         Job(String id, String roomId, String ownerUid) {
