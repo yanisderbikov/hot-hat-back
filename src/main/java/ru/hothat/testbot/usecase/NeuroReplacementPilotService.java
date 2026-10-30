@@ -823,7 +823,10 @@ public class NeuroReplacementPilotService {
      * before and after transcoding so a malformed video cannot exhaust RAM.
      */
     /** O3 reference-to-video creates a new directed 15s performance. */
-    // Keep pre-existing owner pilot and its non-paying regression tests intact.\n    private Map<String, String> klingEditFields() { return klingEditFields(null); }\n\n    private Map<String, String> klingEditFields(NeuroScenePlan scene) {
+    // Keep pre-existing owner pilot and its non-paying regression tests intact.
+    private Map<String, String> klingEditFields() { return klingEditFields(null); }
+
+    private Map<String, String> klingEditFields(NeuroScenePlan scene) {
         return Map.of(
                 "model", VIDEO_ACTING_MODE,
                 "prompt", scene == null ? VIDEO_PROMPT : scene.videoPrompt(),
