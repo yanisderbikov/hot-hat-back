@@ -691,6 +691,15 @@ public class NeuroReplacementPilotService {
         result.put("ready", "ready".equals(job.state));
         result.put("durationSeconds", job.sceneAssignment == null ? VIDEO_DURATION_SECONDS
                 : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds());
+        // Owner-only metadata for the history/video archive: an exact account of
+        // what was ordered. Older paid 15s jobs remain identifiable, not rewritten.
+        result.put("sceneAssignment", job.sceneAssignment);
+        result.put("sceneType", job.sceneAssignment == null ? "legacy-pilot" : "custom");
+        if (job.sceneAssignment != null) {
+            NeuroScenePlan scene = NeuroScenePlan.plan(job.sceneAssignment);
+            result.put("spokenText", scene.spokenText());
+            result.put("backgroundLocked", scene.videoPrompt().contains("BACKGROUND LOCK"));
+        }
         // Expose provider IDs to the authenticated owner while still processing.
         // They can recover the paid work in GenAPI if Railway restarts.
         result.put("providerRequests", new LinkedHashMap<>(job.providerRequests));
