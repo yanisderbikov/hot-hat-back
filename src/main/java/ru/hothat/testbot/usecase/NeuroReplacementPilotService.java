@@ -243,7 +243,7 @@ public class NeuroReplacementPilotService {
         if (jdbc == null) return null;
         List<Job> rows = jdbc.query("""
             SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
-                   final_video_url,error_message,final_video_key
+                   final_video_url,error_message,final_video_key,scene_assignment
             FROM neuro_replacement_job WHERE job_id=? AND owner_uid=?
             """, (rs, rowNum) -> {
             Job job = new Job(rs.getString(1), rs.getString(2), rs.getString(3));
@@ -256,6 +256,7 @@ public class NeuroReplacementPilotService {
             job.finalVideo = rs.getString(7);
             job.error = rs.getString(8);
             job.finalVideoKey = rs.getString(9);
+            job.sceneAssignment = rs.getString(10);
             return job;
         }, jobId, ownerUid);
         return rows.isEmpty() ? null : rows.get(0);
@@ -272,7 +273,7 @@ public class NeuroReplacementPilotService {
         if (jdbc == null) return List.of();
         return jdbc.query("""
             SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
-                   final_video_url,error_message,final_video_key,created_at
+                   final_video_url,error_message,final_video_key,created_at,scene_assignment
             FROM neuro_replacement_job WHERE owner_uid=? ORDER BY created_at DESC LIMIT 200
             """, (rs, rowNum) -> {
             Job job = new Job(rs.getString(1),rs.getString(2),rs.getString(3));
@@ -283,6 +284,7 @@ public class NeuroReplacementPilotService {
             } catch (Exception ignored) {}
             job.finalVideo = rs.getString(7);
             job.error = rs.getString(8); job.finalVideoKey = rs.getString(9);
+            job.sceneAssignment = rs.getString(11);
             Map<String,Object> result = snapshot(job);
             result.put("roomId",job.roomId);
             result.put("createdAt",rs.getTimestamp(10).toInstant().toString());
