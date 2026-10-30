@@ -274,7 +274,7 @@ public class NeuroReplacementPilotService {
         return jdbc.query("""
             SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
                    final_video_url,error_message,final_video_key,created_at,scene_assignment
-            FROM neuro_replacement_job WHERE owner_uid=? ORDER BY created_at DESC LIMIT 200
+            FROM neuro_replacement_job WHERE owner_uid=? ORDER BY created_at DESC
             """, (rs, rowNum) -> {
             Job job = new Job(rs.getString(1),rs.getString(2),rs.getString(3));
             job.state = rs.getString(4); job.stage = rs.getString(5);
