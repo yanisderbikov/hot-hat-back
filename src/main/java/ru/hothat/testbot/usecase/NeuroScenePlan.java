@@ -39,7 +39,7 @@ public record NeuroScenePlan(
             "to preserve the real player's appearance, age, facial proportions, hair, clothes, " +
             "and natural facial expressiveness. " +
             "Do NOT copy source movements. Exactly one real person. Fixed camera, " +
-            "consistent geometry and background, natural microexpressions, blinking, " +
+            "consistent actor geometry, natural microexpressions, blinking, " +
             "eye contact, breathing, believable anatomy and fully visible hands. ";
     private static final String END =
             "Follow the assigned sequence completely, with real hand gestures, no frozen poses. " +
