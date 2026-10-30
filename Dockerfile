@@ -3,6 +3,7 @@ WORKDIR /app
 COPY pom.xml .
 RUN mvn dependency:go-offline -B
 COPY src ./src
+RUN mvn -B -Dtest=NeuroScenePlanTest,NeuroReplacementPilotServiceTest,NeuroReplacementPipelineSimulationTest test
 RUN mvn clean package -DskipTests
 
 FROM eclipse-temurin:21-jre
