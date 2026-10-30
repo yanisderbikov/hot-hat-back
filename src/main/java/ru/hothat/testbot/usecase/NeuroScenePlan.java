@@ -31,13 +31,13 @@ public record NeuroScenePlan(
     private static final Pattern ACTION_AFTER_SPEECH = Pattern.compile(
             "(?iu)\\s*(?:[,;.]\\s*)?(?:(?:и|затем|потом|после этого)\\s+)?"
             + "(?:показыва[\\p{L}]*|показать|грозит|погроз[\\p{L}]*|поднима[\\p{L}]*|"
-            + "улыб[\\p{L}]*|вста[\\p{L}]*|уход[\\p{L}]*|уходит|выходит|машет|помаш[\\p{L}]*|"
+            + "улыб[\\p{L}]*|смен[\\p{L}]*|поменя[\\p{L}]*|замен[\\p{L}]*|измен[\\p{L}]*|вста[\\p{L}]*|уход[\\p{L}]*|уходит|выходит|машет|помаш[\\p{L}]*|"
             + "смотря\\s+в\\s+камер[\\p{L}]*|глядя\\s+в\\s+камер[\\p{L}]*|"
             + "всё\\s+это\\s+говорит|все\\s+это\\s+говорит)\\b");
     private static final String BASE =
             "Create a NEW ultra-photorealistic uncut webcam performance. Use @Video1 only " +
             "to preserve the real player's appearance, age, facial proportions, hair, clothes, " +
-            "room, lighting, webcam angle, and natural facial expressiveness. " +
+            "and natural facial expressiveness. " +
             "Do NOT copy source movements. Exactly one real person. Fixed camera, " +
             "consistent geometry and background, natural microexpressions, blinking, " +
             "eye contact, breathing, believable anatomy and fully visible hands. ";
