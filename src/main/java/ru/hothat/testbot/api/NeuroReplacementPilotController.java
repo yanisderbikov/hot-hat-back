@@ -26,6 +26,7 @@ import org.springframework.web.multipart.MultipartFile;
 import ru.hothat.common.validation.RoomId;
 import ru.hothat.config.HotHatUser;
 import ru.hothat.testbot.usecase.NeuroReplacementPilotService;
+import ru.hothat.testbot.usecase.NeuroScenePlan;
 import ru.hothat.testbot.usecase.TestRoomFeatureGuard;
 import ru.hothat.testbot.usecase.TestRoomOwnershipGuard;
 
@@ -47,6 +48,18 @@ public class NeuroReplacementPilotController {
     private void check(HotHatUser owner, String roomId) {
         features.requireEnabled();
         rooms.requireOwnedTestRoom(owner, roomId);
+    }
+
+    @PostMapping(value = "/plan", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+    @ApiResponse(responseCode = "200", description = "Бесплатный расчёт длительности и точного текста актёрской сцены до 10 секунд")
+    public NeuroScenePlan plan(
+            @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description = "Собственная тестовая комната владельца")
+            @PathVariable @RoomId String roomId,
+            @Parameter(description = "Задание для нейросцены; точные слова для речи заключаются в кавычки")
+            @RequestParam("assignment") String assignment) {
+        check(owner, roomId);
+        return pilot.planAssignment(assignment);
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
