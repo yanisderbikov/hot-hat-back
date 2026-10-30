@@ -36,10 +36,9 @@ class NeuroScenePlanTest {
     }
 
     @Test
-    void refusesAmbiguousUnquotedSpokenWords() {
-        var e=assertThrows(ResponseStatusException.class,
-                () -> NeuroScenePlan.plan("Игрок должен сказать привет всем и затем улыбнуться"));
-        assertTrue(e.getReason().contains("QUOTATION"));
+    void acceptsSpeechWithoutQuotesAndSeparatesSmilingAction() {
+        var plan = NeuroScenePlan.plan("Игрок должен сказать привет всем и затем улыбнуться");
+        assertEquals("привет всем", plan.spokenText());
     }
 
     @Test
