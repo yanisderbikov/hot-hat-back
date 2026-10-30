@@ -909,8 +909,14 @@ public class NeuroReplacementPilotService {
     private byte[] recoverPaidLipSyncVideo(Job job, String lipSyncUrl) throws Exception {
         byte[] result = download(lipSyncUrl, MAX_RESULT_BYTES);
         MediaProbe media = probeMp4(result);
-        if (media.video && media.audio && media.seconds >= 8.0 && media.seconds <= 15.0) {
-            verifyPlayableMp4(result);
+        int sceneSeconds = job.sceneAssignment == null ? 10
+                : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds();
+        boolean acceptedLength = job.sceneAssignment == null
+                ? media.seconds >= 8.0 && media.seconds <= 15.0
+                : media.seconds >= sceneSeconds - 0.7 && media.seconds <= sceneSeconds + 0.7;
+        if (media.video && media.audio && acceptedLength) {
+            if (job.sceneAssignment == null) verifyPlayableMp4(result);
+            else verifyPlayableMp4(result, sceneSeconds);
             return result;
         }
         if (!media.video || media.seconds < 3.0 || media.seconds > 15.0) {
@@ -927,8 +933,9 @@ public class NeuroReplacementPilotService {
         String voiceUrl = completedPaidResultUrl("chatterbox-speech", voiceId);
         byte[] kling = download(klingUrl, MAX_RESULT_BYTES);
         byte[] voice = download(voiceUrl, MAX_RESULT_BYTES);
-        byte[] repaired = composePaidLipSyncWithOriginalTail(result, kling, voice, media.seconds);
-        verifyPlayableMp4(repaired);
+        byte[] repaired = composePaidLipSyncWithOriginalTail(result, kling, voice, media.seconds, sceneSeconds);
+        if (job.sceneAssignment == null) verifyPlayableMp4(repaired);
+        else verifyPlayableMp4(repaired, sceneSeconds);
         LOG.info("Recovered paid Lip Sync without provider POST: job={} lipSyncSeconds={} audioPresent={}",
                 job.id, media.seconds, media.audio);
         return repaired;
@@ -953,7 +960,7 @@ public class NeuroReplacementPilotService {
      * voice provided to Lip Sync. No synthesis or billable remote operation.
      */
     private byte[] composePaidLipSyncWithOriginalTail(byte[] lipSync, byte[] kling,
-                                                       byte[] voice, double lipSeconds) throws Exception {
+                                                       byte[] voice, double lipSeconds, int sceneSeconds) throws Exception {
         Path lip = Files.createTempFile("neuro-paid-lipsync-", ".mp4");
         Path klingFile = Files.createTempFile("neuro-paid-kling-", ".mp4");
         Path voiceFile = Files.createTempFile("neuro-paid-voice-", ".audio");
@@ -962,28 +969,28 @@ public class NeuroReplacementPilotService {
             Files.write(lip, lipSync);
             Files.write(klingFile, kling);
             Files.write(voiceFile, voice);
-            double lead = Math.min(10.0, lipSeconds);
+            double lead = Math.min(sceneSeconds, lipSeconds);
             String standardize = "fps=24,scale=1280:720:force_original_aspect_ratio=decrease,"
                     + "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,";
             String filter;
-            if (lead < 9.8) {
+            if (lead < sceneSeconds - 0.2) {
                 filter = "[0:v]" + standardize + "trim=duration=" + lead +
                         ",setpts=PTS-STARTPTS[lead];" +
                         "[1:v]" + standardize + "trim=start=" + lead +
-                        ":duration=" + (10.0 - lead) + ",setpts=PTS-STARTPTS[tail];" +
+                        ":duration=" + (sceneSeconds - lead) + ",setpts=PTS-STARTPTS[tail];" +
                         "[lead][tail]concat=n=2:v=1:a=0," +
-                        "tpad=stop_mode=clone:stop_duration=10,trim=duration=10[v];" +
-                        "[2:a]aresample=48000,apad,atrim=duration=10[a]";
+                        "tpad=stop_mode=clone:stop_duration=" + sceneSeconds + ",trim=duration=" + sceneSeconds + "[v];" +
+                        "[2:a]aresample=48000,apad,atrim=duration=" + sceneSeconds + "[a]";
             } else {
                 filter = "[0:v]" + standardize +
-                        "tpad=stop_mode=clone:stop_duration=10,trim=duration=10,setpts=PTS-STARTPTS[v];" +
-                        "[2:a]aresample=48000,apad,atrim=duration=10[a]";
+                        "tpad=stop_mode=clone:stop_duration=" + sceneSeconds + ",trim=duration=" + sceneSeconds + ",setpts=PTS-STARTPTS[v];" +
+                        "[2:a]aresample=48000,apad,atrim=duration=" + sceneSeconds + "[a]";
             }
             List<String> command = new ArrayList<>(List.of(
                     "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
                     "-i", lip.toString(), "-i", klingFile.toString(), "-i", voiceFile.toString(),
                     "-filter_complex", filter,
-                    "-map", "[v]", "-map", "[a]", "-t", "10",
+                    "-map", "[v]", "-map", "[a]", "-t", String.valueOf(sceneSeconds),
                     "-threads", "1", "-filter_complex_threads", "1",
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
                     "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", output.toString()));
@@ -1154,6 +1161,16 @@ public class NeuroReplacementPilotService {
         if (!info.video || !info.audio || info.seconds < 8.0 || info.seconds > 15.0) {
             throw new IOException("NEURO_RESULT_MISSING_VIDEO_AUDIO_OR_DURATION video=" +
                     info.video + " audio=" + info.audio + " duration=" + info.seconds);
+        }
+    }
+
+    private void verifyPlayableMp4(byte[] data, int expectedSeconds) throws Exception {
+        MediaProbe info = probeMp4(data);
+        if (!info.video || !info.audio || info.seconds < expectedSeconds - 0.7
+                || info.seconds > expectedSeconds + 0.7) {
+            throw new IOException("NEURO_SCENE_RESULT_LENGTH_OR_TRACKS_INVALID video=" +
+                    info.video + " audio=" + info.audio + " duration=" + info.seconds +
+                    " expected=" + expectedSeconds);
         }
     }
 
