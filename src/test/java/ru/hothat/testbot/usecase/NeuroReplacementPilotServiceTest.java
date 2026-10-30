@@ -235,6 +235,35 @@ class NeuroReplacementPilotServiceTest {
         assertEquals("Готово", direct.get("stage"));
     }
     @Test
+    void ownerHistoryIncludesEveryDynamicAssignmentAndExactSpokenText() throws Exception {
+        String owner = "owner-1";
+        JdbcTemplate db = mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        ResultSet saved = mock(ResultSet.class);
+        String script = "Смотрит в камеру и говорит Привет всем друзьям и хорошего дня!";
+        when(saved.getString(1)).thenReturn("neuro-script-01");
+        when(saved.getString(2)).thenReturn("hat-a1ece4688a6e8389");
+        when(saved.getString(3)).thenReturn(owner);
+        when(saved.getString(4)).thenReturn("ready");
+        when(saved.getString(5)).thenReturn("Готово");
+        when(saved.getString(6)).thenReturn("{\"lipsync\":\"already-paid\"}");
+        when(saved.getString(9)).thenReturn("neuro-replacements/owner-1/neuro-script-01.mp4");
+        when(saved.getString(11)).thenReturn(script);
+        when(saved.getTimestamp(10)).thenReturn(Timestamp.from(Instant.parse("2026-10-30T13:16:56Z")));
+        when(db.query(anyString(), any(RowMapper.class), eq(owner)))
+                .thenAnswer(call -> List.of(((RowMapper)call.getArgument(1)).mapRow(saved,0)));
+
+        Map<String,Object> row = pilot.history(owner).get(0);
+        assertEquals("custom",row.get("sceneType"));
+        assertEquals(script,row.get("sceneAssignment"));
+        assertEquals("Привет всем друзьям и хорошего дня!",row.get("spokenText"));
+        assertEquals(true,row.get("backgroundLocked"));
+        assertEquals(true,row.get("archived"));
+        assertTrue((Integer)row.get("durationSeconds")<=10);
+        assertEquals("ready",row.get("status"));
+    }
+
+    @Test
     void dynamicSceneIsPassedToKlingWithoutChangingLegacyPilotFields() {
         NeuroScenePlan scene = NeuroScenePlan.plan(
                 "Этот игрок должен сказать - а вы все еще кипятите? пауза тогда мы идем к вам "
