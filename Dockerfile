@@ -1,5 +1,8 @@
 FROM maven:3.9.9-eclipse-temurin-21 AS build
 WORKDIR /app
+# FFmpeg is required by the free mock-provider integration tests at build time.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \\
+    && rm -rf /var/lib/apt/lists/*
 COPY pom.xml .
 RUN mvn dependency:go-offline -B
 COPY src ./src
