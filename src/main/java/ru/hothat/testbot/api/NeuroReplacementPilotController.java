@@ -74,11 +74,13 @@ public class NeuroReplacementPilotController {
             @RequestParam(name = "consented", defaultValue = "false") boolean consented,
             @Parameter(description = "Начало выбранного десятисекундного фрагмента в исходной записи")
             @RequestParam(name = "windowStartSeconds", defaultValue = "0") double windowStartSeconds,
+            @Parameter(description = "Свободное игровое задание без обязательных кавычек; максимум 10 секунд. Отсутствие сохраняет старый пилот.")
+            @RequestParam(name = "assignment", required = false) String assignment,
             @RequestPart("video") MultipartFile video,
             @RequestPart("voice") MultipartFile voice) {
         check(owner, roomId);
         return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .body(pilot.start(roomId, owner.uid(), consented, video, voice, windowStartSeconds));
+                .body(pilot.start(roomId, owner.uid(), consented, video, voice, windowStartSeconds, assignment));
     }
 
     @GetMapping("/{jobId}")
