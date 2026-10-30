@@ -48,4 +48,41 @@ class NeuroScenePlanTest {
                 .repeat(8) + "» и машет рукой на прощание";
         assertThrows(ResponseStatusException.class, () -> NeuroScenePlan.plan(assignment));
     }
+    @Test
+    void acceptsEverydayTextWithoutQuotationMarksAndKeepsNaturalPause() {
+        NeuroScenePlan plan = NeuroScenePlan.plan(
+                "Этот игрок должен сказать - а вы все еще кипятите? пауза тогда мы идем к вам "
+                + "и показывает большой палец смотря в камеру.");
+        assertEquals("а вы все еще кипятите? ... тогда мы идем к вам", plan.spokenText());
+        assertTrue(plan.durationSeconds() <= 10);
+        assertTrue(plan.videoPrompt().contains("BACKGROUND LOCK"));
+        assertTrue(plan.videoPrompt().contains("показывает большой палец"));
+    }
+
+    @Test
+    void unquotedDialogueMayContainOrdinaryConjunctions() {
+        var plan = NeuroScenePlan.plan("Смотрит в камеру и говорит Привет всем друзьям и хорошего дня!");
+        assertEquals("Привет всем друзьям и хорошего дня!", plan.spokenText());
+    }
+
+    @Test
+    void preservesOriginalRoomEvenWhenPlayerStandsUpAndExits() {
+        var plan = NeuroScenePlan.plan("Говорит Привет! потом встаёт и уходит из кадра.");
+        assertTrue(plan.videoPrompt().contains("BACKGROUND LOCK"));
+        assertTrue(plan.videoPrompt().contains("Do not move the camera"));
+    }
+
+    @Test
+    void explicitRequestCanChangeBackground() {
+        var plan = NeuroScenePlan.plan("Говорит Привет! Смени фон на космос.");
+        assertFalse(plan.videoPrompt().contains("BACKGROUND LOCK"));
+    }
+
+    @Test
+    void vagueFreeTextIsRejectedBeforeAnyPaidCall() {
+        var error = assertThrows(ResponseStatusException.class,
+                () -> NeuroScenePlan.plan("Пусть он делает что-то смешное, а потом все смеются."));
+        assertTrue(error.getReason().contains("NOT_UNAMBIGUOUS"));
+    }
+
 }
