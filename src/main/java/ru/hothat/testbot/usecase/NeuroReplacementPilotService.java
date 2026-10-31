@@ -1322,7 +1322,7 @@ public class NeuroReplacementPilotService {
         if(!Double.isFinite(startSeconds)||startSeconds<0||startSeconds>22)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "NEURO_CHARACTER_START_SECONDS_INVALID");
-        NeuroScenePlan scene=NeuroScenePlan.plan(assignment);
+        NeuroScenePlan scene=NeuroScenePlan.planForCharacter(assignment);
         String room="hat-fac7edcharacter"+testId.replace("-","");
         Job existing=existingRoomJob(room);
         if(existing!=null) {
@@ -1455,6 +1455,8 @@ public class NeuroReplacementPilotService {
         result.put("stage", job.stage);
         result.put("ready", "ready".equals(job.state));
         result.put("durationSeconds", job.sceneAssignment == null ? VIDEO_DURATION_SECONDS
+                : CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))
+                ? NeuroScenePlan.planForCharacter(job.sceneAssignment).durationSeconds()
                 : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds());
         // Owner-only metadata for the history/video archive: an exact account of
         // what was ordered. Older paid 15s jobs remain identifiable, not rewritten.
@@ -1472,7 +1474,9 @@ public class NeuroReplacementPilotService {
         result.put("sceneType",job.roomId.startsWith("hat-fac7ed") ? "studio" :
                 job.sceneAssignment == null ? "legacy-pilot" : "custom");
         if (job.sceneAssignment != null) {
-            NeuroScenePlan scene = NeuroScenePlan.plan(job.sceneAssignment);
+            NeuroScenePlan scene = CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))
+                    ? NeuroScenePlan.planForCharacter(job.sceneAssignment)
+                    : NeuroScenePlan.plan(job.sceneAssignment);
             result.put("spokenText", scene.spokenText());
             result.put("backgroundLocked", scene.videoPrompt().contains("BACKGROUND LOCK"));
         }
@@ -1617,7 +1621,7 @@ public class NeuroReplacementPilotService {
                                        byte[] voice,String voiceMime) {
         boolean ownerReviewed="Владелец одобрил видеоперсонажа и движения".equals(job.stage);
         try{
-            NeuroScenePlan scene=NeuroScenePlan.plan(job.sceneAssignment);
+            NeuroScenePlan scene=NeuroScenePlan.planForCharacter(job.sceneAssignment);
             if(klingApiKey==null || klingApiKey.isBlank())
                 throw new IOException("NEURO_OFFICIAL_KLING_KEY_NOT_CONFIGURED");
             if(!job.providerRequests.containsKey(CHARACTER_TASK)){
@@ -2500,6 +2504,8 @@ public class NeuroReplacementPilotService {
         byte[] result = download(lipSyncUrl, MAX_RESULT_BYTES);
         MediaProbe media = probeMp4(result);
         int sceneSeconds = job.sceneAssignment == null ? 10
+                : CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))
+                ? NeuroScenePlan.planForCharacter(job.sceneAssignment).durationSeconds()
                 : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds();
         boolean acceptedLength = job.sceneAssignment == null
                 ? media.seconds >= 8.0 && media.seconds <= 15.0
