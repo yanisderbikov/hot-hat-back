@@ -1083,7 +1083,7 @@ public class NeuroReplacementPilotService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"NEURO_STUDIO_ASSIGNMENT_REQUIRED");
         }
         // This room ID is a billing idempotency key, never a real game room.
-        String roomId="hat-"+testId.replace("-","").substring(0,16);
+        String roomId="hat-fac7ed"+testId.replace("-","").substring(0,10);
         if(consented) {
             // Refuse truncated camera/mic samples BEFORE ordering TTS/voice/video.
             if(video==null || voice==null || video.isEmpty() || voice.isEmpty() ||
@@ -1166,7 +1166,8 @@ public class NeuroReplacementPilotService {
         result.put("originalAvailable",job.sourceCameraKey!=null && !job.sourceCameraKey.isBlank());
         result.put("originalMime",job.cameraMime);
 
-        result.put("sceneType", job.sceneAssignment == null ? "legacy-pilot" : "custom");
+        result.put("sceneType",job.roomId.startsWith("hat-fac7ed") ? "studio" :
+                job.sceneAssignment == null ? "legacy-pilot" : "custom");
         if (job.sceneAssignment != null) {
             NeuroScenePlan scene = NeuroScenePlan.plan(job.sceneAssignment);
             result.put("spokenText", scene.spokenText());
