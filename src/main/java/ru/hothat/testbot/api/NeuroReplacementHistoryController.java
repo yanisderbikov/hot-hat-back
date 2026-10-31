@@ -221,6 +221,16 @@ public class NeuroReplacementHistoryController {
         return pilot.resumeAfterSpeechGate(owner.uid(), jobId, consented);
     }
 
+    @PostMapping("/{jobId}/resume-reference-start-image-422")
+    @ApiResponse(responseCode="200",
+            description="Повтор только определённого отказа GenAPI 422 из-за отсутствующего start_image_url; прежнее задание, явное согласие, без двойной оплаты")
+    public Map<String,Object> resumeReferenceStartImage422(
+            @AuthenticationPrincipal HotHatUser owner,
+            @PathVariable String jobId,
+            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+        return pilot.resumeVideoReferenceStartImage422(owner.uid(),jobId,consented);
+    }
+
     @PostMapping("/{jobId}/resume-kling-422")
     @ApiResponse(responseCode = "200", description = "Однократно продолжить после определённого отказа 422 с JSON HTTPS MP4. Старые TTS/Chatterbox ID сохраняются.")
     public Map<String,Object> resumeKling422(@AuthenticationPrincipal HotHatUser owner,
