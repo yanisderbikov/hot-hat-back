@@ -42,6 +42,64 @@ class NeuroReplacementPipelineSimulationTest {
     }
 
     @Test
+    void videoCharacterPreparationIsFreeAudioVisual1080pAndEightSeconds() throws Exception {
+        byte[] camera=generatedMedia(".webm",List.of(
+                "-f","lavfi","-i","testsrc2=size=320x180:rate=15",
+                "-t","12","-an","-c:v","libvpx","-deadline","realtime",
+                "-b:v","130k"));
+        byte[] voice=generatedMedia(".wav",List.of(
+                "-f","lavfi","-i","sine=frequency=450:sample_rate=16000",
+                "-t","12","-ac","1","-c:a","pcm_s16le"));
+        HttpClient provider=mock(HttpClient.class);
+        pilot=new NeuroReplacementPilotService(new ObjectMapper(),provider);
+        Map<String,Object> capability=pilot.videoCharacterCapability();
+        assertEquals(false,capability.get("paidGenerationEnabled"));
+        assertEquals(false,capability.get("genApiVideoCharacterCreationVerified"));
+        assertEquals(8,capability.get("referenceSeconds"));
+
+        byte[] clip=pilot.prepareVideoCharacterPreview(
+                new org.springframework.mock.web.MockMultipartFile(
+                        "video","camera.webm","video/webm",camera),
+                new org.springframework.mock.web.MockMultipartFile(
+                        "voice","voice.wav","audio/wav",voice),
+                2.0);
+        assertTrue(clip.length>25000);
+        Path tmp=Files.createTempFile("character-ref-test-", ".mp4");
+        try {
+            Files.write(tmp,clip);
+            Process probe=new ProcessBuilder("ffprobe","-v","error",
+                    "-show_entries","stream=codec_type,width,height:format=duration",
+                    "-of","default=noprint_wrappers=1",
+                    tmp.toString()).start();
+            assertTrue(probe.waitFor(20,TimeUnit.SECONDS));
+            assertEquals(0,probe.exitValue());
+            String info=new String(probe.getInputStream().readAllBytes());
+            assertTrue(info.contains("width=1920"),info);
+            assertTrue(info.contains("height=1080"),info);
+            assertTrue(info.contains("codec_type=audio"),info);
+            assertTrue(info.contains("codec_type=video"),info);
+            java.util.regex.Matcher duration=java.util.regex.Pattern.compile(
+                    "duration=([0-9]+(?:\\.[0-9]+)?)").matcher(info);
+            assertTrue(duration.find(),info);
+            assertEquals(8,Double.parseDouble(duration.group(1)),0.2);
+        } finally { Files.deleteIfExists(tmp); }
+        verifyNoInteractions(provider);
+    }
+
+    @Test
+    void characterPreviewRejectsInvalidTimestampBeforeProviderOrFfmpeg() {
+        HttpClient provider=mock(HttpClient.class);
+        pilot=new NeuroReplacementPilotService(new ObjectMapper(),provider);
+        var camera=new org.springframework.mock.web.MockMultipartFile(
+                "video","camera.webm","video/webm",new byte[]{1,2,3});
+        var voice=new org.springframework.mock.web.MockMultipartFile(
+                "voice","voice.webm","audio/webm",new byte[]{1,2,3});
+        assertEquals(HttpStatus.BAD_REQUEST,assertThrows(ResponseStatusException.class,
+                ()->pilot.prepareVideoCharacterPreview(camera,voice,23)).getStatusCode());
+        verifyNoInteractions(provider);
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void fullFourStageFlowStoresFinalMp4AndNeverSubmitsTwice() throws Exception {
         byte[] camera = generatedMedia(".webm", List.of(
