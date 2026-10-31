@@ -1674,7 +1674,7 @@ public class NeuroReplacementPilotService {
                 objectStore.put(paidKey,paidVideo,"video/mp4");
             }
             if(job.providerRequests.get("lipsync")==null){
-                double copy=measureSourceCopySsim(camera,cameraMime,paidVideo);
+                double copy=measureSourceCopySsim(camera,cameraMime,paidVideo,job.startSeconds);
                 if(copy>=MAX_ACCEPTED_SOURCE_COPY_SSIM)
                     throw new IOException("NEURO_CHARACTER_VIDEO_COPIED_SOURCE_NO_LIPSYNC");
                 if(!ownerReviewed){
@@ -2299,7 +2299,9 @@ public class NeuroReplacementPilotService {
         try {
             byte[] source=objectStore.get(job.sourceCameraKey);
             byte[] kling=paidKlingPreview(ownerUid,jobId); // paid GenAPI GET or cached direct Kling
-            double ssim=measureSourceCopySsim(source,job.cameraMime,kling);
+            double ssim=measureSourceCopySsim(source,job.cameraMime,kling,
+                    CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))?
+                    job.startSeconds:0);
             Map<String,Object> result=new LinkedHashMap<>();
             result.put("jobId",jobId);
             result.put("paidCalls",0);
@@ -2322,13 +2324,23 @@ public class NeuroReplacementPilotService {
     /** Compare timeline-aligned frames (not superficial matching background). */
     private double measureSourceCopySsim(byte[] source,String sourceMime,byte[] kling)
             throws Exception {
+        return measureSourceCopySsim(source,sourceMime,kling,0);
+    }
+
+    private double measureSourceCopySsim(byte[] source,String sourceMime,
+                                         byte[] kling,double sourceStartSeconds)
+            throws Exception {
+        if(!Double.isFinite(sourceStartSeconds)||sourceStartSeconds<0||
+                sourceStartSeconds>25)
+            throw new IOException("NEURO_MOTION_REFERENCE_OFFSET_INVALID");
         Path original=Files.createTempFile("neuro-motion-before-",
                 "video/mp4".equals(sourceMime)?".mp4":".webm");
         Path changed=Files.createTempFile("neuro-motion-after-",".mp4");
         try {
             Files.write(original,source);
             Files.write(changed,kling);
-            String filter="[0:v]trim=duration=8.8,setpts=PTS-STARTPTS,"+
+            String filter="[0:v]trim=start="+sourceStartSeconds+
+                    ":duration=8.8,setpts=PTS-STARTPTS,"+
                     "fps=2,scale=320:180,format=yuv420p[a];"+
                     "[1:v]trim=duration=8.8,setpts=PTS-STARTPTS,"+
                     "fps=2,scale=320:180,format=yuv420p[b];[a][b]ssim";
