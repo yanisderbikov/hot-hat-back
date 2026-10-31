@@ -376,7 +376,7 @@ public class NeuroReplacementPilotService {
                 // Error envelopes may embed URLs, tokens, or user-provided
                 // text. Return a redacted message, never the raw provider JSON.
                 String rawReason=findProviderError(data,0);
-                item.put("error",rawReason.isBlank()?"":safeValidationMessage(rawReason));
+                item.put("error",safeProviderStatusMessage(rawReason));
                 results.put(entry.getKey(),item);
                 // This endpoint must stay a fast, side-effect-free GET.
                 // Large MP4 downloads/FFmpeg belong to the explicit async
@@ -3436,6 +3436,26 @@ public class NeuroReplacementPilotService {
     private String safeValidationField(String field) {
         String clean=field.replaceAll("[^a-zA-Z0-9_-]","").trim();
         return clean.isBlank() ? "field" : clean.substring(0, Math.min(40,clean.length()));
+    }
+
+    /**
+     * GenAPI's asynchronous status response has a descriptive error string.
+     * The synchronous HTTP 422 validator intentionally limits diagnostics
+     * to 110 chars, but using that limit here cut the 31-Oct failed
+     * request 57031657 mid-word ("неприем…"), concealing whether the
+     * provider referred to input validation or content restrictions.
+     *
+     * Only return a sanitized TEXT message: never serialize raw provider
+     * input, URLs, credentials, reference tokens or personal video data.
+     * Does not issue any paid POST or mutate a persisted job.
+     */
+    private String safeProviderStatusMessage(String message) {
+        if(message==null||message.isBlank())return "";
+        String safe=message.replaceAll("(?i)https?://\\S+","[redacted-url]")
+                .replaceAll("(?i)(bearer|token|secret|key|password|signature|api_key)\\s*[:=]\\s*\\S+",
+                        "[redacted-credential]")
+                .replaceAll("[^\\p{L}\\p{N} _.,:;!()#=/-]"," ").trim();
+        return safe.substring(0,Math.min(safe.length(),480));
     }
 
     private String safeValidationMessage(String message) {
