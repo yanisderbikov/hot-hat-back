@@ -1742,12 +1742,16 @@ public class NeuroReplacementPilotService {
             }
             job.stage="GenAPI Kling O3: генерирую НОВУЮ сцену с обязательным стартовым кадром";
             checkpoint(job);
-            String videoUrl=paidStage(job,VIDEO_MODEL_ID,()->{
-                String cleanVideo=cleanGenApiInputUrl(job,referenceKey,"mp4");
-                String cleanImage=cleanGenApiInputUrl(job,stillKey,"jpg");
-                return submitJson(VIDEO_MODEL_ID,
-                        genApiVisualReferenceFields(scene,cleanVideo,cleanImage));
-            });
+            // Do not put a remotely billable task in submittingModel until
+            // BOTH public media URLs passed independent unauthenticated GET.
+            // 2026-11-01 real incident: JPG was 401, MP4 was 200; GenAPI
+            // returned 422 FILE_ERROR and no video task ID.
+            String cleanVideo=cleanGenApiInputUrl(job,referenceKey,"mp4");
+            String cleanImage=cleanGenApiInputUrl(job,stillKey,"jpg");
+            checkGenApiMediaDownload(cleanVideo,"video/mp4");
+            checkGenApiMediaDownload(cleanImage,"image/jpeg");
+            String videoUrl=paidStage(job,VIDEO_MODEL_ID,()->submitJson(VIDEO_MODEL_ID,
+                    genApiVisualReferenceFields(scene,cleanVideo,cleanImage)));
             String paidKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
                     "-paid-kling.mp4";
             byte[] acting;
@@ -2478,6 +2482,89 @@ public class NeuroReplacementPilotService {
                 """,token,job.id,keyPath);
         return origin.replaceAll("/+$","")+
                 "/api/v2/public/neuro-references/"+token+"/input."+extension;
+    }
+
+    /**
+     * Free public GET preflight that exactly mirrors an unauthenticated
+     * GenAPI media fetch. A green local S3 check is NOT enough: the 1-Nov
+     * 422 FILE_ERROR came from Spring Security returning 401 on input.jpg.
+     * Check status, media type, and binary header before ANY billable POST.
+     */
+    private void checkGenApiMediaDownload(String publicUrl,String expectedType)
+            throws Exception {
+        if(publicUrl==null ||
+                !("video/mp4".equals(expectedType)||"image/jpeg".equals(expectedType)))
+            throw new IOException("NEURO_MEDIA_PREFLIGHT_INVALID_TYPE");
+        URI url=URI.create(publicUrl);
+        String baseHost=URI.create(referencePublicOrigin.trim()).getHost();
+        if(!"https".equals(url.getScheme()) || baseHost==null ||
+                !baseHost.equalsIgnoreCase(url.getHost()) ||
+                url.getPort()!=-1 || url.getRawUserInfo()!=null ||
+                url.getRawQuery()!=null || url.getRawFragment()!=null ||
+                !url.getPath().matches(
+                    "/api/v2/public/neuro-references/[a-f0-9]{64}/input\\.(mp4|jpg)"))
+            throw new IOException("NEURO_MEDIA_PREFLIGHT_URL_INVALID");
+        HttpRequest request=HttpRequest.newBuilder(url)
+                .timeout(Duration.ofSeconds(25))
+                .header("Range","bytes=0-15")
+                .GET().build();
+        HttpResponse<java.io.InputStream> response=http.send(request,
+                HttpResponse.BodyHandlers.ofInputStream());
+        byte[] first;
+        try(java.io.InputStream stream=response.body()){
+            first=stream.readNBytes(16);
+        }
+        int status=response.statusCode();
+        if(status!=200 && status!=206)
+            throw new IOException("NEURO_MEDIA_PREFLIGHT_UNREACHABLE_"+
+                    expectedType.replace("/","_")+"_HTTP_"+status);
+        String type=response.headers().firstValue("Content-Type").orElse("")
+                .toLowerCase(java.util.Locale.ROOT);
+        if(!type.startsWith(expectedType))
+            throw new IOException("NEURO_MEDIA_PREFLIGHT_WRONG_CONTENT_TYPE");
+        boolean valid="image/jpeg".equals(expectedType)
+                ? first.length>=3 && (first[0]&0xff)==0xff &&
+                  (first[1]&0xff)==0xd8 && (first[2]&0xff)==0xff
+                : first.length>=8 && first[4]=='f' && first[5]=='t' &&
+                  first[6]=='y' && first[7]=='p';
+        if(!valid)throw new IOException("NEURO_MEDIA_PREFLIGHT_INVALID_HEADER");
+    }
+
+    /** Owner-only free check, no API provider or paid model POST. */
+    public Map<String,Object> inspectCharacterProviderMedia(String ownerUid,
+                                                              String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null||!ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(!GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode")))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_MEDIA_PREFLIGHT_NOT_REFERENCE_MODE");
+        Map<String,Object> result=new LinkedHashMap<>();
+        result.put("jobId",jobId);
+        result.put("paidCalls",0);
+        String prefix="neuro-replacements/"+job.ownerUid+"/"+job.id;
+        try{
+            byte[] video=objectStore.get(prefix+"-kling-reference.mp4");
+            byte[] jpeg=objectStore.get(prefix+"-kling-still.jpg");
+            MediaProbe probe=probeMp4(video);
+            if(!probe.video || probe.seconds<7.7 || probe.seconds>8.3 ||
+                    jpeg==null||jpeg.length<2048||
+                    (jpeg[0]&255)!=0xff||(jpeg[1]&255)!=0xd8)
+                throw new IOException("NEURO_MEDIA_PREFLIGHT_STORED_FILES_INVALID");
+            String videoLink=cleanGenApiInputUrl(job,prefix+"-kling-reference.mp4","mp4");
+            String jpegLink=cleanGenApiInputUrl(job,prefix+"-kling-still.jpg","jpg");
+            checkGenApiMediaDownload(videoLink,"video/mp4");
+            checkGenApiMediaDownload(jpegLink,"image/jpeg");
+            result.put("videoPublicGet",200);
+            result.put("startImagePublicGet",200);
+            result.put("check","BOTH_REFERENCES_DOWNLOADABLE_NO_PAID_POST");
+        }catch(Exception err){
+            result.put("check","REFERENCE_MEDIA_PREFLIGHT_BLOCKED");
+            result.put("technicalReason",String.valueOf(err.getMessage())
+                    .replaceAll("https?://\\S+","[url]").substring(0,
+                    Math.min(190,String.valueOf(err.getMessage()).length())));
+        }
+        return result;
     }
 
     /** Strict capability URL: no open bucket, no arbitrary key input. */
