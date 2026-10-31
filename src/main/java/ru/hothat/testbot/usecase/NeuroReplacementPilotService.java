@@ -1496,6 +1496,91 @@ public class NeuroReplacementPilotService {
     }
 
     /**
+     * A FREE preview of the 3.0 video-character reference. The character
+     * element is created from video + synchronized voice, NOT from the
+     * original moving footage as a generation motion reference.
+     *
+     * Official Kling advanced-custom-elements accepts a SINGLE 3-8s
+     * 1080p MP4 with audible speech. GenAPI's public O3 adapter documents
+     * elements[] for existing IDs, but does not document creation of a
+     * video_refer element. Do NOT submit a speculative billable GenAPI POST.
+     */
+    public byte[] prepareVideoCharacterPreview(MultipartFile video,MultipartFile voice) {
+        if(video==null||voice==null||video.isEmpty()||voice.isEmpty())
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_CHARACTER_CAMERA_AND_VOICE_REQUIRED");
+        String videoMime=video.getContentType(),voiceMime=voice.getContentType();
+        if(videoMime==null || !(videoMime.equals("video/webm")||videoMime.equals("video/mp4")) ||
+                voiceMime==null || !(voiceMime.equals("audio/webm")||
+                    voiceMime.equals("audio/mp4")||voiceMime.equals("audio/wav")||
+                    voiceMime.equals("audio/x-wav")) ||
+                video.getSize()>MAX_VIDEO_BYTES || voice.getSize()>MAX_VOICE_BYTES)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_CHARACTER_REFERENCE_MEDIA_INVALID");
+        Path camera=null,microphone=null,output=null;
+        try{
+            camera=Files.createTempFile("neuro-character-video-",
+                    videoMime.equals("video/mp4")?".mp4":".webm");
+            microphone=Files.createTempFile("neuro-character-voice-",
+                    voiceMime.contains("wav")?".wav":voiceMime.equals("audio/mp4")?".m4a":".webm");
+            output=Files.createTempFile("neuro-character-preview-",".mp4");
+            Files.write(camera,video.getBytes());
+            Files.write(microphone,voice.getBytes());
+            Process proc=new ProcessBuilder("ffmpeg","-hide_banner",
+                    "-loglevel","error","-nostdin","-y",
+                    "-i",camera.toString(),"-i",microphone.toString(),
+                    "-t","8","-map","0:v:0","-map","1:a:0",
+                    "-vf","scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos,"+
+                            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24,setsar=1",
+                    "-c:v","libx264","-preset","superfast","-crf","24","-pix_fmt","yuv420p",
+                    "-c:a","aac","-ac","1","-ar","48000","-b:a","96k",
+                    "-movflags","+faststart",output.toString()).redirectErrorStream(true).start();
+            if(!proc.waitFor(100,TimeUnit.SECONDS)) {
+                proc.destroyForcibly();
+                throw new IOException("NEURO_CHARACTER_PREVIEW_TRANSCODE_TIMEOUT");
+            }
+            if(proc.exitValue()!=0)
+                throw new IOException("NEURO_CHARACTER_PREVIEW_TRANSCODE_INVALID");
+            byte[] sample=Files.readAllBytes(output);
+            MediaProbe info=probeMp4(sample);
+            if(!info.video || !info.audio || info.seconds<7.7 || info.seconds>8.3 ||
+                    sample.length>22*1024*1024 || sample.length<25_000)
+                throw new IOException("NEURO_CHARACTER_PREVIEW_REQUIRES_EIGHT_SECONDS_WITH_AUDIO");
+            return sample;
+        }catch(InterruptedException error){
+            Thread.currentThread().interrupt();
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_CHARACTER_PREVIEW_INTERRUPTED");
+        }catch(Exception error){
+            LOG.warn("Free 8s character sample failed: {}",error.getClass().getSimpleName());
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "NEURO_CHARACTER_PREVIEW_FAILED_CHECK_CAMERA_VOICE_AND_DURATION");
+        }finally{
+            for(Path temp:List.of(camera==null?Path.of("."):camera,
+                    microphone==null?Path.of("."):microphone,
+                    output==null?Path.of("."):output)){
+                if(!temp.equals(Path.of(".")))try{Files.deleteIfExists(temp);}catch(IOException ignored){}
+            }
+        }
+    }
+
+    /** No live Kling/GenAPI POST: expose exact integration blocker. */
+    public Map<String,Object> videoCharacterCapability() {
+        Map<String,Object> result=new LinkedHashMap<>();
+        result.put("variant","kling-3-omni-video-character");
+        result.put("referenceSeconds",8);
+        result.put("sourceVideoAndVoice",true);
+        result.put("freeLocalVideoPreview",true);
+        result.put("genApiO3AcceptsExistingElements",true);
+        result.put("genApiVideoCharacterCreationVerified",false);
+        result.put("paidGenerationEnabled",false);
+        result.put("reason","NEURO_GENAPI_VIDEO_CHARACTER_CREATION_API_UNVERIFIED");
+        result.put("requiredProviderOperation","advanced-custom-elements: video_refer -> element_id -> O3 elements[]");
+        result.put("noPaidPostsDuringPreflight",true);
+        return result;
+    }
+
+    /**
      * Normalizes browser media without contacting GenAPI or consuming credits.
      * FFmpeg is installed in the Railway runtime image. Uploads are capped
      * before and after transcoding so a malformed video cannot exhaust RAM.
