@@ -94,6 +94,14 @@ public class NeuroReplacementHistoryController {
         return pilot.resumeAfterSpeechGate(owner.uid(), jobId, consented);
     }
 
+    @PostMapping("/{jobId}/resume-kling-422")
+    @ApiResponse(responseCode = "200", description = "Однократно продолжить после определённого отказа 422 с JSON HTTPS MP4. Старые TTS/Chatterbox ID сохраняются.")
+    public Map<String,Object> resumeKling422(@AuthenticationPrincipal HotHatUser owner,
+                                              @PathVariable String jobId,
+                                              @RequestParam(name="consented", defaultValue="false") boolean consented) {
+        return pilot.resumeAfterKlingValidation(owner.uid(),jobId,consented);
+    }
+
     @GetMapping("/{jobId}/video")
     @ApiResponse(responseCode = "200", description = "Архивный MP4 Нейроподмены с видео и голосом",
             content = @Content(mediaType = "video/mp4",
