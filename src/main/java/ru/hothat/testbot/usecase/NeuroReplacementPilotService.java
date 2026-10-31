@@ -2197,12 +2197,14 @@ public class NeuroReplacementPilotService {
         Job job=loadJobById(jobId);
         if(job==null || !ownerUid.equals(job.ownerUid))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
-        if(job.sourceCameraKey==null || !job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+        if(job.sourceCameraKey==null ||
+                !(job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+                  job.providerRequests.containsKey(ACTING_TASK)) ||
                 objectStore==null || !objectStore.configured())
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_ACTING_CHECK_NOT_AVAILABLE");
         try {
             byte[] source=objectStore.get(job.sourceCameraKey);
-            byte[] kling=paidKlingPreview(ownerUid,jobId); // existing ID GET only
+            byte[] kling=paidKlingPreview(ownerUid,jobId); // paid GenAPI GET or cached direct Kling
             double ssim=measureSourceCopySsim(source,job.cameraMime,kling);
             Map<String,Object> result=new LinkedHashMap<>();
             result.put("jobId",jobId);
@@ -2271,6 +2273,10 @@ public class NeuroReplacementPilotService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
         }
         String id=job.providerRequests.get(VIDEO_MODEL_ID);
+        if(CHARACTER_MODE.equals(job.providerRequests.get("character-mode")) &&
+                job.providerRequests.containsKey(ACTING_TASK)) {
+            return paidCharacterActing(ownerUid,jobId); // S3 only, no paid GET/POST
+        }
         if (id==null || id.isBlank() || objectStore==null || !objectStore.configured()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_PAID_KLING_NOT_AVAILABLE");
         }
