@@ -516,7 +516,9 @@ class NeuroReplacementPipelineSimulationTest {
         Exception error = assertThrows(Exception.class, () ->
                 ReflectionTestUtils.invokeMethod(pilot,"verifyExpressiveSpeechDuration",
                     "https://gen-api.storage.yandexcloud.net/rushed.wav",scene));
-        assertTrue(String.valueOf(error).contains("NEURO_SPEECH_TOO_FAST_OR_SILENT"));
+        assertTrue(String.valueOf(error).contains("NEURO_SPEECH_TOO_FAST_OR_SILENT") ||
+                (error.getCause() != null &&
+                 String.valueOf(error.getCause().getMessage()).contains("NEURO_SPEECH_TOO_FAST_OR_SILENT")));
     }
 
     private static Object newJob(String id, String room, String owner) throws Exception {
