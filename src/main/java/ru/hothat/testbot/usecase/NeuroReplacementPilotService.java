@@ -1443,6 +1443,81 @@ public class NeuroReplacementPilotService {
     }
 
     /**
+     * A second, distinctly identified validation rejection on the SAME
+     * archived job. The 1-Nov 422 FILE_ERROR is proven to be a public JPG
+     * HTTP 401 while the MP4 was 200. The first retry count is exactly 1
+     * (the earlier start_image_url omission), and no GenAPI task ID exists.
+     * Before even claiming the retry, require TWO successful public GETs.
+     * Only a separately confirmed ONE billable Kling POST may follow.
+     */
+    public synchronized Map<String,Object> resumeVideoReferenceMedia422(
+            String ownerUid,String jobId,boolean consented) {
+        if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "EXPLICIT_GENAPI_NEW_KLING_PAYMENT_CONSENT_REQUIRED");
+        if(!enabled||key==null||key.isBlank()||jdbc==null||
+                objectStore==null||!objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_GENAPI_OR_ARCHIVE_UNAVAILABLE");
+        Job job=loadJobById(jobId);
+        if(job==null||!ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(!GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode"))||
+                !"failed".equals(job.state)||job.error==null||
+                !job.error.contains("GENAPI_HTTP_422 Ошибка файла")||
+                !VIDEO_MODEL_ID.equals(job.submittingModel)||
+                job.kling422Retries!=1||job.sourceCameraKey==null||
+                job.sourceVoiceKey==null||job.cameraMime==null||
+                job.voiceMime==null||job.sceneAssignment==null||
+                job.providerRequests.containsKey(VIDEO_MODEL_ID)||
+                job.providerRequests.containsKey("lipsync"))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_GENAPI_MEDIA_422_NOT_ELIGIBLE");
+        Map<String,Object> free=inspectCharacterProviderMedia(ownerUid,jobId);
+        if(!"BOTH_REFERENCES_DOWNLOADABLE_NO_PAID_POST".equals(free.get("check")))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_GENAPI_MEDIA_FREE_PREFLIGHT_FAILED_"+
+                    String.valueOf(free.getOrDefault("technicalReason","UNAVAILABLE"))
+                            .replaceAll("[^A-Za-z0-9_-]","_"));
+        int claimed=jdbc.update("""
+            UPDATE neuro_replacement_job
+               SET state='processing',
+                   stage='Продолжение отклонённого GenAPI: оба файла проверены бесплатно',
+                   error_message=NULL,submitting_model=NULL,
+                   kling_422_retry_count=kling_422_retry_count+1
+             WHERE job_id=? AND owner_uid=? AND state='failed'
+               AND provider_requests->>'character-mode'='genapi-o3-video-identity-reference'
+               AND error_message LIKE '%GENAPI_HTTP_422 Ошибка файла%'
+               AND submitting_model='kling-video-o3'
+               AND kling_422_retry_count=1
+               AND NOT jsonb_exists(provider_requests,'kling-video-o3')
+               AND NOT jsonb_exists(provider_requests,'lipsync')
+               AND source_camera_key IS NOT NULL
+               AND source_voice_key IS NOT NULL
+            """,jobId,ownerUid);
+        if(claimed!=1)throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "NEURO_GENAPI_MEDIA_422_ALREADY_CLAIMED");
+        job.kling422Retries=2;
+        job.state="processing";
+        job.stage="Продолжение отклонённого GenAPI: оба файла проверены бесплатно";
+        job.error=null;
+        job.submittingModel=null;
+        byRoom.put(job.roomId,job);
+        executor.execute(()->{
+            try{
+                process(job,objectStore.get(job.sourceCameraKey),job.cameraMime,
+                        objectStore.get(job.sourceVoiceKey),job.voiceMime,job.startSeconds);
+            }catch(Exception e){
+                if(e instanceof InterruptedException||Thread.currentThread().isInterrupted())return;
+                job.state="failed";
+                job.error="NEURO_GENAPI_MEDIA_RETRY_SOURCE_UNAVAILABLE";
+                job.stage="Ошибка восстановления после проверки файлов";
+                checkpoint(job);
+            }
+        });
+        return snapshot(job);
+    }
+
+    /**
      * Recording studio in /neuro-replacement/: no room, match or bots.
      * testId is the client-generated stable UUID and makes double submits
      * idempotent across refreshes and Railway instances. Each new recording
