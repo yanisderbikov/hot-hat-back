@@ -1871,10 +1871,16 @@ public class NeuroReplacementPilotService {
         Job job=loadJobById(jobId);
         if(job==null||!ownerUid.equals(job.ownerUid))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
-        if(!CHARACTER_MODE.equals(job.providerRequests.get("character-mode")) ||
+        boolean directKling=CHARACTER_MODE.equals(
+                job.providerRequests.get("character-mode"));
+        boolean genApiReference=GENAPI_REFERENCE_MODE.equals(
+                job.providerRequests.get("character-mode"));
+        if(!(directKling||genApiReference) ||
                 !"review".equals(job.state) ||
-                !job.providerRequests.containsKey(CHARACTER_TASK) ||
-                !job.providerRequests.containsKey(ACTING_TASK) ||
+                !(directKling
+                    ? job.providerRequests.containsKey(CHARACTER_TASK) &&
+                      job.providerRequests.containsKey(ACTING_TASK)
+                    : job.providerRequests.containsKey(VIDEO_MODEL_ID)) ||
                 job.providerRequests.containsKey("lipsync"))
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "NEURO_CHARACTER_ACTING_NOT_REVIEWABLE");
@@ -1882,8 +1888,14 @@ public class NeuroReplacementPilotService {
           UPDATE neuro_replacement_job
              SET state='processing',stage='Владелец одобрил видеоперсонажа и движения'
            WHERE job_id=? AND owner_uid=? AND state='review'
-             AND jsonb_exists(provider_requests,'kling-character')
-             AND jsonb_exists(provider_requests,'kling-omni')
+             AND (
+               (provider_requests->>'character-mode'='kling-video-character-v3'
+                AND jsonb_exists(provider_requests,'kling-character')
+                AND jsonb_exists(provider_requests,'kling-omni'))
+               OR
+               (provider_requests->>'character-mode'='genapi-o3-video-identity-reference'
+                AND jsonb_exists(provider_requests,'kling-video-o3'))
+             )
              AND NOT jsonb_exists(provider_requests,'lipsync')
           """,jobId,ownerUid);
         if(claimed!=1)throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -1907,10 +1919,13 @@ public class NeuroReplacementPilotService {
         Job job=loadJobById(jobId);
         if(job==null||!ownerUid.equals(job.ownerUid))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
-        if(!CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))||
-                !job.providerRequests.containsKey(ACTING_TASK))
+        if(!isCharacterWorkflow(job) ||
+                !(job.providerRequests.containsKey(ACTING_TASK) ||
+                  job.providerRequests.containsKey(VIDEO_MODEL_ID)))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "NEURO_CHARACTER_ACTING_NOT_READY");
+        if(GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode")))
+            return paidKlingPreview(ownerUid,jobId); // old GenAPI task ID GET only
         return objectStore.get("neuro-replacements/"+ownerUid+"/"+jobId+"-paid-kling.mp4");
     }
 
