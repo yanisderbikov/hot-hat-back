@@ -7,6 +7,21 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class NeuroScenePlanTest {
     @Test
+    void videoCharacterGetsTimeForBothLinesAndAllNewGesturesWithoutChangingLegacy() {
+        String assignment="Повернуться к веб-камере, сказать «А вы всё ещё кипятите?», "+
+                "помолчать, сказать «Тогда мы идём к вам!», "+
+                "показать большой палец, погрозить кулаком, встать и уйти из кадра.";
+        var legacy=NeuroScenePlan.plan(assignment);
+        var third=NeuroScenePlan.planForCharacter(assignment);
+        assertTrue(legacy.durationSeconds()<=10);
+        assertTrue(third.durationSeconds()>=12);
+        assertTrue(third.durationSeconds()<=15);
+        assertEquals(legacy.spokenText(),third.spokenText());
+        assertTrue(third.videoPrompt().contains("Total duration EXACTLY "+
+                third.durationSeconds()+" seconds"));
+    }
+
+    @Test
     void plansDifferentHumanWrittenActionsAndSpeechWithinTenSeconds() {
         NeuroScenePlan plan = NeuroScenePlan.plan(
                 "Игрок поворачивается к вебке и говорит «А вы всё ещё кипятите?» " +
