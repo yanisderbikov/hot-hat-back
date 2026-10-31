@@ -47,6 +47,19 @@ public record NeuroScenePlan(
             "Movements and speech must feel like an actual spontaneous webcam recording. ";
 
     public static NeuroScenePlan plan(String raw) {
+        return plan(raw,10,4);
+    }
+
+    /**
+     * Video character has 12-15 seconds for distinct spoken phrases,
+     * gestures and walking out. Never squeeze the full brief into nine sec.
+     * Legacy jobs retain the original 4-10-second contract unchanged.
+     */
+    public static NeuroScenePlan planForCharacter(String raw) {
+        return plan(raw,15,12);
+    }
+
+    private static NeuroScenePlan plan(String raw,int maxSeconds,int minSeconds) {
         if (raw == null) throw invalid("NEURO_ASSIGNMENT_REQUIRED");
         String brief = Normalizer.normalize(raw, Normalizer.Form.NFC)
                 .replace('\n',' ').replace('\r',' ').replaceAll("\\s+", " ").trim();
@@ -81,10 +94,11 @@ public record NeuroScenePlan(
         if (has(lc,"улыб","смеет")) movement += .25;
         if (has(lc,"пауз","помолч","замира")) movement += .55;
         int seconds = (int)Math.ceil(voiceSeconds + movement);
-        if (seconds > 10) {
-            throw invalid("NEURO_ASSIGNMENT_EXCEEDS_TEN_SECONDS");
+        if (seconds > maxSeconds) {
+            throw invalid(maxSeconds==10 ? "NEURO_ASSIGNMENT_EXCEEDS_TEN_SECONDS"
+                    : "NEURO_CHARACTER_ASSIGNMENT_EXCEEDS_FIFTEEN_SECONDS");
         }
-        seconds = Math.max(4, seconds);
+        seconds = Math.max(minSeconds, seconds);
         double start = turn ? .6 : .3;
         boolean changeBackground = has(lc, "смени фон", "сменить фон", "изменить фон",
                 "поменяй фон", "замени фон", "на фоне", "в другой комнате", "переместись");
