@@ -328,4 +328,68 @@ class NeuroReplacementPilotServiceTest {
         assertTrue(String.valueOf(duplicate.getReason()).contains("ALREADY_CLAIMED"));
     }
 
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void klingJsonReferenceUsesSignedUrlAndRealBooleanFields() {
+        String assignment="Говорит Привет всем друзьям, затем показывает большой палец!";
+        NeuroScenePlan plan=NeuroScenePlan.plan(assignment);
+        Map<String,Object> fields=ReflectionTestUtils.invokeMethod(
+                pilot,"klingJsonReferenceFields",plan,
+                "https://signed.example.test/video.mp4");
+        assertEquals("https://signed.example.test/video.mp4",fields.get("video_url"));
+        assertEquals("reference-to-video",fields.get("model"));
+        assertEquals(true,fields.get("pro"));
+        assertEquals(false,fields.get("generate_audio"));
+        assertEquals(false,fields.get("keep_audio"));
+        assertEquals(String.valueOf(plan.durationSeconds()),fields.get("duration"));
+        assertFalse(fields.containsKey("start_image_url"));
+    }
+
+    @Test
+    void nestedGenApiValidationErrorIsNotLostOn422() throws Exception {
+        var data = new ObjectMapper().readTree(
+                "{\"detail\":[{\"loc\":[\"body\",\"video_url\"],\"type\":\"missing\","+
+                "\"msg\":\"Field required\"}]}");
+        String reason=ReflectionTestUtils.invokeMethod(pilot,"validationDetails",data);
+        assertTrue(reason.contains("Field required"));
+        assertTrue(reason.contains("video_url"));
+    }
+
+    @Test
+    void definitiveKling422RequiresNewConsentAndRefusesStaleClaim() throws Exception {
+        ResponseStatusException declined=assertThrows(ResponseStatusException.class,
+                () -> pilot.resumeAfterKlingValidation("owner-1","old-422",false));
+        assertEquals(HttpStatus.BAD_REQUEST,declined.getStatusCode());
+
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","simulation");
+        var archive=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        ResultSet saved=mock(ResultSet.class);
+        when(saved.getString(1)).thenReturn("old-422");
+        when(saved.getString(2)).thenReturn("hat-50698835685110f4");
+        when(saved.getString(3)).thenReturn("owner-1");
+        when(saved.getString(4)).thenReturn("failed");
+        when(saved.getString(5)).thenReturn("Ошибка генерации");
+        when(saved.getString(6)).thenReturn("{\"tts\":\"57010833\",\"chatterbox-speech\":\"57010840\"}");
+        when(saved.getString(8)).thenReturn("GENAPI_HTTP_422 provider rejected request");
+        when(saved.getString(10)).thenReturn("camera-key");
+        when(saved.getString(11)).thenReturn("voice-key");
+        when(saved.getString(12)).thenReturn("video/webm");
+        when(saved.getString(13)).thenReturn("audio/wav");
+        when(saved.getString(15)).thenReturn("kling-video-o3");
+        when(saved.getString(16)).thenReturn(
+                "Говорит Привет всем друзьям и показывает большой палец.");
+        when(db.query(anyString(),any(RowMapper.class),eq("old-422")))
+                .thenAnswer(call -> List.of(((RowMapper)call.getArgument(1)).mapRow(saved,0)));
+        when(db.update(anyString(),eq("old-422"),eq("owner-1"))).thenReturn(0);
+        ResponseStatusException duplicate=assertThrows(ResponseStatusException.class,
+                () -> pilot.resumeAfterKlingValidation("owner-1","old-422",true));
+        assertEquals(HttpStatus.CONFLICT,duplicate.getStatusCode());
+        assertTrue(String.valueOf(duplicate.getReason()).contains("ALREADY_CLAIMED"));
+    }
+
 }
