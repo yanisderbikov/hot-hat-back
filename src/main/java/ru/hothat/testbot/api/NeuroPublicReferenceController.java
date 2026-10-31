@@ -21,4 +21,12 @@ public class NeuroPublicReferenceController {
                 .contentType(MediaType.parseMediaType("video/mp4"))
                 .body(pilot.publicKlingReference(token));
     }
+    @GetMapping(value="/api/v2/public/neuro-references/{token}/input.wav",produces="audio/wav")
+    public ResponseEntity<byte[]> voice(@PathVariable String token) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+                .contentType(MediaType.parseMediaType("audio/wav"))
+                .body(pilot.publicVoiceReference(token));
+    }
+
 }
