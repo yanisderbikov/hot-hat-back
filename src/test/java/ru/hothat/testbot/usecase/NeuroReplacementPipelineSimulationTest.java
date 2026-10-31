@@ -468,6 +468,57 @@ class NeuroReplacementPipelineSimulationTest {
                 || (e.getCause()!=null && String.valueOf(e.getCause().getMessage()).contains("NEURO_SPEECH_TOO_FAST_OR_SILENT")));
     }
 
+    @Test
+    void dynamicNineSecondSceneAcceptsSpeechThatEndsAtSevenSecondsWithTrailingSilence() throws Exception {
+        // The 31-Oct provider really returned 5.2 voiced seconds, ending at
+        // 6.9s; its padded audio was wrongly rejected by a file-length gate.
+        byte[] paddedSpeech = generatedMedia(".wav", List.of(
+                "-f", "lavfi", "-i", "sine=frequency=470:sample_rate=24000:duration=7",
+                "-af", "apad=pad_dur=5", "-t", "12",
+                "-ac", "1", "-c:a", "pcm_s16le"));
+        HttpClient provider = mock(HttpClient.class);
+        when(provider.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(call -> {
+                    HttpRequest request = call.getArgument(0);
+                    assertEquals("GET",request.method(),"timing check must never generate or bill");
+                    return response(paddedSpeech);
+                });
+        pilot = new NeuroReplacementPilotService(new ObjectMapper(),provider);
+        ReflectionTestUtils.setField(pilot,"key","simulation");
+        NeuroScenePlan scene = NeuroScenePlan.plan(
+                "Повернуться к веб-камере и смотреть прямо в камеру. "
+                + "Выразительно произнести «А вы всё ещё кипятите?», выдержать паузу, "
+                + "затем выразительно произнести «Тогда мы идём к вам!», "
+                + "показать большой палец прямо в камеру. "
+                + "Затем угрожающе погрозить кулаком прямо в камеру, встать со стула и уйти из кадра.");
+        assertEquals(9,scene.durationSeconds());
+        assertDoesNotThrow(() -> ReflectionTestUtils.invokeMethod(pilot,
+                "verifyExpressiveSpeechDuration",
+                "https://gen-api.storage.yandexcloud.net/voice-with-silence.wav",scene));
+    }
+
+    @Test
+    void dynamicNineSecondSceneStillRejectsOverlyRushedSpeech() throws Exception {
+        byte[] rushed = generatedMedia(".wav", List.of(
+                "-f", "lavfi", "-i", "sine=frequency=470:sample_rate=24000",
+                "-t", "2.6", "-ac", "1", "-c:a", "pcm_s16le"));
+        HttpClient provider = mock(HttpClient.class);
+        when(provider.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(call -> response(rushed));
+        pilot = new NeuroReplacementPilotService(new ObjectMapper(),provider);
+        ReflectionTestUtils.setField(pilot,"key","simulation");
+        NeuroScenePlan scene = NeuroScenePlan.plan(
+                "Повернуться к веб-камере и смотреть прямо в камеру. "
+                + "Выразительно произнести «А вы всё ещё кипятите?», выдержать паузу, "
+                + "затем выразительно произнести «Тогда мы идём к вам!», "
+                + "показать большой палец прямо в камеру. "
+                + "Затем угрожающе погрозить кулаком прямо в камеру, встать со стула и уйти из кадра.");
+        Exception error = assertThrows(Exception.class, () ->
+                ReflectionTestUtils.invokeMethod(pilot,"verifyExpressiveSpeechDuration",
+                    "https://gen-api.storage.yandexcloud.net/rushed.wav",scene));
+        assertTrue(String.valueOf(error).contains("NEURO_SPEECH_TOO_FAST_OR_SILENT"));
+    }
+
     private static Object newJob(String id, String room, String owner) throws Exception {
         Class<?> type = Class.forName(NeuroReplacementPilotService.class.getName() + "$Job");
         var ctor = type.getDeclaredConstructor(String.class, String.class, String.class);
