@@ -50,6 +50,32 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("SCRUM-36: ответ Kling по сохранённому ID не превращается в 500 INTERNAL")
+    void paidKlingProviderStatusPreservesSafeSpecificCode() {
+        var error=new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.CONFLICT,
+                "NEURO_PAID_KLING_PROVIDER_FAILED");
+        var result=new GlobalExceptionHandler(false).handleResponseStatus(
+                error,request("GET","/api/v2/admin/neuro-replacements/job/paid-kling"));
+        assertThat(result.getStatusCode().value()).isEqualTo(409);
+        assertThat(result.getBody()).isNotNull();
+        assertThat(result.getBody().code()).isEqualTo("NEURO_PAID_KLING_PROVIDER_FAILED");
+        assertThat(result.getBody().error()).contains("GenAPI");
+        assertThat(result.getBody().detail()).isNull();
+    }
+
+    @Test
+    @DisplayName("SCRUM-36: остальные ResponseStatusException сохраняют прежний обработчик")
+    void unrelatedResponseStatusRemainsUnchanged() {
+        var error=new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.CONFLICT,"SOME_OTHER_GAME_CONFLICT");
+        var result=new GlobalExceptionHandler(false).handleResponseStatus(
+                error,request("GET","/api/v2/game"));
+        assertThat(result.getStatusCode().value()).isEqualTo(500);
+        assertThat(result.getBody().code()).isEqualTo("INTERNAL");
+    }
+
+    @Test
     @DisplayName("Сбой сервера без флага: общий текст, причины в теле нет")
     void internalErrorHidesCauseByDefault() {
         ErrorDTO body = new GlobalExceptionHandler(false)
