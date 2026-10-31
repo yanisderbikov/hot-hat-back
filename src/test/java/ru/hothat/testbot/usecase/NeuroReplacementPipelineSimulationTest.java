@@ -605,6 +605,8 @@ class NeuroReplacementPipelineSimulationTest {
         when(archive.get("old-voice")).thenReturn(sample);
         when(archive.presignGet(anyString(),any(java.time.Duration.class),eq("audio/wav"),
                 isNull(),anyString())).thenReturn("https://signed.example.test/valid-audio.wav");
+        when(archive.presignGet(anyString(),any(java.time.Duration.class),eq("video/mp4"),
+                isNull(),anyString())).thenReturn("https://signed.example.test/valid-video.mp4");
         pilot.setObjectStore(archive);
         Map<String,Object> resumed=pilot.resumeAfterSpeechGate(owner,id,true);
         assertEquals("processing",resumed.get("status"));
