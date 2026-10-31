@@ -38,6 +38,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -131,6 +132,9 @@ public class NeuroReplacementPilotService {
         return worker;
     });
     private final Map<String, Job> byRoom = new ConcurrentHashMap<>();
+    // Railway backend has 1 GB RAM. A concurrent native HD transcode can
+    // OOM-kill the entire API; only one no-charge character export at a time.
+    private final Semaphore characterTranscodePermit = new Semaphore(1);
     private JdbcTemplate jdbc;
     private ObjectStore objectStore;
 
@@ -1580,6 +1584,9 @@ public class NeuroReplacementPilotService {
                     voiceMime.equals("audio/x-wav")))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "NEURO_CHARACTER_ARCHIVED_MEDIA_INVALID");
+        if(!characterTranscodePermit.tryAcquire())
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "NEURO_CHARACTER_PREVIEW_BUSY_RETRY_LATER");
         Path camera=null,microphone=null,output=null;
         try{
             camera=Files.createTempFile("neuro-character-video-",
@@ -1589,17 +1596,24 @@ public class NeuroReplacementPilotService {
             output=Files.createTempFile("neuro-character-preview-",".mp4");
             Files.write(camera,videoBytes);
             Files.write(microphone,voiceBytes);
+            // Measured on the real 25s webcam: old FFmpeg settings consumed
+            // 363 MB RSS, while this 1-thread pipeline used ~112 MB RSS.
+            // A JVM + 363 MB native worker approached Railway's 1 GB cap,
+            // dropping the HTTP socket (502 / browser "Failed to fetch").
+            // Limit native workers and avoid Lanczos's intermediate buffers.
             Process proc=new ProcessBuilder("ffmpeg","-hide_banner",
                     "-loglevel","error","-nostdin","-y",
+                    "-filter_threads","1","-threads","1",
                     "-ss",String.valueOf(startSeconds),"-i",camera.toString(),
                     "-ss",String.valueOf(startSeconds),"-i",microphone.toString(),
                     "-t","8","-map","0:v:0","-map","1:a:0",
-                    "-vf","scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos,"+
+                    "-vf","scale=1920:1080:force_original_aspect_ratio=decrease:flags=bilinear,"+
                             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24,setsar=1",
-                    "-c:v","libx264","-preset","superfast","-crf","24","-pix_fmt","yuv420p",
+                    "-c:v","libx264","-preset","ultrafast","-tune","zerolatency",
+                    "-threads:v","1","-crf","26","-pix_fmt","yuv420p",
                     "-c:a","aac","-ac","1","-ar","48000","-b:a","96k",
                     "-movflags","+faststart",output.toString()).redirectErrorStream(true).start();
-            if(!proc.waitFor(100,TimeUnit.SECONDS)) {
+            if(!proc.waitFor(45,TimeUnit.SECONDS)) {
                 proc.destroyForcibly();
                 throw new IOException("NEURO_CHARACTER_PREVIEW_TRANSCODE_TIMEOUT");
             }
@@ -1623,6 +1637,7 @@ public class NeuroReplacementPilotService {
             if(camera!=null)try{Files.deleteIfExists(camera);}catch(IOException ignored){}
             if(microphone!=null)try{Files.deleteIfExists(microphone);}catch(IOException ignored){}
             if(output!=null)try{Files.deleteIfExists(output);}catch(IOException ignored){}
+            characterTranscodePermit.release();
         }
     }
 
