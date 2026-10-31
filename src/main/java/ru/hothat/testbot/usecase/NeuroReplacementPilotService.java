@@ -61,6 +61,8 @@ public class NeuroReplacementPilotService {
     private static final String SPOKEN_TEXT = "А вы всё ещё кипятите? ... Тогда мы идём к вам!";
     private static final String VIDEO_MODEL_ID = "kling-video-o3";
     private static final String VIDEO_ACTING_MODE = "reference-to-video";
+    // GenAPI O3 requires the dedicated video-reference mode for video_url (Pro only).
+    private static final String VIDEO_INPUT_REFERENCE_MODE = "video-to-video-reference";
     private static final int VIDEO_DURATION_SECONDS = 15;
     private static final String LIPSYNC_SYNC_MODE = "silence";
     private static final String TTS_MODEL_ID = "gemini-tts";
@@ -1010,6 +1012,13 @@ public class NeuroReplacementPilotService {
         if (url == null || !url.startsWith("https://")) {
             throw new IOException("NEURO_VIDEO_REFERENCE_SIGNED_URL_UNAVAILABLE");
         }
+        // A private Railway/internal hostname cannot be fetched by GenAPI.
+        URI external=URI.create(url);
+        String host=external.getHost();
+        if (host==null || host.equals("localhost") || host.endsWith(".internal") ||
+                host.endsWith(".local") || host.equals("127.0.0.1")) {
+            throw new IOException("NEURO_VIDEO_REFERENCE_NOT_PUBLIC");
+        }
         return url;
     }
 
@@ -1019,7 +1028,7 @@ public class NeuroReplacementPilotService {
             throw new IllegalArgumentException("NEURO_KLING_JSON_REFERENCE_INVALID");
         }
         return Map.of(
-                "model",VIDEO_ACTING_MODE,
+                "model",VIDEO_INPUT_REFERENCE_MODE,
                 "prompt",scene.videoPrompt(),
                 "duration",String.valueOf(scene.durationSeconds()),
                 "aspect_ratio","16:9",
