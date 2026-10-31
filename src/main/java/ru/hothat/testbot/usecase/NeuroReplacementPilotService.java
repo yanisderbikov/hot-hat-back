@@ -1365,9 +1365,45 @@ public class NeuroReplacementPilotService {
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         JsonNode data = json.readTree(response.body());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new IOException("GENAPI_HTTP_" + response.statusCode() + " " + errorCode(data));
+            String reason=errorCode(data);
+            // Pydantic/FastAPI 422 frequently puts the actual field failure
+            // under detail[0].msg, not "message". Never persist raw payloads:
+            // they may contain URLs, personally-identifying prompts or keys.
+            if (reason.isBlank()) reason=validationDetails(data);
+            if (reason.isBlank()) reason="provider rejected request without validation details";
+            throw new IOException("GENAPI_HTTP_" + response.statusCode() + " " + reason);
         }
         return data;
+    }
+
+    private String validationDetails(JsonNode data) {
+        if (data == null || data.isNull()) return "";
+        List<String> reasons=new ArrayList<>();
+        collectValidationDetails(data,reasons,0);
+        String safe=String.join("; ",reasons)
+                .replaceAll("(?i)https?://\\S+","[URL]")
+                .replaceAll("[^\\p{L}\\p{N} _.,:;!()#=/-]"," ").trim();
+        return safe.substring(0,Math.min(260,safe.length()));
+    }
+
+    private void collectValidationDetails(JsonNode data,List<String> reasons,int depth) {
+        if(data==null || depth>6 || reasons.size()>4)return;
+        if(data.isArray()) {
+            for(JsonNode item:data)collectValidationDetails(item,reasons,depth+1);
+        } else if(data.isObject()) {
+            String msg=data.path("msg").asText("");
+            if(msg.isBlank()) msg=data.path("type").asText("");
+            if(msg.isBlank()) msg=data.path("code").asText("");
+            if(!msg.isBlank()) {
+                JsonNode location=data.path("loc");
+                String loc=location.isArray()?location.toString().replaceAll("[^a-zA-Z0-9_,]",""): "";
+                reasons.add(loc.isBlank()?msg:loc+": "+msg);
+            }
+            for(String field:new String[]{"detail","errors","validation_errors","issues"}) {
+                JsonNode child=data.path(field);
+                if(!child.isMissingNode())collectValidationDetails(child,reasons,depth+1);
+            }
+        }
     }
 
     private String requestId(JsonNode data) throws IOException {
