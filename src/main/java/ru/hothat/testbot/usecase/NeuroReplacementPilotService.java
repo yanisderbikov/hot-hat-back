@@ -359,6 +359,12 @@ public class NeuroReplacementPilotService {
         }
         Map<String,Object> results = new LinkedHashMap<>();
         for (Map.Entry<String,String> entry : new LinkedHashMap<>(job.providerRequests).entrySet()) {
+            // providerRequests also holds metadata and official Kling task
+            // identifiers. Only GenAPI task IDs can be queried with this key.
+            if (!(VIDEO_MODEL_ID.equals(entry.getKey()) ||
+                    "tts".equals(entry.getKey()) ||
+                    "chatterbox-speech".equals(entry.getKey()) ||
+                    "lipsync".equals(entry.getKey()))) continue;
             try {
                 String id = entry.getValue();
                 JsonNode data = send(baseRequest(GENAPI.resolve("request/get/"+id)).GET().build());
@@ -367,7 +373,10 @@ public class NeuroReplacementPilotService {
                 item.put("status", data.path("status").asText("unknown"));
                 item.put("progress", data.path("progress").asInt(0));
                 item.put("cost", data.path("cost").isNumber()?data.path("cost").asDouble():null);
-                item.put("error",errorCode(data));
+                // Error envelopes may embed URLs, tokens, or user-provided
+                // text. Return a redacted message, never the raw provider JSON.
+                String rawReason=findProviderError(data,0);
+                item.put("error",rawReason.isBlank()?"":safeValidationMessage(rawReason));
                 results.put(entry.getKey(),item);
                 // This endpoint must stay a fast, side-effect-free GET.
                 // Large MP4 downloads/FFmpeg belong to the explicit async
@@ -379,7 +388,8 @@ public class NeuroReplacementPilotService {
                     previousInfo.forEach((k,v) -> item.put(String.valueOf(k),v));
                 }
                 item.put("requestId",entry.getValue());
-                item.put("recoveryError",String.valueOf(error.getMessage()));
+                String failure=String.valueOf(error.getMessage());
+                item.put("recoveryError",safeValidationMessage(failure));
                 results.put(entry.getKey(),item);
             }
         }
@@ -390,7 +400,7 @@ public class NeuroReplacementPilotService {
         if (job.error != null) response.put("error",job.error);
         response.put("providerRequests",results);
         if (results.isEmpty()) {
-            response.put("note","Сервер не получил ни одного ID GenAPI: платная отправка не подтверждена.");
+            response.put("note","Нет сохранённых ID GenAPI в этом задании. Служебные записи не являются подтверждением платной генерации.");
         } else if (job.providerRequests.containsKey("lipsync") &&
                 !"ready".equals(job.state)) {
             response.put("note", "Lip Sync уже оплачен. Проверка GenAPI не скачивает большие файлы и не запускает FFmpeg. Для восстановления MP4 используйте отдельную кнопку «Восстановить MP4 без оплаты».");
