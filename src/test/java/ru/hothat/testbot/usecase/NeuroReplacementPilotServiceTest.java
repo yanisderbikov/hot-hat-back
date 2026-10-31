@@ -364,6 +364,26 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void providerFailureDetailsKeepFullModerationOrValidationWordingWithoutSecrets() {
+        String exact = "Параметры сформированы некорректно. Пожалуйста, убедитесь в " +
+                "правильности введенных данных и отсутствии неприемлемого контента. " +
+                "Диагностика завершена.";
+        String safe = ReflectionTestUtils.invokeMethod(pilot,
+                "safeProviderStatusMessage",exact);
+        assertEquals(exact,safe,"The former 110-character limit hid the important ending");
+
+        String secret = exact+" https://private.example.test/input.mp4?Signature=SECRET123 "+
+                "Bearer=secret-token";
+        String scrubbed=ReflectionTestUtils.invokeMethod(pilot,
+                "safeProviderStatusMessage",secret);
+        assertTrue(scrubbed.contains("неприемлемого контента"),scrubbed);
+        assertFalse(scrubbed.contains("SECRET123"));
+        assertFalse(scrubbed.contains("private.example.test"));
+        assertFalse(scrubbed.contains("secret-token"));
+        assertTrue(scrubbed.length()<=480);
+    }
+
+    @Test
     void doesNotInventProviderFailureReason() throws Exception {
         ObjectMapper json = new ObjectMapper();
         var response = json.readTree("{\"status\":\"error\"}");
