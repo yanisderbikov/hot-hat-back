@@ -37,6 +37,52 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void genApiOnlyCapabilityActivatesWithoutAnOfficialKlingApiKey() {
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","existing-genapi-key");
+        ReflectionTestUtils.setField(pilot,"klingApiKey","");
+        JdbcTemplate jdbc=mock(JdbcTemplate.class);
+        var store=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(store.configured()).thenReturn(true);
+        pilot.setJdbcTemplate(jdbc);
+        pilot.setObjectStore(store);
+        Map<String,Object> status=pilot.videoCharacterCapability();
+        assertEquals(true,status.get("paidGenerationEnabled"));
+        assertEquals(false,status.get("officialKlingApiConfigured"));
+        assertEquals("reference-to-video",status.get("referenceMode"));
+        assertEquals(false,status.get("persistentKlingVideoElementCreated"));
+        assertEquals("genapi-o3-video-reference",status.get("variant"));
+        assertEquals(84,status.get("costEstimateRoublesPerSecond"));
+        assertEquals(false,status.get("providerDurationVerified"));
+    }
+
+    @Test
+    void genApiReferenceUsesVideoForAppearanceButNotMotionAndNeverRequestsOfficialKlingElement() {
+        var scene=NeuroScenePlan.planForCharacter(
+                "Повернуться прямо в камеру, сказать «А вы всё ещё кипятите?», "+
+                "сказать «Тогда мы идём к вам!», показать большой палец, "+
+                "погрозить кулаком, встать и уйти из кадра.");
+        String videoUrl="https://hot-hat-back.up.railway.app/api/v2/public/"+
+                "neuro-references/abc123/input.mp4";
+        Map<String,Object> fields=ReflectionTestUtils.invokeMethod(pilot,
+                "genApiVisualReferenceFields",scene,videoUrl);
+        assertEquals("reference-to-video",fields.get("model"));
+        assertEquals(videoUrl,fields.get("video_url"));
+        assertEquals(scene.durationSeconds()+"",fields.get("duration"));
+        assertEquals(true,fields.get("pro"));
+        assertEquals(false,fields.get("generate_audio"));
+        assertEquals(false,fields.get("keep_audio"));
+        assertFalse(fields.containsKey("element_list"));
+        assertFalse(fields.containsKey("start_image_url"));
+        assertFalse(fields.containsKey("klingApiKey"));
+        assertFalse(fields.containsKey("video-to-video-reference"));
+        assertTrue(fields.get("prompt").toString().contains("DO NOT reproduce"));
+        assertThrows(IllegalArgumentException.class,
+                ()->ReflectionTestUtils.invokeMethod(pilot,
+                    "genApiVisualReferenceFields",scene,"http://untrusted.test/input.mp4"));
+    }
+
+    @Test
     void videoCharacter3RequiresExplicitConsentAndSameOfficialKlingAccount() {
         ResponseStatusException noConsent=assertThrows(ResponseStatusException.class,
                 ()->pilot.startVideoCharacterFromArchive("owner-1",
