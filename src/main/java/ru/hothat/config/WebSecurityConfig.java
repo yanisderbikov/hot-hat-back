@@ -100,6 +100,7 @@ public class WebSecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v2/media/files/**").permitAll()
                         // Opaque 256-bit token expires in PostgreSQL; only this video file is public.
                         .requestMatchers(HttpMethod.GET, "/api/v2/public/neuro-references/*/input.mp4").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v2/public/neuro-references/*/input.wav").permitAll()
                         // Справочник дивизионов нужен экрану регистрации, где токена
                         // ещё нет. Оба сценария объявлены permitAll и в @PreAuthorize —
                         // без записи здесь до метода дело бы не дошло и права
