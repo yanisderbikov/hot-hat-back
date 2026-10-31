@@ -279,7 +279,7 @@ class NeuroReplacementPilotServiceTest {
         assertTrue(scene.durationSeconds() >= 4 && scene.durationSeconds() <= 10);
         assertTrue(dynamicFields.get("prompt").contains("BACKGROUND LOCK"));
         assertTrue(dynamicFields.get("prompt").contains("грозит кулаком"));
-        assertEquals("reference-to-video", dynamicFields.get("model"));
+        assertEquals("image-to-video", dynamicFields.get("model"));
         assertEquals("15", legacyFields.get("duration"), "Old paid jobs must not be rewritten");
     }
 
@@ -410,15 +410,16 @@ class NeuroReplacementPilotServiceTest {
         NeuroScenePlan plan=NeuroScenePlan.plan(assignment);
         Map<String,Object> fields=ReflectionTestUtils.invokeMethod(
                 pilot,"klingJsonReferenceFields",plan,
-                "https://signed.example.test/video.mp4");
-        assertEquals("https://signed.example.test/video.mp4",fields.get("video_url"));
-        assertEquals("video-to-video-reference",fields.get("model"));
+                "https://signed.example.test/input.jpg");
+        assertEquals("https://signed.example.test/input.jpg",fields.get("start_image_url"));
+        assertEquals("image-to-video",fields.get("model"));
         assertEquals(true,fields.get("pro"));
         assertFalse(fields.containsKey("generate_audio"),"Documented default is false");
         assertFalse(fields.containsKey("keep_audio"),"Documented default is false");
         assertFalse(fields.containsKey("aspect_ratio"),"Documented default is 16:9");
         assertEquals(String.valueOf(plan.durationSeconds()),fields.get("duration"));
-        assertFalse(fields.containsKey("start_image_url"));
+        assertFalse(fields.containsKey("video_url"),"Video reference copies motions");
+        assertTrue(String.valueOf(fields.get("prompt")).contains("@Image1"));
     }
 
     @Test
@@ -643,6 +644,35 @@ class NeuroReplacementPilotServiceTest {
         org.mockito.Mockito.verify(store).put(
                 eq("neuro-replacements/owner-1/test-123-kling-reference.mp4"),
                 any(byte[].class),eq("video/mp4"));
+    }
+
+    @Test
+    void newImageToVideoUsesOnlyOnePrivateCameraFrameWithShortLivedCleanJpegUrl() throws Exception {
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        var store=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(store.configured()).thenReturn(true);
+        pilot.setJdbcTemplate(db);
+        pilot.setObjectStore(store);
+        ReflectionTestUtils.setField(pilot,"referencePublicOrigin",
+                "https://hot-hat-back.up.railway.app");
+        Class<?> jobType=Class.forName(NeuroReplacementPilotService.class.getName()+"$Job");
+        var ctor=jobType.getDeclaredConstructor(String.class,String.class,String.class);
+        ctor.setAccessible(true);
+        Object job=ctor.newInstance("test-jpg","hat-aabbccddeeff0011","owner-1");
+        String url=ReflectionTestUtils.invokeMethod(pilot,"cleanGenApiInputUrl",job,
+                "neuro-replacements/owner-1/test-jpg-kling-still.jpg","jpg");
+        assertTrue(url.matches("https://hot-hat-back[.]up[.]railway[.]app/"+
+                "api/v2/public/neuro-references/[a-f0-9]{64}/input[.]jpg"),url);
+        assertFalse(url.contains("?"));
+        assertEquals(HttpStatus.NOT_FOUND,assertThrows(ResponseStatusException.class,
+                ()->pilot.publicKlingStill("not-a-token")).getStatusCode());
+    }
+
+    @Test
+    void reviewedActingCannotSpendWithoutExplicitConsent() {
+        ResponseStatusException denied=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeReviewedActing("owner-1","some-job",false));
+        assertEquals(HttpStatus.BAD_REQUEST,denied.getStatusCode());
     }
 
     @Test
