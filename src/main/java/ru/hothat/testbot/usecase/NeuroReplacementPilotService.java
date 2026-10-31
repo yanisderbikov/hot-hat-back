@@ -1134,6 +1134,12 @@ public class NeuroReplacementPilotService {
     private String klingApiKey;
     private static final URI KLING_API = URI.create("https://api-singapore.klingai.com");
     private static final String CHARACTER_MODE = "kling-video-character-v3";
+    private static final String GENAPI_REFERENCE_MODE = "genapi-o3-video-identity-reference";
+    private static final String GENAPI_VISUAL_REFERENCE_MODEL = "reference-to-video";
+    private static boolean isCharacterWorkflow(Job job) {
+        String mode=job.providerRequests.get("character-mode");
+        return CHARACTER_MODE.equals(mode) || GENAPI_REFERENCE_MODE.equals(mode);
+    }
     private static final String CHARACTER_TASK = "kling-character";
     private static final String ACTING_TASK = "kling-omni";
 
@@ -1309,9 +1315,9 @@ public class NeuroReplacementPilotService {
             String assignment,boolean consented) {
         if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "EXPLICIT_KLING_VIDEO_CHARACTER_PAYMENT_CONSENT_REQUIRED");
-        if(klingApiKey==null || klingApiKey.isBlank() || key==null || key.isBlank())
+        if(key==null || key.isBlank())
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "NEURO_KLING_OFFICIAL_API_KEY_NOT_CONFIGURED");
+                    "NEURO_GENAPI_KEY_NOT_CONFIGURED");
         if(jdbc==null || objectStore==null || !objectStore.configured())
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "NEURO_CHARACTER_ARCHIVE_NOT_READY");
@@ -1328,7 +1334,7 @@ public class NeuroReplacementPilotService {
         if(existing!=null) {
             if(!ownerUid.equals(existing.ownerUid))
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
-            if(!CHARACTER_MODE.equals(existing.providerRequests.get("character-mode")))
+            if(!GENAPI_REFERENCE_MODE.equals(existing.providerRequests.get("character-mode")))
                 throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_JOB_MODE_MISMATCH");
             return snapshot(existing);
         }
@@ -1345,8 +1351,8 @@ public class NeuroReplacementPilotService {
         newJob.voiceMime=archived.voiceMime;
         newJob.sceneAssignment=scene.assignment();
         newJob.startSeconds=startSeconds;
-        newJob.providerRequests.put("character-mode",CHARACTER_MODE);
-        newJob.stage="Подготовка видеоперсонажа Kling 3.0 Omni";
+        newJob.providerRequests.put("character-mode",GENAPI_REFERENCE_MODE);
+        newJob.stage="GenAPI O3: подготовка видеореференса внешности и голоса";
         persist(newJob); // Never a paid POST until durable job is committed.
         byRoom.put(room,newJob);
         executor.execute(()->{
@@ -1455,7 +1461,7 @@ public class NeuroReplacementPilotService {
         result.put("stage", job.stage);
         result.put("ready", "ready".equals(job.state));
         result.put("durationSeconds", job.sceneAssignment == null ? VIDEO_DURATION_SECONDS
-                : CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))
+                : isCharacterWorkflow(job)
                 ? NeuroScenePlan.planForCharacter(job.sceneAssignment).durationSeconds()
                 : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds());
         // Owner-only metadata for the history/video archive: an exact account of
@@ -1470,11 +1476,15 @@ public class NeuroReplacementPilotService {
                 !job.sourceVoiceKey.isBlank());
         result.put("originalMime",job.cameraMime);
 
-        result.put("characterMode",CHARACTER_MODE.equals(job.providerRequests.get("character-mode")));
+        result.put("characterMode",isCharacterWorkflow(job));
+        result.put("characterProvider",GENAPI_REFERENCE_MODE.equals(
+                job.providerRequests.get("character-mode"))?"GenAPI O3 reference-to-video":
+                CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))?
+                "Official Kling video element":"legacy");
         result.put("sceneType",job.roomId.startsWith("hat-fac7ed") ? "studio" :
                 job.sceneAssignment == null ? "legacy-pilot" : "custom");
         if (job.sceneAssignment != null) {
-            NeuroScenePlan scene = CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))
+            NeuroScenePlan scene = isCharacterWorkflow(job)
                     ? NeuroScenePlan.planForCharacter(job.sceneAssignment)
                     : NeuroScenePlan.plan(job.sceneAssignment);
             result.put("spokenText", scene.spokenText());
@@ -1779,6 +1789,10 @@ public class NeuroReplacementPilotService {
     }
 
     private void process(Job job, byte[] camera, String cameraMime, byte[] voice, String voiceMime, double startSeconds) {
+        if(GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode"))) {
+            processGenApiVisualReference(job,camera,cameraMime,voice,voiceMime);
+            return;
+        }
         if(CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))) {
             processVideoCharacter(job,camera,cameraMime,voice,voiceMime);
             return;
@@ -2080,25 +2094,29 @@ public class NeuroReplacementPilotService {
     /** No live Kling/GenAPI POST: expose exact integration blocker. */
     public Map<String,Object> videoCharacterCapability() {
         Map<String,Object> result=new LinkedHashMap<>();
-        result.put("variant","kling-3-omni-video-character");
+        result.put("variant","genapi-o3-video-reference");
         result.put("referenceSeconds",8);
         result.put("sourceVideoAndVoice",true);
         result.put("freeLocalVideoPreview",true);
         result.put("genApiO3AcceptsExistingElements",true);
         result.put("genApiVideoCharacterCreationVerified",false);
         result.put("officialKlingApiConfigured",klingApiKey!=null && !klingApiKey.isBlank());
-        boolean configured=klingApiKey!=null && !klingApiKey.isBlank() &&
-                key!=null && !key.isBlank() && jdbc!=null &&
-                objectStore!=null && objectStore.configured();
+        boolean configured=key!=null && !key.isBlank() && enabled &&
+                jdbc!=null && objectStore!=null && objectStore.configured();
         result.put("paidGenerationEnabled",configured);
-        result.put("provider","Kling official 3.0 Omni for video + GenAPI for voice and lip sync");
-        result.put("reason",configured?"OFFICIAL_KLING_AND_GENAPI_READY":
-            "NEURO_KLING_OFFICIAL_API_KEY_REQUIRED_FOR_VIDEO_CHARACTER");
-
+        result.put("provider","Existing GenAPI key only: Kling Video O3 reference-to-video, " +
+                "Gemini TTS, Chatterbox and Lip Sync");
+        result.put("referenceMode","reference-to-video");
+        result.put("persistentKlingVideoElementCreated",false);
+        result.put("providerDurationVerified",false);
+        result.put("costEstimateRoublesPerSecond",84);
+        result.put("reason",configured?"GENAPI_O3_VISUAL_REFERENCE_AVAILABLE":
+                "NEURO_GENAPI_KEY_OR_BACKEND_NOT_READY");
         result.put("requiredProviderOperation",
-                "Kling official /v1/general/advanced-custom-elements video_refer -> " +
-                "same-account /v1/videos/omni-video kling-v3-omni -> " +
-                "GenAPI speech and Lip Sync after visual approval");
+                "GenAPI Kling O3 reference-to-video with 8-second visual reference -> " +
+                "owner reviews acting -> GenAPI Gemini TTS/Chatterbox/Lip Sync");
+        result.put("warning","Reference-to-video is documented, but exact scene fidelity and " +
+                "12-15-second provider acceptance require a real, separately approved test.");
         result.put("noPaidPostsDuringPreflight",true);
         return result;
     }
@@ -2300,8 +2318,7 @@ public class NeuroReplacementPilotService {
             byte[] source=objectStore.get(job.sourceCameraKey);
             byte[] kling=paidKlingPreview(ownerUid,jobId); // paid GenAPI GET or cached direct Kling
             double ssim=measureSourceCopySsim(source,job.cameraMime,kling,
-                    CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))?
-                    job.startSeconds:0);
+                    isCharacterWorkflow(job)?job.startSeconds:0);
             Map<String,Object> result=new LinkedHashMap<>();
             result.put("jobId",jobId);
             result.put("paidCalls",0);
@@ -2516,7 +2533,7 @@ public class NeuroReplacementPilotService {
         byte[] result = download(lipSyncUrl, MAX_RESULT_BYTES);
         MediaProbe media = probeMp4(result);
         int sceneSeconds = job.sceneAssignment == null ? 10
-                : CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))
+                : isCharacterWorkflow(job)
                 ? NeuroScenePlan.planForCharacter(job.sceneAssignment).durationSeconds()
                 : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds();
         boolean acceptedLength = job.sceneAssignment == null
