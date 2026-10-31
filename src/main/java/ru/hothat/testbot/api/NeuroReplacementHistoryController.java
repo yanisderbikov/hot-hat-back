@@ -97,6 +97,38 @@ public class NeuroReplacementHistoryController {
                 .body(pilot.startStudio(owner.uid(),testId,consented,video,voice,assignment));
     }
 
+    @PostMapping(value="/{jobId}/video-character/start",
+                 consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+    @ApiResponse(responseCode="202",description="Explicitly approved new direct Kling video-character/Omni task; never repeats the old GenAPI order")
+    public ResponseEntity<Map<String,Object>> startVideoCharacter(
+            @AuthenticationPrincipal HotHatUser owner,
+            @PathVariable String jobId,
+            @RequestParam("testId") String testId,
+            @RequestParam("assignment") String assignment,
+            @RequestParam(name="startSeconds",defaultValue="0") double startSeconds,
+            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+        return ResponseEntity.accepted().body(pilot.startVideoCharacterFromArchive(
+                owner.uid(),jobId,testId,startSeconds,assignment,consented));
+    }
+
+    @GetMapping("/{jobId}/video-character/acting")
+    @ApiResponse(responseCode="200",description="Already purchased Kling 3 Omni scene for owner inspection before Lip Sync")
+    public ResponseEntity<byte[]> paidVideoCharacterActing(
+            @AuthenticationPrincipal HotHatUser owner,@PathVariable String jobId) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .body(pilot.paidCharacterActing(owner.uid(),jobId));
+    }
+
+    @PostMapping("/{jobId}/video-character/approve")
+    @ApiResponse(responseCode="200",description="Owner verifies new gestures and allows only voice/lip sync paid stages")
+    public Map<String,Object> approveCharacterVideo(
+            @AuthenticationPrincipal HotHatUser owner,@PathVariable String jobId,
+            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+        return pilot.approveCharacterActing(owner.uid(),jobId,consented);
+    }
+
     @PostMapping(value="/{jobId}/video-character/preview",
                  consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
     @ApiResponse(responseCode="200",
