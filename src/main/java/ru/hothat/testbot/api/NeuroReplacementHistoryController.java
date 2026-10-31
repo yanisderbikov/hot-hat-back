@@ -102,6 +102,14 @@ public class NeuroReplacementHistoryController {
         return pilot.resumeAfterKlingValidation(owner.uid(),jobId,consented);
     }
 
+    @PostMapping("/{jobId}/resume-verified-kling-final")
+    @ApiResponse(responseCode = "200", description = "Строго однократный подтверждённый платный тест Kling+LipSync существующего задания после бесплатной проверки видеовхода")
+    public Map<String,Object> resumeVerifiedKlingFinal(@AuthenticationPrincipal HotHatUser owner,
+                                                        @PathVariable String jobId,
+                                                        @RequestParam(name="consented", defaultValue="false") boolean consented) {
+        return pilot.resumeVerifiedKlingFinal(owner.uid(),jobId,consented);
+    }
+
     @GetMapping("/{jobId}/kling-preflight")
     @ApiResponse(responseCode = "200", description = "Бесплатно проверить сохранённый MP4 и HTTPS ссылку для Kling без создания нового GenAPI запроса")
     public Map<String,Object> klingPreflight(@AuthenticationPrincipal HotHatUser owner,
