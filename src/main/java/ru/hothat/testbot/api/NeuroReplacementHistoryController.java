@@ -64,6 +64,26 @@ public class NeuroReplacementHistoryController {
         return NeuroScenePlan.plan(assignment);
     }
 
+    @GetMapping("/studio/video-character/capability")
+    @ApiResponse(responseCode="200", description="Бесплатная проверка доступности полного видеоперсонажа и причины запрета платного запуска")
+    public Map<String,Object> videoCharacterCapability(@AuthenticationPrincipal HotHatUser owner) {
+        return pilot.videoCharacterCapability();
+    }
+
+    @PostMapping(value="/studio/video-character/preview",consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ApiResponse(responseCode="200",description="Подготовить и просмотреть восьмисекундный MP4 образец с синхронным голосом без платных API запросов")
+    public ResponseEntity<byte[]> videoCharacterPreview(@AuthenticationPrincipal HotHatUser owner,
+                                                         @RequestPart("video") MultipartFile video,
+                                                         @RequestPart("voice") MultipartFile voice) {
+        byte[] clip=pilot.prepareVideoCharacterPreview(video,voice);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "inline; filename=hot-hat-video-character-reference.mp4")
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .body(clip);
+    }
+
     @PostMapping(value="/studio", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
     @ApiResponse(responseCode = "202", description = "Вручную записанная камера и голос, новый idempotent тест без игровой комнаты")
     public ResponseEntity<Map<String,Object>> studio(@AuthenticationPrincipal HotHatUser owner,
