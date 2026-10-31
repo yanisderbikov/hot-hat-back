@@ -165,8 +165,11 @@ class NeuroReplacementPilotServiceTest {
             Exception refused=assertThrows(Exception.class,
                     ()->ReflectionTestUtils.invokeMethod(service,
                             "checkGenApiMediaDownload",url,"image/jpeg"));
-            assertTrue(refused.getMessage().contains("HTTP_401"),
-                    "HTTP 401 on JPG MUST block paid request: "+refused);
+            String reason=String.valueOf(refused)+
+                    String.valueOf(refused.getCause())+
+                    (refused.getCause()==null?"":String.valueOf(refused.getCause().getCause()));
+            assertTrue(reason.contains("HTTP_401"),
+                    "HTTP 401 on JPG MUST block paid request: "+reason);
             verify(client,times(1)).send(any(java.net.http.HttpRequest.class),
                     any(java.net.http.HttpResponse.BodyHandler.class));
         }finally{service.close();}
@@ -201,7 +204,10 @@ class NeuroReplacementPilotServiceTest {
             Exception invalid=assertThrows(Exception.class,
                     ()->ReflectionTestUtils.invokeMethod(service,
                             "checkGenApiMediaDownload",url,"image/jpeg"));
-            assertTrue(invalid.getMessage().contains("INVALID_OR_SHORT_FILE"));
+            String details=String.valueOf(invalid)+
+                    String.valueOf(invalid.getCause())+
+                    (invalid.getCause()==null?"":String.valueOf(invalid.getCause().getCause()));
+            assertTrue(details.contains("INVALID_OR_SHORT_FILE"),details);
         }finally{service.close();}
     }
 
