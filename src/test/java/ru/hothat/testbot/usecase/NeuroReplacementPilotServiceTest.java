@@ -337,7 +337,7 @@ class NeuroReplacementPilotServiceTest {
                 pilot,"klingJsonReferenceFields",plan,
                 "https://signed.example.test/video.mp4");
         assertEquals("https://signed.example.test/video.mp4",fields.get("video_url"));
-        assertEquals("reference-to-video",fields.get("model"));
+        assertEquals("video-to-video-reference",fields.get("model"));
         assertEquals(true,fields.get("pro"));
         assertEquals(false,fields.get("generate_audio"));
         assertEquals(false,fields.get("keep_audio"));
