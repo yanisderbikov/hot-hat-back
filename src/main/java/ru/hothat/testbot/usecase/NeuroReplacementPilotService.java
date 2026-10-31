@@ -1505,7 +1505,10 @@ public class NeuroReplacementPilotService {
      * elements[] for existing IDs, but does not document creation of a
      * video_refer element. Do NOT submit a speculative billable GenAPI POST.
      */
-    public byte[] prepareVideoCharacterPreview(MultipartFile video,MultipartFile voice) {
+    public byte[] prepareVideoCharacterPreview(MultipartFile video,MultipartFile voice,double startSeconds) {
+        if(!Double.isFinite(startSeconds)||startSeconds<0||startSeconds>22)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_CHARACTER_REFERENCE_START_INVALID");
         if(video==null||voice==null||video.isEmpty()||voice.isEmpty())
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "NEURO_CHARACTER_CAMERA_AND_VOICE_REQUIRED");
@@ -1528,7 +1531,8 @@ public class NeuroReplacementPilotService {
             Files.write(microphone,voice.getBytes());
             Process proc=new ProcessBuilder("ffmpeg","-hide_banner",
                     "-loglevel","error","-nostdin","-y",
-                    "-i",camera.toString(),"-i",microphone.toString(),
+                    "-ss",String.valueOf(startSeconds),"-i",camera.toString(),
+                    "-ss",String.valueOf(startSeconds),"-i",microphone.toString(),
                     "-t","8","-map","0:v:0","-map","1:a:0",
                     "-vf","scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos,"+
                             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24,setsar=1",
@@ -1556,11 +1560,9 @@ public class NeuroReplacementPilotService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "NEURO_CHARACTER_PREVIEW_FAILED_CHECK_CAMERA_VOICE_AND_DURATION");
         }finally{
-            for(Path temp:List.of(camera==null?Path.of("."):camera,
-                    microphone==null?Path.of("."):microphone,
-                    output==null?Path.of("."):output)){
-                if(!temp.equals(Path.of(".")))try{Files.deleteIfExists(temp);}catch(IOException ignored){}
-            }
+            if(camera!=null)try{Files.deleteIfExists(camera);}catch(IOException ignored){}
+            if(microphone!=null)try{Files.deleteIfExists(microphone);}catch(IOException ignored){}
+            if(output!=null)try{Files.deleteIfExists(output);}catch(IOException ignored){}
         }
     }
 
