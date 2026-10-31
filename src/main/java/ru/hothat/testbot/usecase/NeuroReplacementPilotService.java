@@ -1227,8 +1227,8 @@ public class NeuroReplacementPilotService {
                     lastActiveSeconds = (offset + frameSize) / 16000.0;
                 }
             }
-            int minimumVoicedFrames = scene == null ? 35 : Math.max(8,
-                    Math.min(24, scene.spokenText().split("\\s+").length * 2));
+            int minimumVoicedFrames = scene == null ? 35 : Math.max(10,
+                    Math.min(60, scene.spokenText().split("\\s+").length * 3));
             double minimumLastSpeech = scene == null ? 4.2 : 0.9;
             double maximumVoiceSeconds = scene == null ? 16
                     : scene.durationSeconds() - scene.speechStartSeconds();
