@@ -97,6 +97,24 @@ public class NeuroReplacementHistoryController {
                 .body(pilot.startStudio(owner.uid(),testId,consented,video,voice,assignment));
     }
 
+    @PostMapping(value="/{jobId}/video-character/preview",
+                 consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+    @ApiResponse(responseCode="200",
+            description="Бесплатно подготовить восьмисекундного видеоперсонажа из уже сохранённых видео и голоса, без новых записей и платных GenAPI запросов")
+    public ResponseEntity<byte[]> archivedVideoCharacterPreview(
+            @AuthenticationPrincipal HotHatUser owner,
+            @PathVariable String jobId,
+            @RequestParam(name="startSeconds",defaultValue="0") double startSeconds) {
+        byte[] sample=pilot.prepareArchivedVideoCharacterPreview(
+                owner.uid(),jobId,startSeconds);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "inline; filename=hot-hat-archived-video-character-8s.mp4")
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .body(sample);
+    }
+
     @GetMapping("/{jobId}")
     public Map<String,Object> job(@AuthenticationPrincipal HotHatUser owner,
                                   @PathVariable String jobId) {
