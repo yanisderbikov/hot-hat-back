@@ -2505,17 +2505,25 @@ public class NeuroReplacementPilotService {
                     "/api/v2/public/neuro-references/[a-f0-9]{64}/input\\.(mp4|jpg)"))
             throw new IOException("NEURO_MEDIA_PREFLIGHT_URL_INVALID");
         HttpRequest request=HttpRequest.newBuilder(url)
-                .timeout(Duration.ofSeconds(25))
-                .header("Range","bytes=0-15")
+                .timeout(Duration.ofSeconds(35))
                 .GET().build();
         HttpResponse<java.io.InputStream> response=http.send(request,
                 HttpResponse.BodyHandlers.ofInputStream());
         byte[] first;
+        long total;
         try(java.io.InputStream stream=response.body()){
             first=stream.readNBytes(16);
+            total=first.length;
+            byte[] buffer=new byte[8192];
+            int count;
+            while((count=stream.read(buffer))!=-1){
+                total+=count;
+                if(total>MAX_VIDEO_BYTES)
+                    throw new IOException("NEURO_MEDIA_PREFLIGHT_TOO_LARGE");
+            }
         }
         int status=response.statusCode();
-        if(status!=200 && status!=206)
+        if(status!=200)
             throw new IOException("NEURO_MEDIA_PREFLIGHT_UNREACHABLE_"+
                     expectedType.replace("/","_")+"_HTTP_"+status);
         String type=response.headers().firstValue("Content-Type").orElse("")
@@ -2527,7 +2535,8 @@ public class NeuroReplacementPilotService {
                   (first[1]&0xff)==0xd8 && (first[2]&0xff)==0xff
                 : first.length>=8 && first[4]=='f' && first[5]=='t' &&
                   first[6]=='y' && first[7]=='p';
-        if(!valid)throw new IOException("NEURO_MEDIA_PREFLIGHT_INVALID_HEADER");
+        if(!valid || total < ("image/jpeg".equals(expectedType)?2048:25000))
+            throw new IOException("NEURO_MEDIA_PREFLIGHT_INVALID_OR_SHORT_FILE");
     }
 
     /** Owner-only free check, no API provider or paid model POST. */
@@ -2560,9 +2569,9 @@ public class NeuroReplacementPilotService {
             result.put("check","BOTH_REFERENCES_DOWNLOADABLE_NO_PAID_POST");
         }catch(Exception err){
             result.put("check","REFERENCE_MEDIA_PREFLIGHT_BLOCKED");
-            result.put("technicalReason",String.valueOf(err.getMessage())
-                    .replaceAll("https?://\\S+","[url]").substring(0,
-                    Math.min(190,String.valueOf(err.getMessage()).length())));
+            String safe=String.valueOf(err.getMessage())
+                    .replaceAll("https?://\\S+","[url]");
+            result.put("technicalReason",safe.substring(0,Math.min(190,safe.length())));
         }
         return result;
     }
