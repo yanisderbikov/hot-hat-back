@@ -522,14 +522,14 @@ class NeuroReplacementPilotServiceTest {
         when(db.update(anyString(),eq(jobId),eq("owner-1"))).thenReturn(0);
         // Simulate the already-passing, free S3/MP4 preflight, then force
         // the DB CAS to lose. No paid provider POST must be reachable.
-        pilot=spy(pilot);
-        doReturn(Map.of("check","REFERENCE_READY_PROVIDER_SCHEMA_NOT_PROVEN"))
-                .when(pilot).inspectKlingReference("owner-1",jobId);
+        NeuroReplacementPilotService subject=org.mockito.Mockito.spy(pilot);
+        org.mockito.Mockito.doReturn(Map.of("check","REFERENCE_READY_PROVIDER_SCHEMA_NOT_PROVEN"))
+                .when(subject).inspectKlingReference("owner-1",jobId);
         var result=assertThrows(ResponseStatusException.class,
-                ()->pilot.resumeMinimalKlingOnce("owner-1",jobId,true));
+                ()->subject.resumeMinimalKlingOnce("owner-1",jobId,true));
         assertEquals(HttpStatus.CONFLICT,result.getStatusCode());
         assertTrue(String.valueOf(result.getReason()).contains("ALREADY_CLAIMED"));
-        verify(db).update(anyString(),eq(jobId),eq("owner-1"));
+        org.mockito.Mockito.verify(db).update(anyString(),eq(jobId),eq("owner-1"));
     }
 
 }
