@@ -1007,7 +1007,12 @@ public class NeuroReplacementPilotService {
         Job existing = existingRoomJob(roomId);
         // One payment authorization per room, even after a failed/interrupted task.
         // Return the original checkpoint; never create a second billable job.
-        if (existing != null) return snapshot(existing);
+        if (existing != null) {
+            if (!ownerUid.equals(existing.ownerUid)) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+            }
+            return snapshot(existing);
+        }
         if (video == null || video.isEmpty() || video.getSize() > MAX_VIDEO_BYTES ||
                 voice == null || voice.isEmpty() || voice.getSize() > MAX_VOICE_BYTES) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_CAMERA_OR_VOICE_SAMPLE");
@@ -1079,6 +1084,29 @@ public class NeuroReplacementPilotService {
         }
         // This room ID is a billing idempotency key, never a real game room.
         String roomId="hat-"+testId.replace("-","").substring(0,16);
+        if(consented) {
+            // Refuse truncated camera/mic samples BEFORE ordering TTS/voice/video.
+            if(video==null || voice==null || video.isEmpty() || voice.isEmpty() ||
+                    video.getSize()>MAX_VIDEO_BYTES || voice.getSize()>MAX_VOICE_BYTES) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "NEURO_STUDIO_MEDIA_MISSING_OR_TOO_LARGE");
+            }
+            try {
+                MediaProbe camera=probeMp4(video.getBytes());
+                MediaProbe microphone=probeMp4(voice.getBytes());
+                if(!camera.video || !camera.audio || !microphone.audio ||
+                        camera.seconds<11.5 || camera.seconds>31 ||
+                        microphone.seconds<11.5 || microphone.seconds>31) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "NEURO_STUDIO_RECORD_AT_LEAST_12_SECONDS_WITH_VOICE");
+                }
+            } catch(ResponseStatusException failure) {
+                throw failure;
+            } catch(Exception invalid) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "NEURO_STUDIO_CAMERA_OR_MIC_DECODE_FAILED");
+            }
+        }
         return start(roomId,ownerUid,consented,video,voice,0,assignment);
     }
 
