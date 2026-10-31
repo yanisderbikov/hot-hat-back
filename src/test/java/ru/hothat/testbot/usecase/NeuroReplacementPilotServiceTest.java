@@ -144,6 +144,109 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void publicJpegPreflightRejects401BeforeAnyPaidGenApiPost() throws Exception {
+        java.net.http.HttpClient client=mock(java.net.http.HttpClient.class);
+        NeuroReplacementPilotService service=new NeuroReplacementPilotService(
+                new ObjectMapper(),client);
+        try{
+            ReflectionTestUtils.setField(service,"referencePublicOrigin",
+                    "https://hot-hat-back.up.railway.app");
+            java.net.http.HttpResponse<java.io.InputStream> blocked=mock(
+                    java.net.http.HttpResponse.class);
+            when(blocked.statusCode()).thenReturn(401);
+            when(blocked.body()).thenReturn(new java.io.ByteArrayInputStream(
+                    new byte[]{'<','h','t','m','l','>'}));
+            when(client.send(any(java.net.http.HttpRequest.class),
+                    any(java.net.http.HttpResponse.BodyHandler.class)))
+                    .thenReturn(blocked);
+            String url="https://hot-hat-back.up.railway.app"+
+                    "/api/v2/public/neuro-references/"+"a".repeat(64)+"/input.jpg";
+            Exception refused=assertThrows(Exception.class,
+                    ()->ReflectionTestUtils.invokeMethod(service,
+                            "checkGenApiMediaDownload",url,"image/jpeg"));
+            assertTrue(refused.getMessage().contains("HTTP_401"),
+                    "HTTP 401 on JPG MUST block paid request: "+refused);
+            verify(client,times(1)).send(any(java.net.http.HttpRequest.class),
+                    any(java.net.http.HttpResponse.BodyHandler.class));
+        }finally{service.close();}
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void publicJpegPreflightAllowsFull200JpegWithoutAuthAndRejectsBrokenMagic() throws Exception {
+        java.net.http.HttpClient client=mock(java.net.http.HttpClient.class);
+        NeuroReplacementPilotService service=new NeuroReplacementPilotService(
+                new ObjectMapper(),client);
+        try{
+            ReflectionTestUtils.setField(service,"referencePublicOrigin",
+                    "https://hot-hat-back.up.railway.app");
+            java.net.http.HttpResponse<java.io.InputStream> response=mock(
+                    java.net.http.HttpResponse.class);
+            when(response.statusCode()).thenReturn(200);
+            when(response.headers()).thenReturn(java.net.http.HttpHeaders.of(
+                    Map.of("Content-Type",List.of("image/jpeg")),(key,value)->true));
+            byte[] jpeg=new byte[3000];
+            jpeg[0]=(byte)0xff;jpeg[1]=(byte)0xd8;jpeg[2]=(byte)0xff;
+            when(response.body()).thenAnswer(call->
+                    new java.io.ByteArrayInputStream(jpeg));
+            when(client.send(any(java.net.http.HttpRequest.class),
+                    any(java.net.http.HttpResponse.BodyHandler.class)))
+                    .thenReturn(response);
+            String url="https://hot-hat-back.up.railway.app"+
+                    "/api/v2/public/neuro-references/"+"b".repeat(64)+"/input.jpg";
+            ReflectionTestUtils.invokeMethod(service,
+                    "checkGenApiMediaDownload",url,"image/jpeg");
+            jpeg[1]=0;
+            Exception invalid=assertThrows(Exception.class,
+                    ()->ReflectionTestUtils.invokeMethod(service,
+                            "checkGenApiMediaDownload",url,"image/jpeg"));
+            assertTrue(invalid.getMessage().contains("INVALID_OR_SHORT_FILE"));
+        }finally{service.close();}
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void media422RetryRequiresSecondExplicitConsentAndFreePreflight() throws Exception {
+        ResponseStatusException denied=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeVideoReferenceMedia422("owner-1",
+                        "25e45c7a-64a1-45ad-b080-973e9ad20009",false));
+        assertEquals(HttpStatus.BAD_REQUEST,denied.getStatusCode());
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","simulation-only");
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        var archive=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        ResultSet row=mock(ResultSet.class);
+        String id="25e45c7a-64a1-45ad-b080-973e9ad20009";
+        when(row.getString(1)).thenReturn(id);
+        when(row.getString(2)).thenReturn("hat-fac7edcharacter25e45c7a64a145adb080973e9ad20009");
+        when(row.getString(3)).thenReturn("owner-1");
+        when(row.getString(4)).thenReturn("failed");
+        when(row.getString(6)).thenReturn(
+                "{\"character-mode\":\"genapi-o3-video-identity-reference\"}");
+        when(row.getString(8)).thenReturn(
+                "GenAPI kling-video-o3 submission: GENAPI_HTTP_422 Ошибка файла. "+
+                "Это возможно из-за отсутствия доступа к файлу.");
+        when(row.getString(10)).thenReturn("source-camera.webm");
+        when(row.getString(11)).thenReturn("source-voice.webm");
+        when(row.getString(12)).thenReturn("video/webm");
+        when(row.getString(13)).thenReturn("audio/webm");
+        when(row.getString(15)).thenReturn("kling-video-o3");
+        when(row.getString(16)).thenReturn("Сказать привет, показать кулак и встать.");
+        when(row.getInt(17)).thenReturn(1);
+        when(db.query(anyString(),any(RowMapper.class),eq(id)))
+                .thenAnswer(call->List.of(((RowMapper)call.getArgument(1)).mapRow(row,0)));
+        ResponseStatusException blocked=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeVideoReferenceMedia422("owner-1",id,true));
+        assertEquals(HttpStatus.CONFLICT,blocked.getStatusCode());
+        assertTrue(blocked.getReason().contains("PREFLIGHT_FAILED"));
+        verify(db,never()).update(anyString(),eq(id),eq("owner-1"));
+    }
+
+    @Test
     void videoCharacter3RequiresExplicitConsentAndSameOfficialKlingAccount() {
         ResponseStatusException noConsent=assertThrows(ResponseStatusException.class,
                 ()->pilot.startVideoCharacterFromArchive("owner-1",
