@@ -110,6 +110,14 @@ public class NeuroReplacementHistoryController {
         return pilot.resumeVerifiedKlingFinal(owner.uid(),jobId,consented);
     }
 
+    @PostMapping("/{jobId}/resume-minimal-kling-once")
+    @ApiResponse(responseCode = "200", description = "Одна подтверждённая попытка минимального JSON Kling с сохранёнными TTS и Chatterbox ID")
+    public Map<String,Object> resumeMinimalKlingOnce(@AuthenticationPrincipal HotHatUser owner,
+                                                      @PathVariable String jobId,
+                                                      @RequestParam(name="consented", defaultValue="false") boolean consented) {
+        return pilot.resumeMinimalKlingOnce(owner.uid(),jobId,consented);
+    }
+
     @GetMapping("/{jobId}/kling-preflight")
     @ApiResponse(responseCode = "200", description = "Бесплатно проверить сохранённый MP4 и HTTPS ссылку для Kling без создания нового GenAPI запроса")
     public Map<String,Object> klingPreflight(@AuthenticationPrincipal HotHatUser owner,
