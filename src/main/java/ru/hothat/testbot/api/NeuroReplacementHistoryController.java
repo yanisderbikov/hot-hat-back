@@ -166,6 +166,27 @@ public class NeuroReplacementHistoryController {
         return pilot.inspectKlingReference(owner.uid(),jobId);
     }
 
+
+    @PostMapping("/{jobId}/resume-lipsync-422")
+    @ApiResponse(responseCode= "200", description="Единичное платное продолжение Lip Sync после подтверждённого отказа GenAPI 422 sync_mode; старые ID Kling/TTS/Chatterbox не оплачиваются повторно")
+    public Map<String,Object> resumeLipSyncMode422(@AuthenticationPrincipal HotHatUser owner,
+                                                    @PathVariable String jobId,
+                                                    @RequestParam(name="consented",defaultValue="false") boolean consented) {
+        return pilot.resumeAfterLipSyncMode422(owner.uid(),jobId,consented);
+    }
+
+    @GetMapping("/{jobId}/paid-kling")
+    @ApiResponse(responseCode="200",description="Просмотр и скачивание уже оплаченного MP4 Kling до синхронизации губ, без нового платного запроса")
+    public ResponseEntity<byte[]> paidKling(@AuthenticationPrincipal HotHatUser owner,
+                                            @PathVariable String jobId) {
+        byte[] video=pilot.paidKlingPreview(owner.uid(),jobId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+                .header(HttpHeaders.CONTENT_DISPOSITION,"inline; filename=hot-hat-paid-kling.mp4")
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .body(video);
+    }
+
     @GetMapping("/{jobId}/video")
     @ApiResponse(responseCode = "200", description = "Архивный MP4 Нейроподмены с видео и голосом",
             content = @Content(mediaType = "video/mp4",
