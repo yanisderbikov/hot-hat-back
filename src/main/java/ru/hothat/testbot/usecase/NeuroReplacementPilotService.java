@@ -305,7 +305,8 @@ public class NeuroReplacementPilotService {
         if (jdbc == null) return List.of();
         return jdbc.query("""
             SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
-                   final_video_url,error_message,final_video_key,created_at,scene_assignment,kling_422_retry_count
+                   final_video_url,error_message,final_video_key,created_at,scene_assignment,kling_422_retry_count,
+                   source_camera_key,source_camera_mime
             FROM neuro_replacement_job WHERE owner_uid=? ORDER BY created_at DESC
             """, (rs, rowNum) -> {
             Job job = new Job(rs.getString(1),rs.getString(2),rs.getString(3));
@@ -318,6 +319,8 @@ public class NeuroReplacementPilotService {
             job.error = rs.getString(8); job.finalVideoKey = rs.getString(9);
             job.sceneAssignment = rs.getString(11);
             job.kling422Retries=rs.getInt(12);
+            job.sourceCameraKey=rs.getString(13);
+            job.cameraMime=rs.getString(14);
             Map<String,Object> result = snapshot(job);
             result.put("roomId",job.roomId);
             result.put("createdAt",rs.getTimestamp(10).toInstant().toString());
@@ -1058,6 +1061,35 @@ public class NeuroReplacementPilotService {
         return snapshot(job);
     }
 
+    /**
+     * Recording studio in /neuro-replacement/: no room, match or bots.
+     * testId is the client-generated stable UUID and makes double submits
+     * idempotent across refreshes and Railway instances. Each new recording
+     * has a new testId; old paid jobs are never overwritten.
+     */
+    public Map<String,Object> startStudio(String ownerUid,String testId,boolean consented,
+                                          MultipartFile video,MultipartFile voice,
+                                          String assignment) {
+        if(testId==null || !testId.matches(
+                "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"NEURO_STUDIO_TEST_ID_INVALID");
+        }
+        if(assignment==null || assignment.isBlank()){
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"NEURO_STUDIO_ASSIGNMENT_REQUIRED");
+        }
+        // This room ID is a billing idempotency key, never a real game room.
+        String roomId="hat-"+testId.replace("-","").substring(0,16);
+        return start(roomId,ownerUid,consented,video,voice,0,assignment);
+    }
+
+    public Map<String,Object> statusByJob(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        }
+        return snapshot(job);
+    }
+
     public Map<String, Object> status(String roomId, String ownerUid, String jobId) {
         return snapshot(find(roomId, ownerUid, jobId));
     }
@@ -1101,6 +1133,9 @@ public class NeuroReplacementPilotService {
         // what was ordered. Older paid 15s jobs remain identifiable, not rewritten.
         result.put("sceneAssignment", job.sceneAssignment);
         result.put("kling422RetryCount", job.kling422Retries);
+        result.put("originalAvailable",job.sourceCameraKey!=null && !job.sourceCameraKey.isBlank());
+        result.put("originalMime",job.cameraMime);
+
         result.put("sceneType", job.sceneAssignment == null ? "legacy-pilot" : "custom");
         if (job.sceneAssignment != null) {
             NeuroScenePlan scene = NeuroScenePlan.plan(job.sceneAssignment);
