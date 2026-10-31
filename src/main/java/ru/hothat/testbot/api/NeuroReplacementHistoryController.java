@@ -102,6 +102,13 @@ public class NeuroReplacementHistoryController {
         return pilot.resumeAfterKlingValidation(owner.uid(),jobId,consented);
     }
 
+    @GetMapping("/{jobId}/kling-preflight")
+    @ApiResponse(responseCode = "200", description = "Бесплатно проверить сохранённый MP4 и HTTPS ссылку для Kling без создания нового GenAPI запроса")
+    public Map<String,Object> klingPreflight(@AuthenticationPrincipal HotHatUser owner,
+                                              @PathVariable String jobId) {
+        return pilot.inspectKlingReference(owner.uid(),jobId);
+    }
+
     @GetMapping("/{jobId}/video")
     @ApiResponse(responseCode = "200", description = "Архивный MP4 Нейроподмены с видео и голосом",
             content = @Content(mediaType = "video/mp4",
