@@ -109,10 +109,10 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
-    void lipSyncRetainsFullVideoWhenTransferredSpeechIsShorter() {
-        assertEquals("silence", ReflectionTestUtils.getField(
+    void lipSyncUsesGenApiAcceptedModeForAlreadyAlignedFullLengthAudio() {
+        assertEquals("cut_off", ReflectionTestUtils.getField(
                 NeuroReplacementPilotService.class, "LIPSYNC_SYNC_MODE"),
-                "cut_off shortens the paid result to the speech duration");
+                "GenAPI rejected silence with HTTP 422; the local FFmpeg output is padded to exactly the video duration");
     }
 
     @Test
@@ -278,6 +278,78 @@ class NeuroReplacementPilotServiceTest {
         assertTrue(dynamicFields.get("prompt").contains("грозит кулаком"));
         assertEquals("reference-to-video", dynamicFields.get("model"));
         assertEquals("15", legacyFields.get("duration"), "Old paid jobs must not be rewritten");
+    }
+
+    @Test
+    void invalidLipSyncMode422CannotTriggerAnyPaidReplayWithoutOwnerConsent() {
+        ResponseStatusException refused=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeAfterLipSyncMode422("owner-1",
+                        "f8011911-f38d-4706-92cb-546049d42d0d",false));
+        assertEquals(HttpStatus.BAD_REQUEST,refused.getStatusCode());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void invalidLipSyncMode422OnlyResumesWhenSingleDatabaseClaimSucceeds() throws Exception {
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","simulation-only");
+        var archive=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        ResultSet row=mock(ResultSet.class);
+        String id="f8011911-f38d-4706-92cb-546049d42d0d",owner="owner-1";
+        when(row.getString(1)).thenReturn(id);
+        when(row.getString(2)).thenReturn("hat-fac7ed44e374eef2");
+        when(row.getString(3)).thenReturn(owner);
+        when(row.getString(4)).thenReturn("failed");
+        when(row.getString(6)).thenReturn("{\"tts\":\"57019817\",\"chatterbox-speech\":\"57019832\",\"kling-video-o3\":\"57020589\"}");
+        when(row.getString(8)).thenReturn("GENAPI_HTTP_422 sync_mode: Значение поля sync mode некорректно.");
+        when(row.getString(10)).thenReturn("existing-camera");
+        when(row.getString(11)).thenReturn("existing-voice");
+        when(row.getString(12)).thenReturn("video/webm");
+        when(row.getString(13)).thenReturn("audio/webm");
+        when(row.getString(15)).thenReturn("lipsync");
+        when(row.getString(16)).thenReturn(
+                "Повернуться к веб-камере и смотреть прямо в камеру. "+
+                "Выразительно произнести «А вы всё ещё кипятите?», выдержать паузу, "+
+                "затем выразительно произнести «Тогда мы идём к вам!», "+
+                "показать большой палец прямо в камеру. "+
+                "Затем угрожающе погрозить кулаком прямо в камеру, встать со стула и уйти из кадра.");
+        when(db.query(anyString(),any(RowMapper.class),eq(id))).thenAnswer(call->
+                List.of(((RowMapper)call.getArgument(1)).mapRow(row,0)));
+        when(db.update(anyString(),eq(id),eq(owner))).thenReturn(0);
+        ResponseStatusException doubleClick=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeAfterLipSyncMode422(owner,id,true));
+        assertEquals(HttpStatus.CONFLICT,doubleClick.getStatusCode());
+        assertTrue(doubleClick.getReason().contains("ALREADY_CLAIMED"));
+        verify(db,times(1)).update(anyString(),eq(id),eq(owner));
+    }
+
+    @Test
+    void general422OrOtherJobsCannotUseLipSyncSpecificRecovery() throws Exception {
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","simulation-only");
+        var archive=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        ResultSet row=mock(ResultSet.class);
+        when(row.getString(1)).thenReturn("job-with-unknown-422");
+        when(row.getString(2)).thenReturn("hat-fac7ed44e374eef2");
+        when(row.getString(3)).thenReturn("owner-1");
+        when(row.getString(4)).thenReturn("failed");
+        when(row.getString(6)).thenReturn("{\"tts\":\"57019817\",\"chatterbox-speech\":\"57019832\",\"kling-video-o3\":\"57020589\"}");
+        when(row.getString(8)).thenReturn("GENAPI_HTTP_422 video_url: invalid URL");
+        when(row.getString(15)).thenReturn("lipsync");
+        when(db.query(anyString(),any(RowMapper.class),eq("job-with-unknown-422")))
+                .thenAnswer(call->List.of(((RowMapper)call.getArgument(1)).mapRow(row,0)));
+        ResponseStatusException rejected=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeAfterLipSyncMode422("owner-1","job-with-unknown-422",true));
+        assertEquals(HttpStatus.CONFLICT,rejected.getStatusCode());
+        verify(db,never()).update(anyString(),anyString(),anyString());
     }
 
     @Test
