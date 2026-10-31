@@ -47,6 +47,38 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(e.getStatus()).body(ErrorResponses.of(request, e.getStatus(), e.getCode()));
     }
 
+    /**
+     * The read-only Kling MP4 endpoint must return its real, safe provider
+     * state. Previously ResponseStatusException fell into handleOther(),
+     * transforming provider 409/502 into a misleading 500 INTERNAL. Scope
+     * this handler to our new stable codes; preserve historical behavior
+     * for other API paths and exception reasons.
+     */
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<ErrorDTO> handleResponseStatus(
+            org.springframework.web.server.ResponseStatusException e,
+            HttpServletRequest request) {
+        String code=e.getReason();
+        if(code == null || !code.matches("NEURO_PAID_KLING_[A-Z_]+"))
+            return handleOther(e,request);
+        int status=e.getStatusCode().value();
+        String message=switch(code) {
+            case "NEURO_PAID_KLING_PROVIDER_FAILED" ->
+                    "GenAPI сообщил об ошибке задания Kling. Готовый MP4 не подтверждён.";
+            case "NEURO_PAID_KLING_PROVIDER_NOT_READY" ->
+                    "Задание Kling по сохранённому ID ещё не завершено.";
+            case "NEURO_PAID_KLING_INVALID_RESULT_URL" ->
+                    "GenAPI вернул неподтверждённый адрес результата Kling.";
+            case "NEURO_PAID_KLING_REMOTE_DOWNLOAD_FAILED" ->
+                    "GenAPI вернул ссылку, но загрузить MP4 не удалось.";
+            case "NEURO_PAID_KLING_INVALID_MEDIA" ->
+                    "Полученный MP4 не прошёл проверку видео.";
+            default -> "Получить сохранённый Kling MP4 сейчас не удалось.";
+        };
+        return ResponseEntity.status(e.getStatusCode())
+                .body(ErrorResponses.of(request,status,code,message));
+    }
+
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<ErrorDTO> handleAuth(AuthenticationException e, HttpServletRequest request) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ErrorResponses.of(request, 401, "AUTH_REQUIRED"));
