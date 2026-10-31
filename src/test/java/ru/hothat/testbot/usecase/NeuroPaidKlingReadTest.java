@@ -121,6 +121,35 @@ class NeuroPaidKlingReadTest {
         }
     }
 
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void providerStatusReadsOnlyRealGenApiIdsAndRedactsFailure() throws Exception {
+        HttpClient http=mock(HttpClient.class);
+        HttpResponse<String> response=mock(HttpResponse.class);
+        when(response.statusCode()).thenReturn(200);
+        when(response.body()).thenReturn(
+            "{\"status\":\"error\",\"progress\":100,"+
+            "\"data\":{\"error\":{\"message\":\"FILE_ERROR failed to read https://private.example.com/secret.mp4?Signature=SECRET_TOKEN\"}}}");
+        when(http.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)))
+                .thenReturn(response);
+        try(var pilot=new AutoCloseablePilot(service(http,mock(ObjectStore.class)))) {
+            var diagnosis=pilot.value.inspectProvider(OWNER,JOB);
+            var jobs=(java.util.Map<String,java.util.Map<String,Object>>)diagnosis.get("providerRequests");
+            assertEquals(1,jobs.size(),"character-mode is metadata, not a GenAPI request ID");
+            assertFalse(jobs.containsKey("character-mode"));
+            var kling=jobs.get("kling-video-o3");
+            assertEquals("57020589",kling.get("requestId"));
+            assertEquals("error",kling.get("status"));
+            assertTrue(String.valueOf(kling.get("error")).contains("FILE_ERROR"));
+            assertFalse(String.valueOf(kling.get("error")).contains("SECRET_TOKEN"));
+            assertFalse(String.valueOf(kling.get("error")).contains("private.example.com"));
+            var request=org.mockito.ArgumentCaptor.forClass(HttpRequest.class);
+            verify(http,times(1)).send(request.capture(),any(HttpResponse.BodyHandler.class));
+            assertEquals("GET",request.getValue().method());
+            assertEquals("/api/v1/request/get/57020589",request.getValue().uri().getPath());
+        }
+    }
+
     private static final class AutoCloseablePilot implements AutoCloseable {
         final NeuroReplacementPilotService value;
         AutoCloseablePilot(NeuroReplacementPilotService value) { this.value = value; }
