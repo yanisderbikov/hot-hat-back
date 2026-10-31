@@ -57,6 +57,13 @@ public class NeuroReplacementHistoryController {
         return pilot.history(owner.uid());
     }
 
+    @PostMapping(value="/studio/video-character/plan",
+                 consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+    public NeuroScenePlan videoCharacterPlan(@AuthenticationPrincipal HotHatUser owner,
+            @RequestParam("assignment") String assignment) {
+        return NeuroScenePlan.planForCharacter(assignment);
+    }
+
     @PostMapping(value="/studio/plan", consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
     @ApiResponse(responseCode="200",description="Бесплатный расчёт нового студийного задания до оплаты")
     public NeuroScenePlan studioPlan(@AuthenticationPrincipal HotHatUser owner,
