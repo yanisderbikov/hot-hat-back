@@ -521,6 +521,110 @@ class NeuroReplacementPipelineSimulationTest {
                  String.valueOf(error.getCause().getMessage()).contains("NEURO_SPEECH_TOO_FAST_OR_SILENT")));
     }
 
+
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void resumesThirtyFirstOctoberFailedSceneFromTwoPaidVoiceIdsWithOnlyTwoNewPaidPosts() throws Exception {
+        String id="f3c3190a-8f68-4a38-95df-26dc3fe17f0e";
+        String owner="owner-1", room="hat-50698835685110f4";
+        String assignment="Повернуться к веб-камере и смотреть прямо в камеру. "+
+                "Выразительно произнести «А вы всё ещё кипятите?», выдержать паузу, "+
+                "затем выразительно произнести «Тогда мы идём к вам!», "+
+                "показать большой палец прямо в камеру. "+
+                "Затем угрожающе погрозить кулаком прямо в камеру, встать со стула и уйти из кадра.";
+        byte[] camera=generatedMedia(".webm",List.of("-f","lavfi","-i",
+                "testsrc2=size=320x180:rate=15","-t","10","-an","-c:v","libvpx",
+                "-deadline","realtime","-b:v","160k"));
+        byte[] sample=generatedMedia(".wav",List.of("-f","lavfi","-i",
+                "sine=frequency=450:sample_rate=16000","-t","10","-ac","1","-c:a","pcm_s16le"));
+        byte[] paidVoice=generatedMedia(".wav",List.of("-f","lavfi","-i",
+                "sine=frequency=460:sample_rate=24000:duration=7",
+                "-af","apad=pad_dur=5","-t","12","-ac","1","-c:a","pcm_s16le"));
+        byte[] directed=generatedMedia(".mp4",List.of("-f","lavfi","-i",
+                "color=c=red:size=320x180:rate=24","-t","9","-an",
+                "-c:v","libx264","-preset","ultrafast","-pix_fmt","yuv420p"));
+        byte[] finalMp4=generatedMedia(".mp4",List.of("-f","lavfi","-i",
+                "color=c=blue:size=320x180:rate=24","-f","lavfi","-i",
+                "sine=frequency=500:sample_rate=16000","-t","9",
+                "-c:v","libx264","-preset","ultrafast","-pix_fmt","yuv420p",
+                "-c:a","aac","-shortest"));
+        List<String> paid=new ArrayList<>();
+        List<String> inspected=new ArrayList<>();
+        HttpClient client=mock(HttpClient.class);
+        when(client.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(call -> {
+                    HttpRequest req=call.getArgument(0);
+                    String path=req.uri().getPath();
+                    if ("POST".equals(req.method())) {
+                        String model=path.substring(path.lastIndexOf('/')+1);
+                        assertTrue(model.equals("kling-video-o3") || model.equals("lipsync"),
+                                "Never re-pay Gemini TTS or Chatterbox");
+                        paid.add(model);
+                        return response("{\"request_id\":\"sim-"+model+"\"}");
+                    }
+                    if (path.startsWith("/api/v1/request/get/")) {
+                        String requestId=path.substring(path.lastIndexOf('/')+1);
+                        inspected.add(requestId);
+                        String extension=requestId.equals("57010840")?"wav":
+                                requestId.equals("57010833")?"mp3":"mp4";
+                        return response("{\"status\":\"success\",\"result\":[\"https://gen-api.storage.yandexcloud.net/"
+                                +requestId+"."+extension+"\"]}");
+                    }
+                    if ("gen-api.storage.yandexcloud.net".equals(req.uri().getHost())) {
+                        if(path.endsWith("57010840.wav"))return response(paidVoice);
+                        if(path.endsWith("sim-kling-video-o3.mp4"))return response(directed);
+                        if(path.endsWith("sim-lipsync.mp4"))return response(finalMp4);
+                    }
+                    throw new IOException("Unexpected provider call "+req.method()+" "+req.uri());
+                });
+        pilot=new NeuroReplacementPilotService(new ObjectMapper(),client);
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","simulated-key");
+
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        ResultSet row=mock(ResultSet.class);
+        when(row.getString(1)).thenReturn(id);
+        when(row.getString(2)).thenReturn(room);
+        when(row.getString(3)).thenReturn(owner);
+        when(row.getString(4)).thenReturn("failed");
+        when(row.getString(5)).thenReturn("Ошибка генерации");
+        when(row.getString(6)).thenReturn("{\"tts\":\"57010833\",\"chatterbox-speech\":\"57010840\"}");
+        when(row.getString(8)).thenReturn("NEURO_SPEECH_TOO_FAST_OR_SILENT voiced=5.2s lastSpeech=6.9s");
+        when(row.getString(10)).thenReturn("old-camera");
+        when(row.getString(11)).thenReturn("old-voice");
+        when(row.getString(12)).thenReturn("video/webm");
+        when(row.getString(13)).thenReturn("audio/wav");
+        when(row.getString(16)).thenReturn(assignment);
+        when(db.query(anyString(),any(RowMapper.class),eq(id)))
+                .thenAnswer(call -> List.of(((RowMapper)call.getArgument(1)).mapRow(row,0)));
+        when(db.update(anyString(),eq(id),eq(owner))).thenReturn(1,0);
+        pilot.setJdbcTemplate(db);
+        ObjectStore archive=mock(ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        when(archive.get("old-camera")).thenReturn(camera);
+        when(archive.get("old-voice")).thenReturn(sample);
+        when(archive.presignGet(anyString(),any(java.time.Duration.class),eq("audio/wav"),
+                isNull(),anyString())).thenReturn("https://signed.example.test/valid-audio.wav");
+        pilot.setObjectStore(archive);
+        Map<String,Object> resumed=pilot.resumeAfterSpeechGate(owner,id,true);
+        assertEquals("processing",resumed.get("status"));
+        ResponseStatusException again=assertThrows(ResponseStatusException.class,
+                () -> pilot.resumeAfterSpeechGate(owner,id,true));
+        assertEquals(HttpStatus.CONFLICT,again.getStatusCode());
+        Map<String,Object> rooms=(Map<String,Object>)ReflectionTestUtils.getField(pilot,"byRoom");
+        Object job=rooms.get(room);
+        long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(35);
+        while(System.nanoTime()<until &&
+                "processing".equals(ReflectionTestUtils.getField(job,"state")))Thread.sleep(100);
+        assertEquals("ready",ReflectionTestUtils.getField(job,"state"),
+                String.valueOf(ReflectionTestUtils.getField(job,"error")));
+        assertEquals(List.of("kling-video-o3","lipsync"),paid,
+                "Two original audio IDs must be reused with GET only");
+        assertEquals(List.of("57010833","57010840","sim-kling-video-o3","sim-lipsync"),inspected);
+        verify(archive).put(eq("neuro-replacements/"+owner+"/"+id+".mp4"),
+                aryEq(finalMp4),eq("video/mp4"));
+    }
+
     private static Object newJob(String id, String room, String owner) throws Exception {
         Class<?> type = Class.forName(NeuroReplacementPilotService.class.getName() + "$Job");
         var ctor = type.getDeclaredConstructor(String.class, String.class, String.class);
