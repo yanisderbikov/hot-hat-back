@@ -65,7 +65,10 @@ public class NeuroReplacementPilotService {
     private static final String VIDEO_MODEL_ID = "kling-video-o3";
     private static final String VIDEO_ACTING_MODE = "reference-to-video";
     // GenAPI O3 requires the dedicated video-reference mode for video_url (Pro only).
-    private static final String VIDEO_INPUT_REFERENCE_MODE = "video-to-video-reference";
+    // A moving video reference replays the original person's gestures.
+    // A single still frame is the ONLY input to the new directed acting model.
+    private static final String VIDEO_INPUT_REFERENCE_MODE = "image-to-video";
+    private static final double MAX_ACCEPTED_SOURCE_COPY_SSIM = 0.965;
     private static final int VIDEO_DURATION_SECONDS = 15;
     // GenAPI lipsync endpoint accepts cut_off (its documented default).
     // "silence" is rejected by GenAPI HTTP 422 even though other upstream
@@ -1325,7 +1328,8 @@ public class NeuroReplacementPilotService {
             // uses true JSON booleans. The video is PRIVATE except for a 2h
             // pre-signed read URL, never embedded as base64 in a request.
             String cameraReferenceUrl = scene == null ? null
-                    : publishSceneCameraReference(job, klingCamera);
+                    : job.providerRequests.containsKey(VIDEO_MODEL_ID) ? null
+                    : publishSceneStillReference(job, klingCamera);
             String videoUrl = paidStage(job, VIDEO_MODEL_ID,
                     () -> scene == null
                             ? submitMultipart(VIDEO_MODEL_ID, klingEditFields(null),
@@ -1408,7 +1412,7 @@ public class NeuroReplacementPilotService {
 
     private Map<String, String> klingEditFields(NeuroScenePlan scene) {
         return Map.of(
-                "model", VIDEO_ACTING_MODE,
+                "model", scene == null ? VIDEO_ACTING_MODE : VIDEO_INPUT_REFERENCE_MODE,
                 "prompt", scene == null ? VIDEO_PROMPT : scene.videoPrompt(),
                 "duration", String.valueOf(scene == null ? VIDEO_DURATION_SECONDS : scene.durationSeconds()),
                 "aspect_ratio", "16:9",
@@ -1416,6 +1420,45 @@ public class NeuroReplacementPilotService {
                 "generate_audio", "false",
                 "keep_audio", "false"
         );
+    }
+
+    /**
+     * Capture exactly ONE source frame. The model must not receive the 10s
+     * moving source as a motion reference. Runs locally before any paid POST.
+     */
+    private byte[] extractKlingStill(byte[] cameraMp4) throws Exception {
+        Path input=Files.createTempFile("neuro-still-source-", ".mp4");
+        Path output=Files.createTempFile("neuro-still-output-", ".jpg");
+        try {
+            Files.write(input,cameraMp4);
+            Process ffmpeg=new ProcessBuilder("ffmpeg","-hide_banner","-loglevel","error",
+                    "-nostdin","-y","-ss","2.5","-i",input.toString(),
+                    "-frames:v","1","-vf","scale=1280:720:flags=lanczos",
+                    "-q:v","3",output.toString()).redirectErrorStream(true).start();
+            if(!ffmpeg.waitFor(25,TimeUnit.SECONDS)) {
+                ffmpeg.destroyForcibly();
+                throw new IOException("NEURO_STILL_EXTRACTION_TIMEOUT");
+            }
+            byte[] jpg=Files.readAllBytes(output);
+            if(ffmpeg.exitValue()!=0 || jpg.length<2048 || jpg.length>3*1024*1024 ||
+                    (jpg[0]&255)!=0xff || (jpg[1]&255)!=0xd8) {
+                throw new IOException("NEURO_STILL_EXTRACTION_INVALID");
+            }
+            return jpg;
+        }finally{
+            Files.deleteIfExists(input);
+            Files.deleteIfExists(output);
+        }
+    }
+
+    /** Publish a single JPEG for image-to-video. No movement frames leave this step. */
+    private String publishSceneStillReference(Job job,byte[] cameraMp4) throws Exception {
+        if (objectStore==null || !objectStore.configured() || jdbc==null) {
+            throw new IOException("NEURO_STILL_REFERENCE_ARCHIVE_UNAVAILABLE");
+        }
+        String keyPath="neuro-replacements/"+job.ownerUid+"/"+job.id+"-kling-still.jpg";
+        objectStore.put(keyPath,extractKlingStill(cameraMp4),"image/jpeg");
+        return cleanGenApiInputUrl(job,keyPath,"jpg");
     }
 
     /** Save an already transcoded 720p reference before a paid JSON POST. */
@@ -1430,7 +1473,7 @@ public class NeuroReplacementPilotService {
 
     /** Signed-by-capability public path without a query, for both MP4 and WAV. */
     private String cleanGenApiInputUrl(Job job,String keyPath,String extension) throws Exception {
-        if(!("mp4".equals(extension)||"wav".equals(extension)) ||
+        if(!("mp4".equals(extension)||"wav".equals(extension)||"jpg".equals(extension)) ||
                 jdbc==null || objectStore==null || !objectStore.configured()) {
             throw new IOException("NEURO_CLEAN_MEDIA_REFERENCE_INVALID");
         }
@@ -1459,14 +1502,18 @@ public class NeuroReplacementPilotService {
 
     /** Strict capability URL: no open bucket, no arbitrary key input. */
     public byte[] publicKlingReference(String token) {
-        return publicProviderReference(token,false);
+        return publicProviderReference(token,"mp4");
     }
 
     public byte[] publicVoiceReference(String token) {
-        return publicProviderReference(token,true);
+        return publicProviderReference(token,"wav");
     }
 
-    private byte[] publicProviderReference(String token,boolean audio) {
+    public byte[] publicKlingStill(String token) {
+        return publicProviderReference(token,"jpg");
+    }
+
+    private byte[] publicProviderReference(String token,String extension) {
         if (token==null || !token.matches("[a-f0-9]{64}") || jdbc==null ||
                 objectStore==null || !objectStore.configured()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_NOT_FOUND");
@@ -1478,13 +1525,15 @@ public class NeuroReplacementPilotService {
         if(matches.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                 "NEURO_REFERENCE_EXPIRED_OR_NOT_FOUND");
         String keyPath=matches.get(0);
-        if (!keyPath.startsWith("neuro-replacements/") ||
-                !(audio ? keyPath.endsWith("-lipsync-voice.wav")
-                        : keyPath.endsWith("-kling-reference.mp4"))) {
+        boolean authorizedType=extension.equals("wav")
+                ? keyPath.endsWith("-lipsync-voice.wav")
+                : extension.equals("jpg") ? keyPath.endsWith("-kling-still.jpg")
+                : extension.equals("mp4") && keyPath.endsWith("-kling-reference.mp4");
+        if (!keyPath.startsWith("neuro-replacements/") || !authorizedType) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_INVALID");
         }
         byte[] mp4=objectStore.get(keyPath);
-        if(mp4==null || mp4.length<256 || mp4.length>(audio ? MAX_VOICE_BYTES : MAX_VIDEO_BYTES)) {
+        if(mp4==null || mp4.length<256 || mp4.length>(extension.equals("wav") ? MAX_VOICE_BYTES : MAX_VIDEO_BYTES)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_MEDIA_INVALID");
         }
         return mp4;
@@ -1553,21 +1602,19 @@ public class NeuroReplacementPilotService {
         return "video/mp4".equals(job.cameraMime) ? "video/mp4" : "video/webm";
     }
 
-    /** Dynamic scenes: use GenAPI's documented URL schema and JSON types. */
-    private Map<String,Object> klingJsonReferenceFields(NeuroScenePlan scene, String videoUrl) {
-        if (scene == null || videoUrl == null || !videoUrl.startsWith("https://")) {
-            throw new IllegalArgumentException("NEURO_KLING_JSON_REFERENCE_INVALID");
+    /** Image-to-video: the first frame anchors identity and room, not old motions. */
+    private Map<String,Object> klingJsonReferenceFields(NeuroScenePlan scene, String stillUrl) {
+        if (scene == null || stillUrl == null || !stillUrl.startsWith("https://") ||
+                !stillUrl.contains("/input.jpg")) {
+            throw new IllegalArgumentException("NEURO_KLING_JPEG_REFERENCE_INVALID");
         }
-        // Provider documents default aspect_ratio=16:9,
-        // generate_audio=false and keep_audio=false. Omit those optional
-        // fields in the video-reference mode: send only fields required
-        // to preserve the silent-video + separately billed Lip Sync flow.
         return Map.of(
                 "model",VIDEO_INPUT_REFERENCE_MODE,
-                "prompt",scene.videoPrompt(),
+                "prompt",scene.videoPrompt().replace("@Video1","@Image1") +
+                        " IMPORTANT: fully animate NEW actions after the first still frame.",
                 "duration",String.valueOf(scene.durationSeconds()),
                 "pro",true,
-                "video_url",videoUrl
+                "start_image_url",stillUrl
         );
     }
 
