@@ -570,4 +570,27 @@ class NeuroReplacementPilotServiceTest {
                 any(byte[].class),eq("video/mp4"));
     }
 
+    @Test
+    void lipSyncInputAlsoUsesCleanWavUrlWithoutS3Signature() throws Exception {
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        var store=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(store.configured()).thenReturn(true);
+        pilot.setJdbcTemplate(db);
+        pilot.setObjectStore(store);
+        ReflectionTestUtils.setField(pilot,"referencePublicOrigin",
+                "https://hot-hat-back.up.railway.app");
+        Class<?> jobType=Class.forName(
+                "ru.hothat.testbot.usecase.NeuroReplacementPilotService$Job");
+        var ctor=jobType.getDeclaredConstructor(String.class,String.class,String.class);
+        ctor.setAccessible(true);
+        Object job=ctor.newInstance("test-abc","hat-aabbccddeeff0011","owner-1");
+        String clean=ReflectionTestUtils.invokeMethod(pilot,"cleanGenApiInputUrl",
+                job,"neuro-replacements/owner-1/test-abc-lipsync-voice.wav","wav");
+        assertTrue(clean.matches(
+                "https://hot-hat-back[.]up[.]railway[.]app/api/v2/public/neuro-references/[a-f0-9]{64}/input[.]wav"),clean);
+        assertFalse(clean.contains("?"),"signed S3 query causes provider file validation errors");
+        assertEquals(HttpStatus.NOT_FOUND,assertThrows(ResponseStatusException.class,
+                ()->pilot.publicVoiceReference("not-a-token")).getStatusCode());
+    }
+
 }
