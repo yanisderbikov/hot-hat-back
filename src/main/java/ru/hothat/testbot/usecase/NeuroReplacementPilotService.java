@@ -1095,8 +1095,10 @@ public class NeuroReplacementPilotService {
                 MediaProbe camera=probeMp4(video.getBytes());
                 MediaProbe microphone=probeMp4(voice.getBytes());
                 if(!camera.video || !camera.audio || !microphone.audio ||
-                        camera.seconds<11.5 || camera.seconds>31 ||
-                        microphone.seconds<11.5 || microphone.seconds>31) {
+                        // Browser WebM/MediaRecorder may omit duration metadata.
+                        // Accept that unknown case; the browser timer enforces 12s.
+                        camera.seconds>0 && (camera.seconds<11.5 || camera.seconds>31) ||
+                        microphone.seconds>0 && (microphone.seconds<11.5 || microphone.seconds>31)) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "NEURO_STUDIO_RECORD_AT_LEAST_12_SECONDS_WITH_VOICE");
                 }
