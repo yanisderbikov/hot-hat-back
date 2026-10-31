@@ -37,6 +37,64 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void videoCharacter3RequiresExplicitConsentAndSameOfficialKlingAccount() {
+        ResponseStatusException noConsent=assertThrows(ResponseStatusException.class,
+                ()->pilot.startVideoCharacterFromArchive("owner-1",
+                    "f8011911-f38d-4706-92cb-546049d42d0d",
+                    "cc7a8726-23c0-49be-81df-e87a25e4c596",0,
+                    "Произнести «Привет!» и показать большой палец.",false));
+        assertEquals(HttpStatus.BAD_REQUEST,noConsent.getStatusCode());
+        ResponseStatusException noKlingKey=assertThrows(ResponseStatusException.class,
+                ()->pilot.startVideoCharacterFromArchive("owner-1",
+                    "f8011911-f38d-4706-92cb-546049d42d0d",
+                    "cc7a8726-23c0-49be-81df-e87a25e4c596",0,
+                    "Произнести «Привет!» и показать большой палец.",true));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE,noKlingKey.getStatusCode());
+        Map<String,Object> readiness=pilot.videoCharacterCapability();
+        assertEquals(false,readiness.get("paidGenerationEnabled"));
+        assertEquals(false,readiness.get("officialKlingApiConfigured"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void officialKlingCharacterAndOmniHaveTwoDistinctDocumentedPayloads() {
+        String id="cc7a8726-23c0-49be-81df-e87a25e4c596";
+        String ref="https://hot-hat-back.up.railway.app/api/v2/public/neuro-references/"+
+                   "123456abcdef/input.mp4";
+        Map<String,Object> character=ReflectionTestUtils.invokeMethod(
+                pilot,"klingVideoCharacterFields",ref,id);
+        assertEquals("video_refer",character.get("reference_type"));
+        assertFalse(character.containsKey("video_url"));
+        Map<String,Object> media=(Map<String,Object>)character.get("element_video_list");
+        assertEquals(ref,((Map<String,Object>)((List<?>)media.get("refer_videos")).get(0)).get("video_url"));
+        NeuroScenePlan scene=NeuroScenePlan.plan(
+            "Повернуться к камере, произнести «Привет!», показать большой палец.");
+        Map<String,Object> omni=ReflectionTestUtils.invokeMethod(
+                pilot,"klingOmniCharacterFields",123L,
+                "https://hot-hat-back.up.railway.app/api/v2/public/neuro-references/still/input.jpg",
+                scene,id);
+        assertEquals("kling-v3-omni",omni.get("model_name"));
+        assertEquals("pro",omni.get("mode"));
+        assertEquals(false,omni.get("multi_shot"));
+        assertFalse(omni.containsKey("video_list"),"Old source movements must not be used");
+        List<?> elements=(List<?>)omni.get("element_list");
+        assertEquals(123L,((Map<?,?>)elements.get(0)).get("element_id"));
+        assertTrue(omni.get("prompt").toString().contains("<<<element_1>>>"));
+        assertTrue(omni.get("prompt").toString().contains("<<<image_1>>>"));
+    }
+
+    @Test
+    void ownerMustApproveNewGesturesBeforeLipSyncCanBePurchased() {
+        ResponseStatusException noConsent=assertThrows(ResponseStatusException.class,
+                ()->pilot.approveCharacterActing("owner-1",
+                        "f8011911-f38d-4706-92cb-546049d42d0d",false));
+        assertEquals(HttpStatus.BAD_REQUEST,noConsent.getStatusCode());
+        assertEquals(HttpStatus.NOT_FOUND,assertThrows(ResponseStatusException.class,
+                ()->pilot.approveCharacterActing("owner-1",
+                        "f8011911-f38d-4706-92cb-546049d42d0d",true)).getStatusCode());
+    }
+
+    @Test
     void paidRequestRequiresExplicitConsent() {
         ReflectionTestUtils.setField(pilot, "enabled", true);
         ReflectionTestUtils.setField(pilot, "key", "local-test-token");
