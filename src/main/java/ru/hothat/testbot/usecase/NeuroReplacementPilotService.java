@@ -1914,7 +1914,20 @@ public class NeuroReplacementPilotService {
         }
     }
 
-    /** Only documented GenAPI O3 fields, preserving appearance not source motion. */
+    /**
+     * Kling O3 reference-to-video (image/element based), NOT the separate
+     * video-to-video-reference/edit modes. Its video-identity reference is
+     * supplied as an element's video_url, referenced by @Element1 in text.
+     * Sending a top-level video_url alongside start_image_url selects an
+     * incompatible input combination in O3 adapters and was the only
+     * unverified field combination in the failed 57031657 provider request.
+     *
+     * The camera clip remains a VISUAL identity reference, not an instruction
+     * to repeat the original source motion; the single JPG anchors the room.
+     * All media URLs are validated by free public GET before paid submission.
+     * This field layout still requires real GenAPI verification before claiming
+     * the final MP4 is ready; never auto-retry a previously failed provider ID.
+     */
     private Map<String,Object> genApiVisualReferenceFields(NeuroScenePlan scene,
             String videoUrl,String startImageUrl) {
         if(scene==null||videoUrl==null||startImageUrl==null||
@@ -1922,19 +1935,25 @@ public class NeuroReplacementPilotService {
                 !startImageUrl.startsWith("https://")||
                 !startImageUrl.contains("/input.jpg"))
             throw new IllegalArgumentException("NEURO_GENAPI_VIDEO_AND_START_IMAGE_REQUIRED");
+        String prompt=scene.videoPrompt().replace("@Video1","@Element1")
+                .replace("@Image1","the first webcam frame")+
+                " @Element1 is the identity reference from the person's recorded "+
+                "webcam video, NOT a motion template. The starting image anchors "+
+                "the unchanged room and camera angle. Preserve identity, clothing "+
+                "and facial features. Perform NEW gestures, mouth movements and "+
+                "actions from the written instructions, not the source gestures.";
+        if(prompt.length()>2500)
+            throw new IllegalArgumentException("NEURO_GENAPI_PROVIDER_PROMPT_TOO_LONG");
         return Map.of(
                 "model",GENAPI_VISUAL_REFERENCE_MODEL,
-                "prompt",scene.videoPrompt().replace("@Image1","@Image1")+
-                        " @Image1 is the STARTING webcam frame, while @Video1 is ONLY "+
-                        "an appearance reference across angles. Preserve identity, room "+
-                        "and microexpressions. Generate NEW acting from the written "+
-                        "directions; do not replay the source gestures, timing or poses.",
+                "prompt",prompt,
                 "duration",String.valueOf(scene.durationSeconds()),
-                "video_url",videoUrl,
                 "start_image_url",startImageUrl,
+                // Only one video element per O3 request. It preserves the
+                // video-character reference without routing to motion edit.
+                "elements",List.of(Map.of("video_url",videoUrl)),
                 "pro",true,
                 "generate_audio",false,
-                "keep_audio",false,
                 "aspect_ratio","16:9",
                 "translate_input",false
         );
