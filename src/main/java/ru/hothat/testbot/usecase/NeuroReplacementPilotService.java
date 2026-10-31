@@ -596,6 +596,74 @@ public class NeuroReplacementPilotService {
         return snapshot(job);
     }
 
+    /**
+     * A definitely rejected HTTP 422 did not return any provider request ID.
+     * Allows ONE separately authorized retry with the documented HTTPS video
+     * reference JSON shape. The already-paid TTS/Chatterbox IDs are retained.
+     * Fail closed on any timeout, unknown error, or a recorded Kling ID.
+     */
+    public synchronized Map<String,Object> resumeAfterKlingValidation(String ownerUid, String jobId,
+                                                                        boolean consented) {
+        if (!consented) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "EXPLICIT_KLING_PAYMENT_CONSENT_REQUIRED");
+        if (!enabled) throw new ResponseStatusException(HttpStatus.FORBIDDEN,"NEURO_REPLACEMENT_DISABLED");
+        if (key==null || key.isBlank()) throw new ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,"GENAPI_API_KEY_NOT_CONFIGURED");
+        if (jdbc==null || objectStore==null || !objectStore.configured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"NEURO_RESULT_ARCHIVE_NOT_CONFIGURED");
+        }
+        Job job=loadJobById(jobId);
+        if (job==null || !ownerUid.equals(job.ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        }
+        if (!"failed".equals(job.state) || job.error==null ||
+                !job.error.startsWith("GENAPI_HTTP_422") ||
+                !VIDEO_MODEL_ID.equals(job.submittingModel) ||
+                job.sceneAssignment==null || job.sceneAssignment.isBlank() ||
+                job.providerRequests.get("tts")==null ||
+                job.providerRequests.get("chatterbox-speech")==null ||
+                job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+                job.providerRequests.containsKey("lipsync") ||
+                job.sourceCameraKey==null || job.sourceVoiceKey==null ||
+                job.cameraMime==null || job.voiceMime==null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_KLING_422_RESUME_NOT_ELIGIBLE");
+        }
+        int claimed=jdbc.update("""
+            UPDATE neuro_replacement_job
+               SET state='processing',stage='Повтор проверки отклонённого Kling JSON',
+                   error_message=NULL,submitting_model=NULL
+             WHERE job_id=? AND owner_uid=? AND state='failed'
+               AND error_message LIKE 'GENAPI_HTTP_422%'
+               AND submitting_model='kling-video-o3'
+               AND scene_assignment IS NOT NULL
+               AND jsonb_exists(provider_requests,'tts')
+               AND jsonb_exists(provider_requests,'chatterbox-speech')
+               AND NOT jsonb_exists(provider_requests,'kling-video-o3')
+               AND NOT jsonb_exists(provider_requests,'lipsync')
+            """,jobId,ownerUid);
+        if (claimed!=1) throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "NEURO_KLING_422_RESUME_ALREADY_CLAIMED");
+        job.state="processing";
+        job.stage="Повтор проверки отклонённого Kling JSON";
+        job.error=null;
+        job.submittingModel=null;
+        byRoom.put(job.roomId,job);
+        executor.execute(() -> {
+            try {
+                byte[] camera=objectStore.get(job.sourceCameraKey);
+                byte[] voice=objectStore.get(job.sourceVoiceKey);
+                process(job,camera,job.cameraMime,voice,job.voiceMime,job.startSeconds);
+            } catch(Exception error) {
+                if(error instanceof InterruptedException || Thread.currentThread().isInterrupted())return;
+                job.state="failed";
+                job.stage="Ошибка восстановления после HTTP 422";
+                job.error="NEURO_KLING_422_RESUME_INPUT_FAILED: "+error.getClass().getSimpleName();
+                checkpoint(job);
+            }
+        });
+        return snapshot(job);
+    }
+
     public byte[] archivedVideo(String ownerUid, String jobId) {
         Job job = findOwnerJob(ownerUid,jobId);
         if (job == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
