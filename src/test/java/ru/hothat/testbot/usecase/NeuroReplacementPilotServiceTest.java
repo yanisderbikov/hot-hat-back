@@ -293,7 +293,7 @@ class NeuroReplacementPilotServiceTest {
 
     @Test
     @SuppressWarnings({"unchecked","rawtypes"})
-    void invalidLipSyncMode422OnlyResumesWhenSingleDatabaseClaimSucceeds() throws Exception {
+    void invalidLipSyncMode422FailsClosedWhenPaidKlingQualityCannotBeVerified() throws Exception {
         ReflectionTestUtils.setField(pilot,"enabled",true);
         ReflectionTestUtils.setField(pilot,"key","simulation-only");
         var archive=mock(ru.hothat.common.storage.ObjectStore.class);
@@ -325,9 +325,9 @@ class NeuroReplacementPilotServiceTest {
         when(db.update(anyString(),eq(id),eq(owner))).thenReturn(0);
         ResponseStatusException doubleClick=assertThrows(ResponseStatusException.class,
                 ()->pilot.resumeAfterLipSyncMode422(owner,id,true));
-        assertEquals(HttpStatus.CONFLICT,doubleClick.getStatusCode());
-        assertTrue(doubleClick.getReason().contains("ALREADY_CLAIMED"));
-        verify(db,times(1)).update(anyString(),eq(id),eq(owner));
+        assertEquals(HttpStatus.BAD_GATEWAY,doubleClick.getStatusCode(),
+                "Never charge Lip Sync when the old paid Kling cannot be quality-checked");
+        verify(db,never()).update(anyString(),eq(id),eq(owner));
     }
 
     @Test
