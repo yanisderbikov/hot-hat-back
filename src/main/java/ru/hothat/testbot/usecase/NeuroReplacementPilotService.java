@@ -1206,14 +1206,15 @@ public class NeuroReplacementPilotService {
         if (scene == null || videoUrl == null || !videoUrl.startsWith("https://")) {
             throw new IllegalArgumentException("NEURO_KLING_JSON_REFERENCE_INVALID");
         }
+        // Provider documents default aspect_ratio=16:9,
+        // generate_audio=false and keep_audio=false. Omit those optional
+        // fields in the video-reference mode: send only fields required
+        // to preserve the silent-video + separately billed Lip Sync flow.
         return Map.of(
                 "model",VIDEO_INPUT_REFERENCE_MODE,
                 "prompt",scene.videoPrompt(),
                 "duration",String.valueOf(scene.durationSeconds()),
-                "aspect_ratio","16:9",
                 "pro",true,
-                "generate_audio",false,
-                "keep_audio",false,
                 "video_url",videoUrl
         );
     }
