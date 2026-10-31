@@ -532,4 +532,41 @@ class NeuroReplacementPilotServiceTest {
         org.mockito.Mockito.verify(db).update(anyString(),eq(jobId),eq("owner-1"));
     }
 
+    @Test
+    void studioRejectsInvalidIdAndRequiresNewPaymentConsent() {
+        var sample = new MockMultipartFile("video","camera.webm","video/webm",new byte[]{1});
+        assertEquals(HttpStatus.BAD_REQUEST,assertThrows(ResponseStatusException.class,
+                ()->pilot.startStudio("owner-1","bad-uuid",true,sample,sample,
+                        "Говорит Привет всем друзьям.")).getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST,assertThrows(ResponseStatusException.class,
+                ()->pilot.startStudio("owner-1","aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        false,sample,sample,"Говорит Привет всем друзьям.")).getStatusCode());
+    }
+
+    @Test
+    void sourceReferenceHasCleanMp4SuffixWithoutAnySignedS3Query() throws Exception {
+        var db=mock(JdbcTemplate.class);
+        var store=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(store.configured()).thenReturn(true);
+        pilot.setJdbcTemplate(db);
+        pilot.setObjectStore(store);
+        ReflectionTestUtils.setField(pilot,"referencePublicOrigin",
+                "https://hot-hat-back.up.railway.app");
+        Class<?> jobType=Class.forName(
+                "ru.hothat.testbot.usecase.NeuroReplacementPilotService$Job");
+        var ctor=jobType.getDeclaredConstructor(String.class,String.class,String.class);
+        ctor.setAccessible(true);
+        Object job=ctor.newInstance("test-123","hat-aabbccddeeff0011","owner-1");
+        String clean=ReflectionTestUtils.invokeMethod(pilot,
+                "publishSceneCameraReference",job,new byte[300]);
+        assertTrue(clean.matches(
+                "https://hot-hat-back[.]up[.]railway[.]app/api/v2/public/neuro-references/[a-f0-9]{64}/input[.]mp4"),
+                clean);
+        assertFalse(clean.contains("?"),"S3 query params caused the real GenAPI 422");
+        assertFalse(clean.contains("X-Amz"),"Never forward S3 signatures to GenAPI");
+        org.mockito.Mockito.verify(store).put(
+                eq("neuro-replacements/owner-1/test-123-kling-reference.mp4"),
+                any(byte[].class),eq("video/mp4"));
+    }
+
 }
