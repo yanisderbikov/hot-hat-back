@@ -538,6 +538,7 @@ class NeuroReplacementPilotServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST,assertThrows(ResponseStatusException.class,
                 ()->pilot.startStudio("owner-1","bad-uuid",true,sample,sample,
                         "Говорит Привет всем друзьям.")).getStatusCode());
+        ReflectionTestUtils.setField(pilot,"enabled",true);
         assertEquals(HttpStatus.BAD_REQUEST,assertThrows(ResponseStatusException.class,
                 ()->pilot.startStudio("owner-1","aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
                         false,sample,sample,"Говорит Привет всем друзьям.")).getStatusCode());
