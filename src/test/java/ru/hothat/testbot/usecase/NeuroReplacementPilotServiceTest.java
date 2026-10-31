@@ -64,22 +64,42 @@ class NeuroReplacementPilotServiceTest {
                 "погрозить кулаком, встать и уйти из кадра.");
         String videoUrl="https://hot-hat-back.up.railway.app/api/v2/public/"+
                 "neuro-references/abc123/input.mp4";
+        String stillUrl="https://hot-hat-back.up.railway.app/api/v2/public/"+
+                "neuro-references/def456/input.jpg";
         Map<String,Object> fields=ReflectionTestUtils.invokeMethod(pilot,
-                "genApiVisualReferenceFields",scene,videoUrl);
+                "genApiVisualReferenceFields",scene,videoUrl,stillUrl);
         assertEquals("reference-to-video",fields.get("model"));
+        assertEquals(stillUrl,fields.get("start_image_url"),
+                "GenAPI 422 requires start_image_url whenever reference-to-video");
         assertEquals(videoUrl,fields.get("video_url"));
         assertEquals(scene.durationSeconds()+"",fields.get("duration"));
         assertEquals(true,fields.get("pro"));
         assertEquals(false,fields.get("generate_audio"));
         assertEquals(false,fields.get("keep_audio"));
         assertFalse(fields.containsKey("element_list"));
-        assertFalse(fields.containsKey("start_image_url"));
+        assertTrue(fields.containsKey("start_image_url"));
         assertFalse(fields.containsKey("klingApiKey"));
         assertFalse(fields.containsKey("video-to-video-reference"));
         assertTrue(fields.get("prompt").toString().contains("DO NOT reproduce"));
         assertThrows(IllegalArgumentException.class,
                 ()->ReflectionTestUtils.invokeMethod(pilot,
-                    "genApiVisualReferenceFields",scene,"http://untrusted.test/input.mp4"));
+                    "genApiVisualReferenceFields",scene,"http://untrusted.test/input.mp4",stillUrl));
+        assertThrows(IllegalArgumentException.class,
+                ()->ReflectionTestUtils.invokeMethod(pilot,
+                    "genApiVisualReferenceFields",scene,videoUrl,null));
+    }
+
+    @Test
+    void exactGenApiStartFrame422CanOnlyBeRetriedWithSeparateConsent() {
+        ResponseStatusException noConsent=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeVideoReferenceStartImage422("owner-1",
+                        "25e45c7a-64a1-45ad-b080-973e9ad20009",false));
+        assertEquals(HttpStatus.BAD_REQUEST,noConsent.getStatusCode());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE,
+                assertThrows(ResponseStatusException.class,
+                    ()->pilot.resumeVideoReferenceStartImage422("owner-1",
+                        "25e45c7a-64a1-45ad-b080-973e9ad20009",true))
+                        .getStatusCode());
     }
 
     @Test
