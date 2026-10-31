@@ -1315,9 +1315,9 @@ public class NeuroReplacementPilotService {
             String assignment,boolean consented) {
         if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "EXPLICIT_KLING_VIDEO_CHARACTER_PAYMENT_CONSENT_REQUIRED");
-        if(key==null || key.isBlank())
+        if(key==null || key.isBlank() || !enabled)
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "NEURO_GENAPI_KEY_NOT_CONFIGURED");
+                    "NEURO_GENAPI_KEY_OR_FEATURE_NOT_CONFIGURED");
         if(jdbc==null || objectStore==null || !objectStore.configured())
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "NEURO_CHARACTER_ARCHIVE_NOT_READY");
@@ -2557,7 +2557,9 @@ public class NeuroReplacementPilotService {
                 video=download(url,MAX_RESULT_BYTES); // GET existing MP4
                 MediaProbe info=probeMp4(video);
                 int expected=job.sceneAssignment==null?VIDEO_DURATION_SECONDS:
-                        NeuroScenePlan.plan(job.sceneAssignment).durationSeconds();
+                        isCharacterWorkflow(job)
+                        ? NeuroScenePlan.planForCharacter(job.sceneAssignment).durationSeconds()
+                        : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds();
                 if(!info.video || info.seconds<expected-0.7 ||
                         info.seconds>expected+0.7) {
                     throw new IOException("NEURO_PAID_KLING_VIDEO_INVALID");
