@@ -2425,13 +2425,17 @@ public class NeuroReplacementPilotService {
         }
         String klingId = job.providerRequests.get(VIDEO_MODEL_ID);
         String voiceId = job.providerRequests.get("chatterbox-speech");
-        if (klingId == null || voiceId == null) {
+        if ((klingId == null && !job.providerRequests.containsKey(ACTING_TASK))
+                || voiceId == null) {
             throw new IOException("NEURO_PAID_LIPSYNC_RECOVERY_IDS_MISSING");
         }
-        // GET only: these are the original successful provider task IDs.
-        String klingUrl = completedPaidResultUrl(VIDEO_MODEL_ID, klingId);
+        // Direct Kling produces a separate owner-locked archived MP4; NEVER
+        // try to read an official task ID from the GenAPI GET endpoint.
+        byte[] kling = CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))
+                ? objectStore.get("neuro-replacements/"+job.ownerUid+"/"+job.id+
+                    "-paid-kling.mp4")
+                : download(completedPaidResultUrl(VIDEO_MODEL_ID,klingId),MAX_RESULT_BYTES);
         String voiceUrl = completedPaidResultUrl("chatterbox-speech", voiceId);
-        byte[] kling = download(klingUrl, MAX_RESULT_BYTES);
         // Dynamic scenes MUST mux the same pre-aligned voice that Lip Sync
         // received. The raw 12s Chatterbox audio would be cut at 9s here.
         byte[] voice = job.sceneAssignment == null
