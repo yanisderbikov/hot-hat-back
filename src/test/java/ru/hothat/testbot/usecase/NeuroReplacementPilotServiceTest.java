@@ -392,4 +392,27 @@ class NeuroReplacementPilotServiceTest {
         assertTrue(String.valueOf(duplicate.getReason()).contains("ALREADY_CLAIMED"));
     }
 
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void freeVideoReferencePreflightNeverOrdersGenApiWhenArchiveIsMissing() throws Exception {
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        ResultSet rs=mock(ResultSet.class);
+        when(rs.getString(1)).thenReturn("reference-test");
+        when(rs.getString(2)).thenReturn("hat-50698835685110f4");
+        when(rs.getString(3)).thenReturn("owner-1");
+        when(rs.getString(4)).thenReturn("failed");
+        when(rs.getString(6)).thenReturn("{}");
+        when(rs.getString(16)).thenReturn("Говорит Привет всем друзьям и уходит.");
+        when(db.query(anyString(),any(RowMapper.class),eq("reference-test")))
+                .thenAnswer(call -> List.of(((RowMapper)call.getArgument(1)).mapRow(rs,0)));
+        var outcome=pilot.inspectKlingReference("owner-1","reference-test");
+        assertEquals("MISSING_ARCHIVED_REFERENCE",outcome.get("check"));
+        assertEquals(0,outcome.get("paidCalls"));
+        assertEquals(false,outcome.get("safeToRetry"));
+        ResponseStatusException denied=assertThrows(ResponseStatusException.class,
+                () -> pilot.inspectKlingReference("other-owner","reference-test"));
+        assertEquals(HttpStatus.NOT_FOUND,denied.getStatusCode());
+    }
+
 }
