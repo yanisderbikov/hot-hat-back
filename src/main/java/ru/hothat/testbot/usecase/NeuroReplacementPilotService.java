@@ -1236,6 +1236,70 @@ public class NeuroReplacementPilotService {
     }
 
     /**
+     * Free idempotent archive of a newly recorded browser clip. An archived
+     * reference is not a paid GenAPI/Kling job and NEVER queues process().
+     */
+    public synchronized Map<String,Object> archiveStudioReference(String ownerUid,
+            String testId,MultipartFile video,MultipartFile voice) {
+        if(jdbc==null || objectStore==null || !objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_REFERENCE_ARCHIVE_NOT_CONFIGURED");
+        if(testId==null || !testId.matches(
+                "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_FREE_REFERENCE_ID_INVALID");
+        String room="hat-fac7edrecord"+testId.replace("-","");
+        Job existing=existingRoomJob(room);
+        if(existing!=null){
+            if(!ownerUid.equals(existing.ownerUid) ||
+                    !"true".equals(existing.providerRequests.get("reference-only")))
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "NEURO_FREE_REFERENCE_EXISTS_WITH_OTHER_OWNER_OR_TYPE");
+            return snapshot(existing);
+        }
+        if(video==null||voice==null||video.isEmpty()||voice.isEmpty()||
+                video.getSize()>MAX_VIDEO_BYTES||voice.getSize()>MAX_VOICE_BYTES)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_FREE_REFERENCE_MEDIA_MISSING");
+        String vMime=video.getContentType(),aMime=voice.getContentType();
+        if(!("video/webm".equals(vMime)||"video/mp4".equals(vMime)) ||
+                !("audio/webm".equals(aMime)||"audio/mp4".equals(aMime)||
+                "audio/wav".equals(aMime)||"audio/x-wav".equals(aMime)))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_FREE_REFERENCE_UNSUPPORTED_MIME");
+        try{
+            MediaProbe v=probeMp4(video.getBytes());
+            MediaProbe a=probeMp4(voice.getBytes());
+            if(!v.video||!a.audio || (v.seconds>0&&v.seconds<11.5) ||
+                    (a.seconds>0&&a.seconds<11.5))
+                throw new IOException("NEURO_REFERENCE_SOURCE_INCOMPLETE");
+        }catch(Exception e){
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_FREE_REFERENCE_SOURCE_INVALID");
+        }
+        Job job=new Job(UUID.randomUUID().toString(),room,ownerUid);
+        job.state="reference";
+        job.stage="Исходная запись и голос бесплатно сохранены";
+        job.providerRequests.put("reference-only","true");
+        job.cameraMime=vMime;job.voiceMime=aMime;
+        job.sourceCameraKey="neuro-replacements/"+ownerUid+"/"+job.id+
+                ("video/mp4".equals(vMime)?"-input-camera.mp4":"-input-camera.webm");
+        job.sourceVoiceKey="neuro-replacements/"+ownerUid+"/"+job.id+
+                (aMime.contains("wav")?"-input-voice.wav":
+                "audio/mp4".equals(aMime)?"-input-voice.m4a":"-input-voice.webm");
+        try{
+            objectStore.put(job.sourceCameraKey,video.getBytes(),vMime);
+            objectStore.put(job.sourceVoiceKey,voice.getBytes(),aMime);
+            persist(job);
+            byRoom.put(room,job);
+            return snapshot(job);
+        }catch(Exception e){
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_FREE_REFERENCE_ARCHIVE_WRITE_FAILED");
+        }
+    }
+
+    /**
      * One NEW job for a previously archived recording. Never repurpose the
      * historical paid job or its provider IDs. Client-generated testId is the
      * at-most-once billing identity across refreshes/devices/instances.
@@ -1448,13 +1512,13 @@ public class NeuroReplacementPilotService {
         if(job.submittingModel!=null)
             throw new IOException("NEURO_AMBIGUOUS_PAID_POST_DO_NOT_REPEAT_"+stage);
         job.submittingModel=stage;
-        checkpoint(job);
+        persist(job); // STOP if database failed before a remotely billable POST.
         JsonNode data=klingRequest("POST",path,params);
         id=data.path("task_id").asText();
         if(id.isBlank())throw new IOException("KLING_TASK_ID_NOT_RETURNED_DO_NOT_REPEAT");
         job.providerRequests.put(stage,id);
         job.submittingModel=null;
-        checkpoint(job);
+        persist(job); // An incomplete checkpoint must never invite resubmission.
         return id;
     }
 
