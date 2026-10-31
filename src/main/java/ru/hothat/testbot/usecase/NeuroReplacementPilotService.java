@@ -833,9 +833,18 @@ public class NeuroReplacementPilotService {
             // Never copy the source's hair-scratching movement; use the
             // original webcam shot as a reference for face/person/room only.
             boolean videoWasPaidBeforeThisRun = job.providerRequests.containsKey(VIDEO_MODEL_ID);
+            // The GenAPI O3 reference mode accepts a public HTTPS video_url.
+            // A signed S3 object avoids the 31-Oct multipart/422 ambiguity and
+            // uses true JSON booleans. The video is PRIVATE except for a 2h
+            // pre-signed read URL, never embedded as base64 in a request.
+            String cameraReferenceUrl = scene == null ? null
+                    : publishSceneCameraReference(job, klingCamera);
             String videoUrl = paidStage(job, VIDEO_MODEL_ID,
-                    () -> submitMultipart(VIDEO_MODEL_ID, klingEditFields(scene),
-                            "video_url", "webcam.mp4", "video/mp4", klingCamera));
+                    () -> scene == null
+                            ? submitMultipart(VIDEO_MODEL_ID, klingEditFields(null),
+                                    "video_url", "webcam.mp4", "video/mp4", klingCamera)
+                            : submitJson(VIDEO_MODEL_ID,
+                                    klingJsonReferenceFields(scene,cameraReferenceUrl)));
             // For newly purchased reference-mode performances require the
             // promised 15s file before paying for lip synchronization.
             // Older paid edit-video jobs are still recoverable by their IDs.
@@ -918,6 +927,38 @@ public class NeuroReplacementPilotService {
                 "pro", "true",
                 "generate_audio", "false",
                 "keep_audio", "false"
+        );
+    }
+
+    /** Save an already transcoded 720p reference before a paid JSON POST. */
+    private String publishSceneCameraReference(Job job, byte[] mp4) throws Exception {
+        if (objectStore == null || !objectStore.configured()) {
+            throw new IOException("NEURO_VIDEO_REFERENCE_ARCHIVE_UNAVAILABLE");
+        }
+        String path="neuro-replacements/"+job.ownerUid+"/"+job.id+"-kling-reference.mp4";
+        objectStore.put(path,mp4,"video/mp4");
+        String url=objectStore.presignGet(path,Duration.ofHours(2),"video/mp4",
+                null,"private, no-store");
+        if (url == null || !url.startsWith("https://")) {
+            throw new IOException("NEURO_VIDEO_REFERENCE_SIGNED_URL_UNAVAILABLE");
+        }
+        return url;
+    }
+
+    /** Dynamic scenes: use GenAPI's documented URL schema and JSON types. */
+    private Map<String,Object> klingJsonReferenceFields(NeuroScenePlan scene, String videoUrl) {
+        if (scene == null || videoUrl == null || !videoUrl.startsWith("https://")) {
+            throw new IllegalArgumentException("NEURO_KLING_JSON_REFERENCE_INVALID");
+        }
+        return Map.of(
+                "model",VIDEO_ACTING_MODE,
+                "prompt",scene.videoPrompt(),
+                "duration",String.valueOf(scene.durationSeconds()),
+                "aspect_ratio","16:9",
+                "pro",true,
+                "generate_audio",false,
+                "keep_audio",false,
+                "video_url",videoUrl
         );
     }
 
