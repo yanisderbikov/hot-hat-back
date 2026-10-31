@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestPart;
+import ru.hothat.testbot.usecase.NeuroScenePlan;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -54,6 +55,13 @@ public class NeuroReplacementHistoryController {
                     array = @ArraySchema(schema = @Schema(implementation = NeuroJobResponseDTO.class))))
     public List<Map<String,Object>> history(@AuthenticationPrincipal HotHatUser owner) {
         return pilot.history(owner.uid());
+    }
+
+    @PostMapping(value="/studio/plan", consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+    @ApiResponse(responseCode="200",description="Бесплатный расчёт нового студийного задания до оплаты")
+    public NeuroScenePlan studioPlan(@AuthenticationPrincipal HotHatUser owner,
+                                    @RequestParam("assignment") String assignment) {
+        return NeuroScenePlan.plan(assignment);
     }
 
     @PostMapping(value="/studio", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
