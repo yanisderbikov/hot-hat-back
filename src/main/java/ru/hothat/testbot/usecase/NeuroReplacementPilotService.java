@@ -601,6 +601,9 @@ public class NeuroReplacementPilotService {
                     "NEURO_ACTING_REVIEW_NOT_ELIGIBLE");
         }
         Map<String,Object> quality=paidActingQuality(ownerUid,jobId);
+        if(Boolean.FALSE.equals(quality.get("durationValid")))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_PAID_KLING_DURATION_MISMATCH_NO_LIPSYNC_CHARGE");
         if(Boolean.TRUE.equals(quality.get("copyDetected")))
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "NEURO_KLING_SOURCE_COPY_DETECTED_NO_LIPSYNC_CHARGE");
@@ -672,6 +675,9 @@ public class NeuroReplacementPilotService {
         // No Lip Sync spending on an almost frame-for-frame copy even when
         // the owner previously accepted the 422 retry dialog.
         Map<String,Object> actingCheck=paidActingQuality(ownerUid,jobId);
+        if(Boolean.FALSE.equals(actingCheck.get("durationValid")))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_PAID_KLING_DURATION_MISMATCH_NO_LIPSYNC_CHARGE");
         if(Boolean.TRUE.equals(actingCheck.get("copyDetected")))
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "NEURO_KLING_SOURCE_COPY_DETECTED_NO_LIPSYNC_CHARGE");
@@ -2721,11 +2727,34 @@ public class NeuroReplacementPilotService {
         try {
             byte[] source=objectStore.get(job.sourceCameraKey);
             byte[] kling=paidKlingPreview(ownerUid,jobId); // paid GenAPI GET or cached direct Kling
+            MediaProbe video=probeMp4(kling);
+            int expected=job.sceneAssignment==null?VIDEO_DURATION_SECONDS:
+                    isCharacterWorkflow(job)
+                    ? NeuroScenePlan.planForCharacter(job.sceneAssignment).durationSeconds()
+                    : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds();
+            boolean durationValid=video.video && Double.isFinite(video.seconds) &&
+                    video.seconds>=expected-0.7 && video.seconds<=expected+0.7;
+            if(!durationValid) {
+                // The owner may still download and inspect the paid MP4, but
+                // no further billable voice/lip-sync stage is allowed.
+                Map<String,Object> result=new LinkedHashMap<>();
+                result.put("jobId",jobId);
+                result.put("paidCalls",0);
+                result.put("copyDetected",false);
+                result.put("durationValid",false);
+                result.put("actualDurationSeconds",video.seconds);
+                result.put("expectedDurationSeconds",expected);
+                result.put("check","NEURO_PAID_KLING_DURATION_MISMATCH");
+                return result;
+            }
             double ssim=measureSourceCopySsim(source,job.cameraMime,kling,
                     isCharacterWorkflow(job)?job.startSeconds:0);
             Map<String,Object> result=new LinkedHashMap<>();
             result.put("jobId",jobId);
             result.put("paidCalls",0);
+            result.put("durationValid",true);
+            result.put("actualDurationSeconds",video.seconds);
+            result.put("expectedDurationSeconds",expected);
             result.put("copyDetected",ssim >= MAX_ACCEPTED_SOURCE_COPY_SSIM);
             result.put("ssim",Math.round(ssim*10000)/10000.0);
             result.put("check",ssim >= MAX_ACCEPTED_SOURCE_COPY_SSIM
@@ -2816,26 +2845,49 @@ public class NeuroReplacementPilotService {
                 video=null;
             }
             if(video==null || video.length<256) {
-                String url=completedPaidResultUrl(VIDEO_MODEL_ID,id); // GET existing paid ID
-                video=download(url,MAX_RESULT_BYTES); // GET existing MP4
+                String url=completedPaidResultUrl(VIDEO_MODEL_ID,id); // FREE GET existing ID
+                video=download(url,MAX_RESULT_BYTES); // FREE GET existing MP4
                 MediaProbe info=probeMp4(video);
-                int expected=job.sceneAssignment==null?VIDEO_DURATION_SECONDS:
-                        isCharacterWorkflow(job)
-                        ? NeuroScenePlan.planForCharacter(job.sceneAssignment).durationSeconds()
-                        : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds();
-                if(!info.video || info.seconds<expected-0.7 ||
-                        info.seconds>expected+0.7) {
-                    throw new IOException("NEURO_PAID_KLING_VIDEO_INVALID");
+                // A video can be a valid paid MP4 while failing the promised
+                // duration. Let its owner inspect it; the separate quality
+                // endpoint blocks any additional paid Lip Sync in that case.
+                if(!info.video || !Double.isFinite(info.seconds) ||
+                        info.seconds<0.5 || info.seconds>60) {
+                    throw new IOException("NEURO_PAID_KLING_INVALID_MEDIA");
                 }
                 objectStore.put(archiveKey,video,"video/mp4");
             }
             return video;
         }catch(Exception failure){
-            LOG.warn("Could not recover already-paid Kling MP4 job={} error={}",
-                    jobId,failure.getClass().getSimpleName());
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                    "NEURO_PAID_KLING_DOWNLOAD_UNAVAILABLE");
+            String code=paidKlingFailureCode(failure);
+            LOG.warn("Could not read existing Kling MP4 job={} providerId={} code={} type={}",
+                    jobId,id,code,failure.getClass().getSimpleName());
+            HttpStatus status=code.equals("NEURO_PAID_KLING_PROVIDER_NOT_READY") ||
+                    code.equals("NEURO_PAID_KLING_PROVIDER_FAILED")
+                    ? HttpStatus.CONFLICT : HttpStatus.BAD_GATEWAY;
+            throw new ResponseStatusException(status,code);
         }
+    }
+
+    /** Stable, URL/credential-free diagnostics for the owner's free read. */
+    private String paidKlingFailureCode(Exception failure) {
+        String message=String.valueOf(failure.getMessage());
+        if(message.startsWith("NEURO_RECOVERY_ORIGINAL_NOT_READY")) {
+            return message.matches("(?s).*(?:error|failed|failure|canceled)\\s*$")
+                    ? "NEURO_PAID_KLING_PROVIDER_FAILED"
+                    : "NEURO_PAID_KLING_PROVIDER_NOT_READY";
+        }
+        if(message.contains("UNTRUSTED_GENAPI_RESULT_URL"))
+            return "NEURO_PAID_KLING_INVALID_RESULT_URL";
+        if(message.contains("GENAPI_RESULT_DOWNLOAD_FAILED"))
+            return "NEURO_PAID_KLING_REMOTE_DOWNLOAD_FAILED";
+        if(message.contains("NEURO_RESULT_INVALID_MP4") ||
+                message.contains("NEURO_PAID_KLING_INVALID_MEDIA") ||
+                message.contains("NEURO_RESULT_EMPTY"))
+            return "NEURO_PAID_KLING_INVALID_MEDIA";
+        if(message.startsWith("GENAPI_HTTP_"))
+            return "NEURO_PAID_KLING_PROVIDER_GET_FAILED";
+        return "NEURO_PAID_KLING_DOWNLOAD_UNAVAILABLE";
     }
 
     public String originalMime(String ownerUid,String jobId) {
