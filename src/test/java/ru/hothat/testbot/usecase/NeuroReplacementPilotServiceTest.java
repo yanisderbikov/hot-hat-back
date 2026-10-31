@@ -280,4 +280,52 @@ class NeuroReplacementPilotServiceTest {
         assertEquals("15", legacyFields.get("duration"), "Old paid jobs must not be rewritten");
     }
 
+    @Test
+    void speechGateResumeRequiresExplicitConsentBeforeReadingOrCharging() {
+        ResponseStatusException e=assertThrows(ResponseStatusException.class,
+                () -> pilot.resumeAfterSpeechGate("owner-1","old-paid-job",false));
+        assertEquals(HttpStatus.BAD_REQUEST,e.getStatusCode());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void speechGateResumeWithOldIdsRejectsDuplicateDatabaseClaimBeforeAnyPaidPost() throws Exception {
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","simulation-only");
+        ru.hothat.common.storage.ObjectStore archive=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        ResultSet row=mock(ResultSet.class);
+        String id="f3c3190a-8f68-4a38-95df-26dc3fe17f0e", owner="owner-1";
+        when(row.getString(1)).thenReturn(id);
+        when(row.getString(2)).thenReturn("hat-50698835685110f4");
+        when(row.getString(3)).thenReturn(owner);
+        when(row.getString(4)).thenReturn("failed");
+        when(row.getString(5)).thenReturn("Ошибка генерации");
+        when(row.getString(6)).thenReturn("{\"tts\":\"57010833\",\"chatterbox-speech\":\"57010840\"}");
+        when(row.getString(8)).thenReturn(
+                "NEURO_SPEECH_TOO_FAST_OR_SILENT voiced=5.2s lastSpeech=6.9s");
+        when(row.getString(10)).thenReturn("camera-already-in-S3");
+        when(row.getString(11)).thenReturn("voice-already-in-S3");
+        when(row.getString(12)).thenReturn("video/webm");
+        when(row.getString(13)).thenReturn("audio/webm");
+        when(row.getString(16)).thenReturn(
+                "Повернуться к веб-камере и смотреть прямо в камеру. "+
+                "Выразительно произнести «А вы всё ещё кипятите?», выдержать паузу, "+
+                "затем выразительно произнести «Тогда мы идём к вам!», "+
+                "показать большой палец прямо в камеру. "+
+                "Затем угрожающе погрозить кулаком прямо в камеру, встать со стула и уйти из кадра.");
+        when(db.query(anyString(),any(RowMapper.class),eq(id)))
+                .thenAnswer(call -> List.of(((RowMapper)call.getArgument(1)).mapRow(row,0)));
+        // A competing browser/device already claimed this job. Absolutely no
+        // second paid POST may be sent, even with explicit consent.
+        when(db.update(anyString(),eq(id),eq(owner))).thenReturn(0);
+        ResponseStatusException duplicate=assertThrows(ResponseStatusException.class,
+                () -> pilot.resumeAfterSpeechGate(owner,id,true));
+        assertEquals(HttpStatus.CONFLICT,duplicate.getStatusCode());
+        assertTrue(String.valueOf(duplicate.getReason()).contains("ALREADY_CLAIMED"));
+    }
+
 }
