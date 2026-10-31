@@ -68,7 +68,7 @@ public class NeuroReplacementPilotService {
     // A moving video reference replays the original person's gestures.
     // A single still frame is the ONLY input to the new directed acting model.
     private static final String VIDEO_INPUT_REFERENCE_MODE = "image-to-video";
-    private static final double MAX_ACCEPTED_SOURCE_COPY_SSIM = 0.965;
+    private static final double MAX_ACCEPTED_SOURCE_COPY_SSIM = 0.94;
     private static final int VIDEO_DURATION_SECONDS = 15;
     // GenAPI lipsync endpoint accepts cut_off (its documented default).
     // "silence" is rejected by GenAPI HTTP 422 even though other upstream
