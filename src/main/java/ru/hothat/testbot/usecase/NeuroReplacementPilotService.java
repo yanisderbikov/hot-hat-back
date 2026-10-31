@@ -1646,9 +1646,8 @@ public class NeuroReplacementPilotService {
                 String cameraMp4Key="neuro-replacements/"+job.ownerUid+"/"+job.id+
                         "-kling-still.jpg";
                 // Representative room + frame still preserves background.
-                byte[] still=extractKlingStill(
-                        transcodeMedia(camera,cameraMime.equals("video/mp4")?"mp4":"webm",
-                                "mp4",true,job.startSeconds));
+                byte[] still=extractRoomStillFromCamera(camera,cameraMime,
+                        job.startSeconds+2);
                 objectStore.put(cameraMp4Key,still,"image/jpeg");
                 String roomUrl=cleanGenApiInputUrl(job,cameraMp4Key,"jpg");
                 job.stage="Kling 3.0 Omni генерирует НОВЫЕ жесты";
@@ -2144,6 +2143,33 @@ public class NeuroReplacementPilotService {
                 throw new IOException("NEURO_STILL_EXTRACTION_INVALID");
             }
             return jpg;
+        }finally{
+            Files.deleteIfExists(input);
+            Files.deleteIfExists(output);
+        }
+    }
+
+    /** A still room reference directly from WebM; never transcode 10s HD MP4 just for a JPEG. */
+    private byte[] extractRoomStillFromCamera(byte[] camera,String mime,double second) throws Exception {
+        Path input=Files.createTempFile("neuro-character-room-",
+                "video/mp4".equals(mime)?".mp4":".webm");
+        Path output=Files.createTempFile("neuro-character-room-",".jpg");
+        try{
+            Files.write(input,camera);
+            Process ffmpeg=new ProcessBuilder("ffmpeg","-hide_banner",
+                    "-loglevel","error","-nostdin","-y","-threads","1",
+                    "-ss",String.valueOf(second),"-i",input.toString(),
+                    "-frames:v","1","-vf","scale=1280:720:flags=bilinear",
+                    "-q:v","3",output.toString()).redirectErrorStream(true).start();
+            if(!ffmpeg.waitFor(30,TimeUnit.SECONDS)){
+                ffmpeg.destroyForcibly();
+                throw new IOException("NEURO_CHARACTER_ROOM_FRAME_TIMEOUT");
+            }
+            byte[] bytes=Files.readAllBytes(output);
+            if(ffmpeg.exitValue()!=0||bytes.length<2048||bytes.length>3*1024*1024||
+                    (bytes[0]&255)!=0xff||(bytes[1]&255)!=0xd8)
+                throw new IOException("NEURO_CHARACTER_ROOM_FRAME_INVALID");
+            return bytes;
         }finally{
             Files.deleteIfExists(input);
             Files.deleteIfExists(output);
