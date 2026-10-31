@@ -1522,6 +1522,9 @@ public class NeuroReplacementPilotService {
             try {
                 video=objectStore.get(archiveKey);
             }catch(Exception notYetCached){
+                video=null;
+            }
+            if(video==null || video.length<256) {
                 String url=completedPaidResultUrl(VIDEO_MODEL_ID,id); // GET existing paid ID
                 video=download(url,MAX_RESULT_BYTES); // GET existing MP4
                 MediaProbe info=probeMp4(video);
