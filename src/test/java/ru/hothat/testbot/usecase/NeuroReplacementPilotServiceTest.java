@@ -339,8 +339,9 @@ class NeuroReplacementPilotServiceTest {
         assertEquals("https://signed.example.test/video.mp4",fields.get("video_url"));
         assertEquals("video-to-video-reference",fields.get("model"));
         assertEquals(true,fields.get("pro"));
-        assertEquals(false,fields.get("generate_audio"));
-        assertEquals(false,fields.get("keep_audio"));
+        assertFalse(fields.containsKey("generate_audio"),"Documented default is false");
+        assertFalse(fields.containsKey("keep_audio"),"Documented default is false");
+        assertFalse(fields.containsKey("aspect_ratio"),"Documented default is 16:9");
         assertEquals(String.valueOf(plan.durationSeconds()),fields.get("duration"));
         assertFalse(fields.containsKey("start_image_url"));
     }
