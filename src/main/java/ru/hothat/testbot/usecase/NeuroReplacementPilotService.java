@@ -1267,6 +1267,8 @@ public class NeuroReplacementPilotService {
     }
 
     private void process(Job job, byte[] camera, String cameraMime, byte[] voice, String voiceMime, double startSeconds) {
+        // Owner review is persisted as a stage before this run is queued.
+        boolean actingReviewApproved="Владелец подтвердил движения Kling".equals(job.stage);
         try {
             NeuroScenePlan scene = job.sceneAssignment == null ? null : NeuroScenePlan.plan(job.sceneAssignment);
             int expectedSeconds = scene == null ? VIDEO_DURATION_SECONDS : scene.durationSeconds();
@@ -1346,6 +1348,27 @@ public class NeuroReplacementPilotService {
                         || videoInfo.seconds > expectedSeconds + 0.7) {
                     throw new IOException("NEURO_DIRECTED_ACTING_VIDEO_LENGTH_INVALID " +
                             videoInfo.seconds + "s; Lip Sync not ordered");
+                }
+            }
+            // The paid 31-Oct O3 clip copied its source frame-for-frame.
+            // Never pay Lip Sync for another source replay, including when
+            // resuming an older already-paid Kling ID.
+            if(scene != null && !job.providerRequests.containsKey("lipsync")) {
+                byte[] directed=download(videoUrl,MAX_RESULT_BYTES);
+                double similarity=measureSourceCopySsim(
+                        camera,cameraMime,directed);
+                if(similarity >= MAX_ACCEPTED_SOURCE_COPY_SSIM) {
+                    throw new IOException("NEURO_KLING_SOURCE_COPY_DETECTED ssim="+
+                            String.format(java.util.Locale.ROOT,"%.4f",similarity)+
+                            "; no Lip Sync ordered");
+                }
+                // Studio is a test, not an automatic game. Real actions
+                // must be approved by the owner BEFORE another paid step.
+                if(job.roomId.startsWith("hat-fac7ed") && !actingReviewApproved) {
+                    job.state="review";
+                    job.stage="Проверь новые жесты в оплаченном Kling MP4. Lip Sync не заказан";
+                    checkpoint(job);
+                    return;
                 }
             }
             job.stage = "Согласование речи и жестов";
@@ -1549,6 +1572,80 @@ public class NeuroReplacementPilotService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_ORIGINAL_NOT_ARCHIVED");
         }
         return objectStore.get(job.sourceCameraKey);
+    }
+
+
+    /**
+     * Read-only source-copy diagnosis. The 31-Oct paid clip scored 0.978 SSIM
+     * versus the source (sampled 2fps / 320x180) and copied every gesture.
+     * This deliberately tests only the obvious source replay, NOT whether
+     * all newly requested gestures were performed correctly.
+     */
+    public Map<String,Object> paidActingQuality(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(job.sourceCameraKey==null || !job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+                objectStore==null || !objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_ACTING_CHECK_NOT_AVAILABLE");
+        try {
+            byte[] source=objectStore.get(job.sourceCameraKey);
+            byte[] kling=paidKlingPreview(ownerUid,jobId); // existing ID GET only
+            double ssim=measureSourceCopySsim(source,job.cameraMime,kling);
+            Map<String,Object> result=new LinkedHashMap<>();
+            result.put("jobId",jobId);
+            result.put("paidCalls",0);
+            result.put("copyDetected",ssim >= MAX_ACCEPTED_SOURCE_COPY_SSIM);
+            result.put("ssim",Math.round(ssim*10000)/10000.0);
+            result.put("check",ssim >= MAX_ACCEPTED_SOURCE_COPY_SSIM
+                    ? "NEURO_KLING_SOURCE_COPY_DETECTED"
+                    : "NOT_NEAR_EXACT_COPY_MANUAL_ACTION_REVIEW_REQUIRED");
+            return result;
+        } catch(ResponseStatusException error) {
+            throw error;
+        } catch(Exception error) {
+            LOG.warn("Free source-motion review unavailable job={} reason={}",
+                    jobId,error.getClass().getSimpleName());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "NEURO_ACTING_COMPARISON_UNAVAILABLE");
+        }
+    }
+
+    /** Compare timeline-aligned frames (not superficial matching background). */
+    private double measureSourceCopySsim(byte[] source,String sourceMime,byte[] kling)
+            throws Exception {
+        Path original=Files.createTempFile("neuro-motion-before-",
+                "video/mp4".equals(sourceMime)?".mp4":".webm");
+        Path changed=Files.createTempFile("neuro-motion-after-",".mp4");
+        try {
+            Files.write(original,source);
+            Files.write(changed,kling);
+            String filter="[0:v]trim=duration=8.8,setpts=PTS-STARTPTS,"+
+                    "fps=2,scale=320:180,format=yuv420p[a];"+
+                    "[1:v]trim=duration=8.8,setpts=PTS-STARTPTS,"+
+                    "fps=2,scale=320:180,format=yuv420p[b];[a][b]ssim";
+            Process ffmpeg=new ProcessBuilder("ffmpeg","-hide_banner","-nostdin",
+                    "-nostats","-loglevel","info",
+                    "-i",original.toString(),"-i",changed.toString(),
+                    "-filter_complex",filter,"-an","-f","null","-")
+                    .redirectErrorStream(true).start();
+            if(!ffmpeg.waitFor(50,TimeUnit.SECONDS)) {
+                ffmpeg.destroyForcibly();
+                throw new IOException("NEURO_ACTING_SSIM_TIMEOUT");
+            }
+            String diagnostics=new String(ffmpeg.getInputStream().readAllBytes(),
+                    StandardCharsets.UTF_8);
+            if(ffmpeg.exitValue()!=0)throw new IOException("NEURO_ACTING_SSIM_FAILED");
+            java.util.regex.Matcher m=java.util.regex.Pattern.compile(
+                    "SSIM Y:[^\\r\\n]*?All:([0-9]+(?:\\.[0-9]+)?)").matcher(diagnostics);
+            if(!m.find()) throw new IOException("NEURO_ACTING_SSIM_MISSING");
+            double score=Double.parseDouble(m.group(1));
+            if(!Double.isFinite(score)||score<0||score>1)throw new IOException("NEURO_ACTING_SSIM_INVALID");
+            return score;
+        }finally{
+            Files.deleteIfExists(original);
+            Files.deleteIfExists(changed);
+        }
     }
 
     /**
