@@ -415,4 +415,21 @@ class NeuroReplacementPilotServiceTest {
         assertEquals(HttpStatus.NOT_FOUND,denied.getStatusCode());
     }
 
+    @Test
+    void finalKlingTestRequiresConsentAndCannotRunOnAnotherJob() {
+        ResponseStatusException noConsent=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeVerifiedKlingFinal("owner-1",
+                        "f3c3190a-8f68-4a38-95df-26dc3fe17f0e",false));
+        assertEquals(HttpStatus.BAD_REQUEST,noConsent.getStatusCode());
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","test-only");
+        var archive=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        pilot.setJdbcTemplate(mock(JdbcTemplate.class));
+        ResponseStatusException other=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeVerifiedKlingFinal("owner-1","not-the-original-paid-job",true));
+        assertEquals(HttpStatus.CONFLICT,other.getStatusCode());
+    }
+
 }
