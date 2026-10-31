@@ -20,6 +20,9 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.hothat.config.HotHatUser;
@@ -51,6 +54,36 @@ public class NeuroReplacementHistoryController {
                     array = @ArraySchema(schema = @Schema(implementation = NeuroJobResponseDTO.class))))
     public List<Map<String,Object>> history(@AuthenticationPrincipal HotHatUser owner) {
         return pilot.history(owner.uid());
+    }
+
+    @PostMapping(value="/studio", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ApiResponse(responseCode = "202", description = "Вручную записанная камера и голос, новый idempotent тест без игровой комнаты")
+    public ResponseEntity<Map<String,Object>> studio(@AuthenticationPrincipal HotHatUser owner,
+                                    @RequestParam("testId") String testId,
+                                    @RequestParam(name="consented",defaultValue="false") boolean consented,
+                                    @RequestParam("assignment") String assignment,
+                                    @RequestPart("video") MultipartFile video,
+                                    @RequestPart("voice") MultipartFile voice) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(pilot.startStudio(owner.uid(),testId,consented,video,voice,assignment));
+    }
+
+    @GetMapping("/{jobId}")
+    public Map<String,Object> job(@AuthenticationPrincipal HotHatUser owner,
+                                  @PathVariable String jobId) {
+        return pilot.statusByJob(owner.uid(),jobId);
+    }
+
+    @GetMapping("/{jobId}/original")
+    @ApiResponse(responseCode="200",description="Полная исходная запись до Нейроподмены; только владелец")
+    public ResponseEntity<byte[]> original(@AuthenticationPrincipal HotHatUser owner,
+                                            @PathVariable String jobId) {
+        byte[] bytes=pilot.originalVideo(owner.uid(),jobId);
+        String mime=pilot.originalMime(owner.uid(),jobId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+                .contentType(MediaType.parseMediaType(mime))
+                .body(bytes);
     }
 
     @GetMapping("/{jobId}/provider-status")
