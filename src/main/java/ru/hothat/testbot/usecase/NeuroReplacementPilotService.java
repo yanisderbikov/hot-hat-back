@@ -1158,10 +1158,20 @@ public class NeuroReplacementPilotService {
             double minimumLastSpeech = scene == null ? 4.2 : 0.9;
             double maximumVoiceSeconds = scene == null ? 16
                     : scene.durationSeconds() - scene.speechStartSeconds();
-            if (activeFrames < minimumVoicedFrames || lastActiveSeconds < minimumLastSpeech ||
-                    pcm.length / 16000.0 > maximumVoiceSeconds + 0.25) {
+            // The provider can return several seconds of trailing SILENCE.
+            // The 4-10s scene is later aligned and trimmed by FFmpeg. Reject
+            // speech that would actually be CUT OFF, not an MP3/WAV silence tail.
+            // The existing 15s legacy pilot retains its original strict gate.
+            double fileSeconds = pcm.length / 16000.0;
+            boolean tooShortOrSilent = activeFrames < minimumVoicedFrames ||
+                    lastActiveSeconds < minimumLastSpeech;
+            boolean exceedsSceneWindow = scene == null
+                    ? fileSeconds > maximumVoiceSeconds + 0.25
+                    : lastActiveSeconds > maximumVoiceSeconds + 0.15;
+            if (tooShortOrSilent || exceedsSceneWindow) {
                 throw new IOException("NEURO_SPEECH_TOO_FAST_OR_SILENT voiced=" +
                         (activeFrames/10.0) + "s lastSpeech=" + lastActiveSeconds +
+                        "s fullFile=" + fileSeconds + "s available=" + maximumVoiceSeconds +
                         "s; no expensive video ordered");
             }
         } finally {
