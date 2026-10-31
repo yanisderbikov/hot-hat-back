@@ -472,4 +472,57 @@ class NeuroReplacementPilotServiceTest {
         assertEquals(HttpStatus.CONFLICT,other.getStatusCode());
     }
 
+    @Test
+    void minimalKlingRetryRequiresFreshConsentAndIsLimitedToOriginalJob() {
+        ResponseStatusException missing=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeMinimalKlingOnce("owner-1",
+                        "f3c3190a-8f68-4a38-95df-26dc3fe17f0e",false));
+        assertEquals(HttpStatus.BAD_REQUEST,missing.getStatusCode());
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","test-only");
+        var archive=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        pilot.setJdbcTemplate(mock(JdbcTemplate.class));
+        ResponseStatusException other=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeMinimalKlingOnce("owner-1","different-paid-job",true));
+        assertEquals(HttpStatus.CONFLICT,other.getStatusCode());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void minimalKlingRetryCannotChargeWhenAnotherTabHasAlreadyClaimed() throws Exception {
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","test-only");
+        var archive=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        ResultSet saved=mock(ResultSet.class);
+        String jobId="f3c3190a-8f68-4a38-95df-26dc3fe17f0e";
+        when(saved.getString(1)).thenReturn(jobId);
+        when(saved.getString(2)).thenReturn("hat-50698835685110f4");
+        when(saved.getString(3)).thenReturn("owner-1");
+        when(saved.getString(4)).thenReturn("failed");
+        when(saved.getString(5)).thenReturn("Ошибка генерации");
+        when(saved.getString(6)).thenReturn("{\"tts\":\"57010833\",\"chatterbox-speech\":\"57010840\"}");
+        when(saved.getString(8)).thenReturn("GENAPI_HTTP_422 model: invalid mode");
+        when(saved.getString(10)).thenReturn("camera");
+        when(saved.getString(11)).thenReturn("voice");
+        when(saved.getString(12)).thenReturn("video/webm");
+        when(saved.getString(13)).thenReturn("audio/webm");
+        when(saved.getString(15)).thenReturn("kling-video-o3");
+        when(saved.getString(16)).thenReturn("Говорит Привет всем друзьям и уходит.");
+        when(saved.getInt(17)).thenReturn(3);
+        when(db.query(anyString(),any(RowMapper.class),eq(jobId)))
+                .thenAnswer(call -> List.of(((RowMapper)call.getArgument(1)).mapRow(saved,0)));
+        // A second browser won the atomic claim; the first must NOT start
+        // another provider task. Preflight can also refuse before CAS.
+        when(db.update(anyString(),eq(jobId),eq("owner-1"))).thenReturn(0);
+        var result=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeMinimalKlingOnce("owner-1",jobId,true));
+        assertTrue(result.getStatusCode()==HttpStatus.CONFLICT);
+    }
+
 }
