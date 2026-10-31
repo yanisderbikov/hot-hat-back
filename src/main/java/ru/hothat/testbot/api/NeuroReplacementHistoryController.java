@@ -74,8 +74,9 @@ public class NeuroReplacementHistoryController {
     @ApiResponse(responseCode="200",description="Подготовить и просмотреть восьмисекундный MP4 образец с синхронным голосом без платных API запросов")
     public ResponseEntity<byte[]> videoCharacterPreview(@AuthenticationPrincipal HotHatUser owner,
                                                          @RequestPart("video") MultipartFile video,
-                                                         @RequestPart("voice") MultipartFile voice) {
-        byte[] clip=pilot.prepareVideoCharacterPreview(video,voice);
+                                                         @RequestPart("voice") MultipartFile voice,
+                                                         @RequestParam(name="startSeconds",defaultValue="0") double startSeconds) {
+        byte[] clip=pilot.prepareVideoCharacterPreview(video,voice,startSeconds);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
                 .header(HttpHeaders.CONTENT_DISPOSITION,
