@@ -52,6 +52,9 @@ import java.util.concurrent.TimeUnit;
 public class NeuroReplacementPilotService {
     private static final Logger LOG = LoggerFactory.getLogger(NeuroReplacementPilotService.class);
     private static final URI GENAPI = URI.create("https://api.gen-api.ru/api/v1/");
+    @Value("${NEURO_REFERENCE_PUBLIC_ORIGIN:https://hot-hat-back.up.railway.app}")
+    private String referencePublicOrigin;
+
     private static final int MAX_VIDEO_BYTES = 12 * 1024 * 1024;
     private static final int MAX_VOICE_BYTES = 3 * 1024 * 1024;
     private static final int MAX_RESULT_BYTES = 40 * 1024 * 1024;
@@ -1262,24 +1265,78 @@ public class NeuroReplacementPilotService {
 
     /** Save an already transcoded 720p reference before a paid JSON POST. */
     private String publishSceneCameraReference(Job job, byte[] mp4) throws Exception {
-        if (objectStore == null || !objectStore.configured()) {
+        if (objectStore==null || !objectStore.configured() || jdbc==null) {
             throw new IOException("NEURO_VIDEO_REFERENCE_ARCHIVE_UNAVAILABLE");
         }
-        String path="neuro-replacements/"+job.ownerUid+"/"+job.id+"-kling-reference.mp4";
-        objectStore.put(path,mp4,"video/mp4");
-        String url=objectStore.presignGet(path,Duration.ofHours(2),"video/mp4",
-                null,"private, no-store");
-        if (url == null || !url.startsWith("https://")) {
-            throw new IOException("NEURO_VIDEO_REFERENCE_SIGNED_URL_UNAVAILABLE");
+        String keyPath="neuro-replacements/"+job.ownerUid+"/"+job.id+"-kling-reference.mp4";
+        objectStore.put(keyPath,mp4,"video/mp4");
+        // GenAPI mis-parses S3 query params as part of the MP4 extension (422).
+        // Use an unguessable, expiring, path-only URL ending in .mp4.
+        String token=UUID.randomUUID().toString().replace("-","")+
+                UUID.randomUUID().toString().replace("-","");
+        String origin=referencePublicOrigin==null?"":referencePublicOrigin.trim();
+        URI publicOrigin=URI.create(origin);
+        if(!"https".equals(publicOrigin.getScheme()) ||
+                publicOrigin.getHost()==null ||
+                publicOrigin.getRawQuery()!=null ||
+                publicOrigin.getRawFragment()!=null ||
+                publicOrigin.getPort()!=-1 ||
+                publicOrigin.getRawPath()!=null && !publicOrigin.getRawPath().isEmpty() &&
+                        !"/".equals(publicOrigin.getRawPath())) {
+            throw new IOException("NEURO_REFERENCE_PUBLIC_ORIGIN_INVALID");
         }
-        // A private Railway/internal hostname cannot be fetched by GenAPI.
-        URI external=URI.create(url);
-        String host=external.getHost();
-        if (host==null || host.equals("localhost") || host.endsWith(".internal") ||
-                host.endsWith(".local") || host.equals("127.0.0.1")) {
-            throw new IOException("NEURO_VIDEO_REFERENCE_NOT_PUBLIC");
+        jdbc.update("DELETE FROM neuro_kling_video_reference WHERE expires_at < now()");
+        jdbc.update("""
+                INSERT INTO neuro_kling_video_reference
+                    (access_token, job_id, object_key, expires_at)
+                VALUES (?, ?, ?, now() + interval '2 hours')
+                """,token,job.id,keyPath);
+        return origin.replaceAll("/+$","")+
+                "/api/v2/public/neuro-references/"+token+"/input.mp4";
+    }
+
+    /** Strict capability URL: no open bucket, no arbitrary key input. */
+    public byte[] publicKlingReference(String token) {
+        if (token==null || !token.matches("[a-f0-9]{64}") || jdbc==null ||
+                objectStore==null || !objectStore.configured()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_NOT_FOUND");
         }
-        return url;
+        List<String> matches=jdbc.query("""
+            SELECT object_key FROM neuro_kling_video_reference
+             WHERE access_token=? AND expires_at>now()
+            """,(rs,row)->rs.getString(1),token);
+        if(matches.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "NEURO_REFERENCE_EXPIRED_OR_NOT_FOUND");
+        String keyPath=matches.get(0);
+        if (!keyPath.startsWith("neuro-replacements/") ||
+                !keyPath.endsWith("-kling-reference.mp4")) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_INVALID");
+        }
+        byte[] mp4=objectStore.get(keyPath);
+        if(mp4==null || mp4.length<256 || mp4.length>MAX_VIDEO_BYTES) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_MEDIA_INVALID");
+        }
+        return mp4;
+    }
+
+    /** Original complete camera and microphone take from private S3. */
+    public byte[] originalVideo(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        }
+        if(job.sourceCameraKey==null || objectStore==null || !objectStore.configured()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_ORIGINAL_NOT_ARCHIVED");
+        }
+        return objectStore.get(job.sourceCameraKey);
+    }
+
+    public String originalMime(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        }
+        return "video/mp4".equals(job.cameraMime) ? "video/mp4" : "video/webm";
     }
 
     /** Dynamic scenes: use GenAPI's documented URL schema and JSON types. */
