@@ -522,6 +522,80 @@ public class NeuroReplacementPilotService {
         return snapshot(job);
     }
 
+    /**
+     * SCRUM-35: resume a *known* false-negative speech timing gate only.
+     * Existing paid TTS and Chatterbox request IDs are reused via GET.
+     * Kling and Lip Sync are NEW billable stages and require separate consent.
+     * A database CAS is mandatory: double-clicks and multiple Railway workers
+     * can never each launch another paid Kling POST.
+     */
+    public synchronized Map<String,Object> resumeAfterSpeechGate(String ownerUid, String jobId,
+                                                                   boolean consented) {
+        if (!consented) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "EXPLICIT_KLING_AND_LIPSYNC_PAYMENT_CONSENT_REQUIRED");
+        if (!enabled) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "NEURO_REPLACEMENT_DISABLED");
+        if (key == null || key.isBlank()) throw new ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE, "GENAPI_API_KEY_NOT_CONFIGURED");
+        if (jdbc == null || objectStore == null || !objectStore.configured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_RESULT_ARCHIVE_NOT_CONFIGURED");
+        }
+        Job job = loadJobById(jobId);
+        if (job == null || !ownerUid.equals(job.ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "NEURO_JOB_NOT_FOUND");
+        }
+        if (!"failed".equals(job.state) || job.error == null ||
+                !job.error.startsWith("NEURO_SPEECH_TOO_FAST_OR_SILENT") ||
+                job.sceneAssignment == null || job.sceneAssignment.isBlank() ||
+                job.providerRequests.get("tts") == null ||
+                job.providerRequests.get("chatterbox-speech") == null ||
+                job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+                job.providerRequests.containsKey("lipsync") ||
+                job.submittingModel != null ||
+                job.sourceCameraKey == null || job.sourceVoiceKey == null ||
+                job.cameraMime == null || job.voiceMime == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_SPEECH_GATE_RESUME_NOT_ELIGIBLE");
+        }
+        // Preserve existing paid provider IDs and raw camera/voice. Claim
+        // atomically before queuing anything; a failed claim is never retried.
+        int claimed = jdbc.update("""
+            UPDATE neuro_replacement_job
+               SET state='processing', stage='Продолжение с оплаченного голоса — проверка',
+                   error_message=NULL
+             WHERE job_id=? AND owner_uid=? AND state='failed'
+               AND error_message LIKE 'NEURO_SPEECH_TOO_FAST_OR_SILENT%'
+               AND scene_assignment IS NOT NULL
+               AND submitting_model IS NULL
+               AND jsonb_exists(provider_requests, 'tts')
+               AND jsonb_exists(provider_requests, 'chatterbox-speech')
+               AND NOT jsonb_exists(provider_requests, 'kling-video-o3')
+               AND NOT jsonb_exists(provider_requests, 'lipsync')
+            """,jobId,ownerUid);
+        if (claimed != 1) throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "NEURO_SPEECH_GATE_RESUME_ALREADY_CLAIMED");
+        job.state="processing";
+        job.stage="Продолжение с оплаченного голоса — проверка";
+        job.error=null;
+        byRoom.put(job.roomId,job);
+        executor.execute(() -> {
+            try {
+                byte[] camera = objectStore.get(job.sourceCameraKey);
+                byte[] voice = objectStore.get(job.sourceVoiceKey);
+                // paidStage() finds the two saved provider IDs, so it performs
+                // GET only for them; video/lipsync happen only after consent.
+                process(job,camera,job.cameraMime,voice,job.voiceMime,job.startSeconds);
+            } catch (Exception error) {
+                if (error instanceof InterruptedException || Thread.currentThread().isInterrupted()) return;
+                job.state="failed";
+                job.stage="Ошибка восстановления оплаченного голоса";
+                job.error="NEURO_SPEECH_RESUME_INPUT_FAILED: "+error.getClass().getSimpleName();
+                checkpoint(job);
+            }
+        });
+        return snapshot(job);
+    }
+
     public byte[] archivedVideo(String ownerUid, String jobId) {
         Job job = findOwnerJob(ownerUid,jobId);
         if (job == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
