@@ -1654,11 +1654,26 @@ public class NeuroReplacementPilotService {
                         voice,voiceMime,job.startSeconds);
                 objectStore.put(referenceKey,sample,"video/mp4");
             }
-            job.stage="GenAPI Kling O3: генерирую НОВУЮ сцену по видеореференсу";
+            // GenAPI validates start_image_url as REQUIRED whenever
+            // model=reference-to-video (observed definitive HTTP 422 in
+            // 25e45c7a-64a1-45ad-b080-973e9ad20009). The 8s VIDEO remains
+            // an independent appearance reference; the one still frame
+            // anchors the opening camera, lighting and person.
+            // Both assets must exist BEFORE any remotely billable POST.
+            String stillKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
+                    "-kling-still.jpg";
+            if(!job.providerRequests.containsKey(VIDEO_MODEL_ID)){
+                byte[] still=extractRoomStillFromCamera(camera,cameraMime,
+                        job.startSeconds+2.0);
+                objectStore.put(stillKey,still,"image/jpeg");
+            }
+            job.stage="GenAPI Kling O3: генерирую НОВУЮ сцену с обязательным стартовым кадром";
             checkpoint(job);
             String videoUrl=paidStage(job,VIDEO_MODEL_ID,()->{
-                String cleanUrl=cleanGenApiInputUrl(job,referenceKey,"mp4");
-                return submitJson(VIDEO_MODEL_ID,genApiVisualReferenceFields(scene,cleanUrl));
+                String cleanVideo=cleanGenApiInputUrl(job,referenceKey,"mp4");
+                String cleanImage=cleanGenApiInputUrl(job,stillKey,"jpg");
+                return submitJson(VIDEO_MODEL_ID,
+                        genApiVisualReferenceFields(scene,cleanVideo,cleanImage));
             });
             String paidKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
                     "-paid-kling.mp4";
@@ -1732,19 +1747,23 @@ public class NeuroReplacementPilotService {
     }
 
     /** Only documented GenAPI O3 fields, preserving appearance not source motion. */
-    private Map<String,Object> genApiVisualReferenceFields(NeuroScenePlan scene,String videoUrl) {
-        if(scene==null||videoUrl==null||!videoUrl.startsWith("https://")||
-                !videoUrl.contains("/input.mp4"))
-            throw new IllegalArgumentException("NEURO_GENAPI_VIDEO_VISUAL_REFERENCE_INVALID");
+    private Map<String,Object> genApiVisualReferenceFields(NeuroScenePlan scene,
+            String videoUrl,String startImageUrl) {
+        if(scene==null||videoUrl==null||startImageUrl==null||
+                !videoUrl.startsWith("https://")||!videoUrl.contains("/input.mp4")||
+                !startImageUrl.startsWith("https://")||
+                !startImageUrl.contains("/input.jpg"))
+            throw new IllegalArgumentException("NEURO_GENAPI_VIDEO_AND_START_IMAGE_REQUIRED");
         return Map.of(
                 "model",GENAPI_VISUAL_REFERENCE_MODEL,
-                "prompt",scene.videoPrompt()+
-                        " The reference clip supplies ONLY real facial identity, clothing, "+
-                        "microexpressions and appearance across angles. Generate new acting "+
-                        "from the written stage directions. DO NOT reproduce the timing, "+
-                        "head motion, hand motions, mouth gestures or poses from the reference.",
+                "prompt",scene.videoPrompt().replace("@Image1","@Image1")+
+                        " @Image1 is the STARTING webcam frame, while @Video1 is ONLY "+
+                        "an appearance reference across angles. Preserve identity, room "+
+                        "and microexpressions. Generate NEW acting from the written "+
+                        "directions; do not replay the source gestures, timing or poses.",
                 "duration",String.valueOf(scene.durationSeconds()),
                 "video_url",videoUrl,
+                "start_image_url",startImageUrl,
                 "pro",true,
                 "generate_audio",false,
                 "keep_audio",false,
