@@ -1128,6 +1128,16 @@ public class NeuroReplacementPilotService {
     @Value("${GENAPI_API_KEY:}")
     private String key;
 
+    // Video-character creation and Omni video MUST use the SAME official Kling
+    // account. A GenAPI-only key cannot create a cross-provider element_id.
+    @Value("${KLING_API_KEY:}")
+    private String klingApiKey;
+    private static final URI KLING_API = URI.create("https://api-singapore.klingai.com");
+    private static final String CHARACTER_MODE = "kling-video-character-v3";
+    private static final String CHARACTER_TASK = "kling-character";
+    private static final String ACTING_TASK = "kling-omni";
+
+
     @Autowired
     public NeuroReplacementPilotService(ObjectMapper json) {
         this(json, HttpClient.newBuilder()
@@ -1223,6 +1233,70 @@ public class NeuroReplacementPilotService {
         byRoom.put(roomId, job);
         executor.execute(() -> process(job, videoBytes, videoMime, voiceBytes, voiceMime, windowStartSeconds));
         return snapshot(job);
+    }
+
+    /**
+     * One NEW job for a previously archived recording. Never repurpose the
+     * historical paid job or its provider IDs. Client-generated testId is the
+     * at-most-once billing identity across refreshes/devices/instances.
+     */
+    public synchronized Map<String,Object> startVideoCharacterFromArchive(
+            String ownerUid,String sourceJobId,String testId,double startSeconds,
+            String assignment,boolean consented) {
+        if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "EXPLICIT_KLING_VIDEO_CHARACTER_PAYMENT_CONSENT_REQUIRED");
+        if(klingApiKey==null || klingApiKey.isBlank() || key==null || key.isBlank())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_KLING_OFFICIAL_API_KEY_NOT_CONFIGURED");
+        if(jdbc==null || objectStore==null || !objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_CHARACTER_ARCHIVE_NOT_READY");
+        if(testId==null || !testId.matches(
+                "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_CHARACTER_TEST_ID_INVALID");
+        if(!Double.isFinite(startSeconds)||startSeconds<0||startSeconds>22)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_CHARACTER_START_SECONDS_INVALID");
+        NeuroScenePlan scene=NeuroScenePlan.plan(assignment);
+        String room="hat-fac7edcharacter"+testId.replace("-","");
+        Job existing=existingRoomJob(room);
+        if(existing!=null) {
+            if(!ownerUid.equals(existing.ownerUid))
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+            if(!CHARACTER_MODE.equals(existing.providerRequests.get("character-mode")))
+                throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_JOB_MODE_MISMATCH");
+            return snapshot(existing);
+        }
+        Job archived=loadJobById(sourceJobId);
+        if(archived==null || !ownerUid.equals(archived.ownerUid) ||
+                archived.sourceCameraKey==null || archived.sourceVoiceKey==null ||
+                archived.cameraMime==null || archived.voiceMime==null)
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "NEURO_CHARACTER_SOURCE_CAMERA_VOICE_NOT_FOUND");
+        Job newJob=new Job(UUID.randomUUID().toString(),room,ownerUid);
+        newJob.sourceCameraKey=archived.sourceCameraKey;
+        newJob.sourceVoiceKey=archived.sourceVoiceKey;
+        newJob.cameraMime=archived.cameraMime;
+        newJob.voiceMime=archived.voiceMime;
+        newJob.sceneAssignment=scene.assignment();
+        newJob.startSeconds=startSeconds;
+        newJob.providerRequests.put("character-mode",CHARACTER_MODE);
+        newJob.stage="Подготовка видеоперсонажа Kling 3.0 Omni";
+        persist(newJob); // Never a paid POST until durable job is committed.
+        byRoom.put(room,newJob);
+        executor.execute(()->{
+            try {
+                process(newJob,objectStore.get(newJob.sourceCameraKey),newJob.cameraMime,
+                        objectStore.get(newJob.sourceVoiceKey),newJob.voiceMime,startSeconds);
+            } catch(Exception e) {
+                if(e instanceof InterruptedException || Thread.currentThread().isInterrupted())return;
+                newJob.state="failed";
+                newJob.error="NEURO_CHARACTER_ARCHIVED_INPUT_FAILED: "+e.getClass().getSimpleName();
+                checkpoint(newJob);
+            }
+        });
+        return snapshot(newJob);
     }
 
     /**
@@ -1330,6 +1404,7 @@ public class NeuroReplacementPilotService {
                 !job.sourceVoiceKey.isBlank());
         result.put("originalMime",job.cameraMime);
 
+        result.put("characterMode",CHARACTER_MODE.equals(job.providerRequests.get("character-mode")));
         result.put("sceneType",job.roomId.startsWith("hat-fac7ed") ? "studio" :
                 job.sceneAssignment == null ? "legacy-pilot" : "custom");
         if (job.sceneAssignment != null) {
@@ -1346,7 +1421,273 @@ public class NeuroReplacementPilotService {
         return result;
     }
 
+    /** Exact official Kling endpoints, never forward an arbitrary provider URL. */
+    private JsonNode klingRequest(String method,String path,Object payload) throws Exception {
+        if(klingApiKey==null||klingApiKey.isBlank())
+            throw new IOException("NEURO_KLING_OFFICIAL_KEY_MISSING");
+        HttpRequest.Builder request=HttpRequest.newBuilder(
+                KLING_API.resolve(path)).timeout(Duration.ofSeconds(55))
+                .header("Authorization","Bearer "+klingApiKey)
+                .header("Content-Type","application/json");
+        request.method(method,"GET".equals(method)?HttpRequest.BodyPublishers.noBody():
+                HttpRequest.BodyPublishers.ofString(json.writeValueAsString(payload)));
+        HttpResponse<String> response=http.send(request.build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if(response.statusCode()!=200)
+            throw new IOException("KLING_HTTP_"+response.statusCode());
+        JsonNode node=json.readTree(response.body());
+        if(node.path("code").asInt(-1)!=0)
+            throw new IOException("KLING_API_REJECTED_CODE_"+node.path("code").asText());
+        return node.path("data");
+    }
+
+    /** Idempotent external submission with ambiguous POST never repeated. */
+    private String klingPaidStage(Job job,String stage,String path,Object params) throws Exception {
+        String id=job.providerRequests.get(stage);
+        if(id!=null && !id.isBlank())return id;
+        if(job.submittingModel!=null)
+            throw new IOException("NEURO_AMBIGUOUS_PAID_POST_DO_NOT_REPEAT_"+stage);
+        job.submittingModel=stage;
+        checkpoint(job);
+        JsonNode data=klingRequest("POST",path,params);
+        id=data.path("task_id").asText();
+        if(id.isBlank())throw new IOException("KLING_TASK_ID_NOT_RETURNED_DO_NOT_REPEAT");
+        job.providerRequests.put(stage,id);
+        job.submittingModel=null;
+        checkpoint(job);
+        return id;
+    }
+
+    /** GET only after saved request ID, also survives worker/deployment restarts. */
+    private JsonNode awaitKling(String path,String taskId,boolean element) throws Exception {
+        if(taskId==null || !taskId.matches("[A-Za-z0-9_-]{6,120}"))
+            throw new IOException("KLING_TASK_ID_INVALID");
+        for(int n=0;n<160;n++){
+            JsonNode data=klingRequest("GET",path+"/"+taskId,null);
+            String state=data.path("task_status").asText();
+            if("succeed".equals(state))return data;
+            if("failed".equals(state))throw new IOException(
+                    "KLING_"+(element?"CHARACTER":"VIDEO")+"_FAILED "+
+                            data.path("task_status_msg").asText().replaceAll("[\\r\\n]"," "));
+            if(!"submitted".equals(state) && !"processing".equals(state))
+                throw new IOException("KLING_UNKNOWN_TASK_STATUS_"+state);
+            Thread.sleep(5000);
+        }
+        // Existing ID persists. A deploy will resume via GET; never POST twice.
+        throw new IOException("KLING_TASK_POLL_TIMEOUT_RESUME_EXISTING_ID");
+    }
+
+    private Map<String,Object> klingVideoCharacterFields(String referenceUrl,String id) {
+        if(!referenceUrl.startsWith("https://")||!referenceUrl.contains("/input.mp4"))
+            throw new IllegalArgumentException("NEURO_CHARACTER_REFERENCE_URL_INVALID");
+        return Map.of(
+                "element_name","Hat"+id.replace("-","").substring(0,13),
+                "element_description","Same real adult webcam speaker, consistent face and voice",
+                "reference_type","video_refer",
+                "element_video_list",Map.of("refer_videos",List.of(Map.of("video_url",referenceUrl))),
+                "external_task_id","character-"+id
+        );
+    }
+
+    private Map<String,Object> klingOmniCharacterFields(long elementId,String roomUrl,
+                                                         NeuroScenePlan scene,String id) {
+        if(elementId<=0||roomUrl==null||!roomUrl.startsWith("https://"))
+            throw new IllegalArgumentException("NEURO_CHARACTER_ELEMENT_OR_ROOM_INVALID");
+        String prompt=scene.videoPrompt()
+                .replace("@Video1","<<<element_1>>>")
+                .replace("Use <<<element_1>>> only","Use <<<element_1>>> only")
+                + " <<<element_1>>> is the ACTOR. <<<image_1>>> is the exact locked webcam ROOM."+
+                  " Brand-new movements, gestures and expressions. Never replay reference actions.";
+        return Map.of(
+                "model_name","kling-v3-omni",
+                "prompt",prompt,
+                "image_list",List.of(Map.of("image_url",roomUrl)),
+                "element_list",List.of(Map.of("element_id",elementId)),
+                "mode","pro",
+                "sound","off",
+                "multi_shot",false,
+                "duration",String.valueOf(scene.durationSeconds()),
+                "aspect_ratio","16:9",
+                "external_task_id","acting-"+id
+        );
+    }
+
+    private String completedKlingVideoUrl(JsonNode data) throws Exception {
+        JsonNode videos=data.path("task_result").path("videos");
+        if(!videos.isArray()||videos.isEmpty())
+            throw new IOException("KLING_VIDEO_RESULT_MISSING");
+        String url=videos.path(0).path("url").asText();
+        validatedResultUri(url);
+        return url;
+    }
+
+    private void processVideoCharacter(Job job,byte[] camera,String cameraMime,
+                                       byte[] voice,String voiceMime) {
+        boolean ownerReviewed="Владелец одобрил видеоперсонажа и движения".equals(job.stage);
+        try{
+            NeuroScenePlan scene=NeuroScenePlan.plan(job.sceneAssignment);
+            if(klingApiKey==null || klingApiKey.isBlank())
+                throw new IOException("NEURO_OFFICIAL_KLING_KEY_NOT_CONFIGURED");
+            if(!job.providerRequests.containsKey(CHARACTER_TASK)){
+                job.stage="Готовлю 8 секунд лица, мимики и голоса";
+                checkpoint(job);
+                byte[] sample=prepareVideoCharacterPreviewBytes(camera,cameraMime,voice,voiceMime,
+                        job.startSeconds);
+                String keyPath="neuro-replacements/"+job.ownerUid+"/"+job.id+
+                        "-kling-reference.mp4";
+                objectStore.put(keyPath,sample,"video/mp4");
+            }
+            String referenceKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
+                    "-kling-reference.mp4";
+            String referenceUrl=job.providerRequests.containsKey(CHARACTER_TASK)?null:
+                    cleanGenApiInputUrl(job,referenceKey,"mp4");
+            job.stage="Kling создаёт видеоперсонажа из лица и голоса";
+            checkpoint(job);
+            String charId=klingPaidStage(job,CHARACTER_TASK,
+                    "/v1/general/advanced-custom-elements",
+                    referenceUrl==null?Map.of():klingVideoCharacterFields(referenceUrl,job.id));
+            JsonNode elementResult=awaitKling("/v1/general/advanced-custom-elements",charId,true);
+            long elementId=elementResult.path("task_result").path("elements")
+                    .path(0).path("element_id").asLong();
+            if(elementId<=0)throw new IOException("KLING_VIDEO_CHARACTER_ELEMENT_ID_MISSING");
+            if(!job.providerRequests.containsKey(ACTING_TASK)){
+                String cameraMp4Key="neuro-replacements/"+job.ownerUid+"/"+job.id+
+                        "-kling-still.jpg";
+                // Representative room + frame still preserves background.
+                byte[] still=extractKlingStill(
+                        transcodeMedia(camera,cameraMime.equals("video/mp4")?"mp4":"webm",
+                                "mp4",true,job.startSeconds));
+                objectStore.put(cameraMp4Key,still,"image/jpeg");
+                String roomUrl=cleanGenApiInputUrl(job,cameraMp4Key,"jpg");
+                job.stage="Kling 3.0 Omni генерирует НОВЫЕ жесты";
+                checkpoint(job);
+                klingPaidStage(job,ACTING_TASK,"/v1/videos/omni-video",
+                        klingOmniCharacterFields(elementId,roomUrl,scene,job.id));
+            }
+            JsonNode render=awaitKling("/v1/videos/omni-video",
+                    job.providerRequests.get(ACTING_TASK),false);
+            String videoUrl=completedKlingVideoUrl(render);
+            byte[] paidVideo;
+            String paidKey="neuro-replacements/"+job.ownerUid+"/"+job.id+"-paid-kling.mp4";
+            try{paidVideo=objectStore.get(paidKey);}
+            catch(Exception notCached){paidVideo=null;}
+            if(paidVideo==null||paidVideo.length<256){
+                paidVideo=download(videoUrl,MAX_RESULT_BYTES);
+                MediaProbe info=probeMp4(paidVideo);
+                if(!info.video||Math.abs(info.seconds-scene.durationSeconds())>0.8)
+                    throw new IOException("NEURO_CHARACTER_ACTING_VIDEO_LENGTH_INVALID");
+                objectStore.put(paidKey,paidVideo,"video/mp4");
+            }
+            if(job.providerRequests.get("lipsync")==null){
+                double copy=measureSourceCopySsim(camera,cameraMime,paidVideo);
+                if(copy>=MAX_ACCEPTED_SOURCE_COPY_SSIM)
+                    throw new IOException("NEURO_CHARACTER_VIDEO_COPIED_SOURCE_NO_LIPSYNC");
+                if(!ownerReviewed){
+                    job.state="review";
+                    job.stage="Просмотри новый Kling MP4 и подтверди все жесты перед Lip Sync";
+                    checkpoint(job);
+                    return;
+                }
+            }
+            // Only after video is VISUALLY approved do we pay for new
+            // audio and Lip Sync. Never use the original spoken dialogue.
+            job.state="processing";
+            job.stage="Синтез русской речи для проверенного видео";
+            checkpoint(job);
+            String tts=paidStage(job,"tts",()->submitJson(TTS_MODEL_ID,Map.of(
+                    "prompt",scene.spokenText(),"voice","Puck",
+                    "style_instructions",scene.speechStyle(),
+                    "language_code","Russian (Russia)",
+                    "model","gemini-2.5-flash-tts","output_format","mp3")));
+            byte[] refVoice=transcodeMedia(voice,
+                    voiceMime.contains("wav")?"wav":voiceMime.equals("audio/mp4")?"m4a":"webm",
+                    "wav",false,0);
+            job.stage="Перенос голоса по старому оригиналу";checkpoint(job);
+            String transferred=paidStage(job,"chatterbox-speech",
+                    ()->submitMultipart("chatterbox-speech",Map.of("source_audio_url",tts),
+                            "target_voice_audio_url","reference.wav","audio/wav",refVoice));
+            double tempo=verifyExpressiveSpeechDuration(transferred,scene);
+            String aligned=alignSpeechToActingTimeline(job,transferred,scene,tempo);
+            job.stage="Lip Sync";checkpoint(job);
+            String finalVideo=paidStage(job,"lipsync",()->submitJson("lipsync",Map.of(
+                    "video_url",videoUrl,"audio_url",aligned,
+                    "model","lipsync-1.9.0-beta","sync_mode",LIPSYNC_SYNC_MODE)));
+            byte[] finalBytes=recoverPaidLipSyncVideo(job,finalVideo);
+            String archiveKey="neuro-replacements/"+job.ownerUid+"/"+job.id+".mp4";
+            objectStore.put(archiveKey,finalBytes,"video/mp4");
+            job.finalVideo=finalVideo;
+            job.finalVideoKey=archiveKey;
+            job.stage="Готовая Нейроподмена 3.0";
+            job.state="ready";
+            job.error=null;
+            checkpoint(job);
+        }catch(Exception e){
+            if(e instanceof InterruptedException || Thread.currentThread().isInterrupted())return;
+            job.state="failed";
+            job.error=String.valueOf(e.getMessage()).substring(0,
+                    Math.min(350,String.valueOf(e.getMessage()).length()));
+            job.stage="Ошибка Нейроподмены 3.0; существующие платные ID сохранены";
+            checkpoint(job);
+            LOG.warn("Character stage failed job={} reason={}",job.id,e.getClass().getSimpleName());
+        }
+    }
+
+    /** Owner-only, atomic approval: no new Kling or character charges. */
+    public synchronized Map<String,Object> approveCharacterActing(String ownerUid,
+            String jobId,boolean consented) {
+        if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "EXPLICIT_CHARACTER_LIPSYNC_PAYMENT_CONSENT_REQUIRED");
+        Job job=loadJobById(jobId);
+        if(job==null||!ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(!CHARACTER_MODE.equals(job.providerRequests.get("character-mode")) ||
+                !"review".equals(job.state) ||
+                !job.providerRequests.containsKey(CHARACTER_TASK) ||
+                !job.providerRequests.containsKey(ACTING_TASK) ||
+                job.providerRequests.containsKey("lipsync"))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_CHARACTER_ACTING_NOT_REVIEWABLE");
+        int claimed=jdbc.update("""
+          UPDATE neuro_replacement_job
+             SET state='processing',stage='Владелец одобрил видеоперсонажа и движения'
+           WHERE job_id=? AND owner_uid=? AND state='review'
+             AND jsonb_exists(provider_requests,'kling-character')
+             AND jsonb_exists(provider_requests,'kling-omni')
+             AND NOT jsonb_exists(provider_requests,'lipsync')
+          """,jobId,ownerUid);
+        if(claimed!=1)throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "NEURO_CHARACTER_ALREADY_APPROVED");
+        job.state="processing";
+        job.stage="Владелец одобрил видеоперсонажа и движения";
+        byRoom.put(job.roomId,job);
+        executor.execute(()->{
+            try{process(job,objectStore.get(job.sourceCameraKey),job.cameraMime,
+                    objectStore.get(job.sourceVoiceKey),job.voiceMime,job.startSeconds);}
+            catch(Exception error){
+                if(error instanceof InterruptedException || Thread.currentThread().isInterrupted())return;
+                job.state="failed";job.error="NEURO_CHARACTER_REVIEW_INPUT_FAILED";
+                checkpoint(job);
+            }
+        });
+        return snapshot(job);
+    }
+
+    public byte[] paidCharacterActing(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null||!ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(!CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))||
+                !job.providerRequests.containsKey(ACTING_TASK))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "NEURO_CHARACTER_ACTING_NOT_READY");
+        return objectStore.get("neuro-replacements/"+ownerUid+"/"+jobId+"-paid-kling.mp4");
+    }
+
     private void process(Job job, byte[] camera, String cameraMime, byte[] voice, String voiceMime, double startSeconds) {
+        if(CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))) {
+            processVideoCharacter(job,camera,cameraMime,voice,voiceMime);
+            return;
+        }
         // Owner review is persisted as a stage before this run is queued.
         boolean actingReviewApproved="Владелец подтвердил движения Kling".equals(job.stage);
         try {
@@ -1650,9 +1991,19 @@ public class NeuroReplacementPilotService {
         result.put("freeLocalVideoPreview",true);
         result.put("genApiO3AcceptsExistingElements",true);
         result.put("genApiVideoCharacterCreationVerified",false);
-        result.put("paidGenerationEnabled",false);
-        result.put("reason","NEURO_GENAPI_VIDEO_CHARACTER_CREATION_API_UNVERIFIED");
-        result.put("requiredProviderOperation","advanced-custom-elements: video_refer -> element_id -> O3 elements[]");
+        result.put("officialKlingApiConfigured",klingApiKey!=null && !klingApiKey.isBlank());
+        boolean configured=klingApiKey!=null && !klingApiKey.isBlank() &&
+                key!=null && !key.isBlank() && jdbc!=null &&
+                objectStore!=null && objectStore.configured();
+        result.put("paidGenerationEnabled",configured);
+        result.put("provider","Kling official 3.0 Omni for video + GenAPI for voice and lip sync");
+        result.put("reason",configured?"OFFICIAL_KLING_AND_GENAPI_READY":
+            "NEURO_KLING_OFFICIAL_API_KEY_REQUIRED_FOR_VIDEO_CHARACTER");
+
+        result.put("requiredProviderOperation",
+                "Kling official /v1/general/advanced-custom-elements video_refer -> " +
+                "same-account /v1/videos/omni-video kling-v3-omni -> " +
+                "GenAPI speech and Lip Sync after visual approval");
         result.put("noPaidPostsDuringPreflight",true);
         return result;
     }
