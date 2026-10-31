@@ -1632,34 +1632,94 @@ public class NeuroReplacementPilotService {
         return data;
     }
 
+    /**
+     * GenAPI's documented 422 envelope uses "errors_validation" (not the
+     * usual FastAPI "detail"). Never persist raw error JSON or rejected
+     * parameter VALUES: validation bodies can echo signed S3 URLs, prompts
+     * and user data.
+     */
     private String validationDetails(JsonNode data) {
         if (data == null || data.isNull()) return "";
-        List<String> reasons=new ArrayList<>();
-        collectValidationDetails(data,reasons,0);
-        String safe=String.join("; ",reasons)
-                .replaceAll("(?i)https?://\\S+","[URL]")
-                .replaceAll("[^\\p{L}\\p{N} _.,:;!()#=/-]"," ").trim();
-        return safe.substring(0,Math.min(260,safe.length()));
-    }
-
-    private void collectValidationDetails(JsonNode data,List<String> reasons,int depth) {
-        if(data==null || depth>6 || reasons.size()>4)return;
-        if(data.isArray()) {
-            for(JsonNode item:data)collectValidationDetails(item,reasons,depth+1);
-        } else if(data.isObject()) {
-            String msg=data.path("msg").asText("");
-            if(msg.isBlank()) msg=data.path("type").asText("");
-            if(msg.isBlank()) msg=data.path("code").asText("");
-            if(!msg.isBlank()) {
-                JsonNode location=data.path("loc");
-                String loc=location.isArray()?location.toString().replaceAll("[^a-zA-Z0-9_,]",""): "";
-                reasons.add(loc.isBlank()?msg:loc+": "+msg);
-            }
-            for(String field:new String[]{"detail","errors","validation_errors","issues"}) {
-                JsonNode child=data.path(field);
-                if(!child.isMissingNode())collectValidationDetails(child,reasons,depth+1);
+        List<String> reasons = new ArrayList<>();
+        JsonNode documented = data.path("errors_validation");
+        if (!documented.isMissingNode() && !documented.isNull()) {
+            collectValidationDetails(documented, reasons, 0, "errors_validation");
+            if (reasons.isEmpty()) {
+                return "GenAPI errors_validation returned without field descriptions";
             }
         }
+        for (String name : new String[]{"detail", "errors", "validation_errors", "issues"}) {
+            collectValidationDetails(data.path(name), reasons, 0, "");
+        }
+        String safe = String.join("; ", reasons);
+        return safe.substring(0, Math.min(260, safe.length()));
+    }
+
+    private void collectValidationDetails(JsonNode node, List<String> reasons,
+                                          int depth, String field) {
+        if (node == null || node.isNull() || node.isMissingNode() ||
+                depth > 6 || reasons.size() >= 5) return;
+        if (node.isArray()) {
+            for (JsonNode child : node) collectValidationDetails(child, reasons, depth + 1, field);
+            return;
+        }
+        if (node.isObject()) {
+            String location=field;
+            JsonNode loc=node.path("loc");
+            if (loc.isArray() && !loc.isEmpty()) {
+                JsonNode tail=loc.get(loc.size()-1);
+                if (tail.isTextual()) location=safeValidationField(tail.asText());
+            }
+            String message="";
+            for(String name:new String[]{"msg","message","type","code","_errors"}) {
+                JsonNode candidate=node.path(name);
+                if (candidate.isTextual() && !candidate.asText("").isBlank()) {
+                    message=candidate.asText("");
+                    break;
+                }
+            }
+            if (!message.isBlank()) {
+                reasons.add(location+": "+safeValidationMessage(message));
+            }
+            node.fields().forEachRemaining(entry -> {
+                String key=entry.getKey();
+                if ("input".equals(key) || "value".equals(key) || "context".equals(key)
+                        || "ctx".equals(key) || "url".equals(key)
+                        || "prompt".equals(key) && !"errors_validation".equals(field)
+                        || "loc".equals(key)) return;
+                JsonNode child=entry.getValue();
+                // The documented envelope contains one entry per named
+                // *field*. Never record untrusted textual request values.
+                if ("msg".equals(key) || "message".equals(key) || "type".equals(key)
+                        || "code".equals(key) || "_errors".equals(key)
+                        || "error".equals(key) || "errors_validation".equals(key)) return;
+                String subfield="errors_validation".equals(field) || field.isBlank()
+                        ? safeValidationField(key) : field+"."+safeValidationField(key);
+                if(child.isTextual()) {
+                    if (reasons.size()<5) reasons.add(subfield+": "+
+                            safeValidationMessage(child.asText()));
+                } else if(child.isArray() || child.isObject()) {
+                    collectValidationDetails(child,reasons,depth+1,subfield);
+                }
+            });
+            return;
+        }
+        if (node.isTextual() && !node.asText("").isBlank()) {
+            reasons.add(field+": "+safeValidationMessage(node.asText()));
+        }
+    }
+
+    private String safeValidationField(String field) {
+        String clean=field.replaceAll("[^a-zA-Z0-9_-]","").trim();
+        return clean.isBlank() ? "field" : clean.substring(0, Math.min(40,clean.length()));
+    }
+
+    private String safeValidationMessage(String message) {
+        // Drop complete URLs, authorization secrets and provider echoed values.
+        String safe=message.replaceAll("(?i)https?://\\S+","[redacted-url]")
+                .replaceAll("(?i)(bearer|token|secret|key)\\s*[:=]\\s*\\S+","[redacted-credential]")
+                .replaceAll("[^\\p{L}\\p{N} _.,:;!()#=/-]"," ").trim();
+        return safe.substring(0,Math.min(110,safe.length()));
     }
 
     private String requestId(JsonNode data) throws IOException {
