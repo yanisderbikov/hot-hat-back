@@ -67,7 +67,11 @@ public class NeuroReplacementPilotService {
     // GenAPI O3 requires the dedicated video-reference mode for video_url (Pro only).
     private static final String VIDEO_INPUT_REFERENCE_MODE = "video-to-video-reference";
     private static final int VIDEO_DURATION_SECONDS = 15;
-    private static final String LIPSYNC_SYNC_MODE = "silence";
+    // GenAPI lipsync endpoint accepts cut_off (its documented default).
+    // "silence" is rejected by GenAPI HTTP 422 even though other upstream
+    // vendors advertise it. Our aligned audio is padded to exactly match
+    // the video, so cut_off cannot drop spoken words.
+    private static final String LIPSYNC_SYNC_MODE = "cut_off";
     // Upper bound for local pitch-preserving tempo correction. Never crop spoken words.
     private static final double MAX_SAFE_SPEECH_TEMPO = 1.45;
     private static final String TTS_MODEL_ID = "gemini-tts";
@@ -554,6 +558,81 @@ public class NeuroReplacementPilotService {
                 job.state="failed";
                 job.stage="Не удалось продолжить после лимита";
                 job.error="NEURO_RESUME_INPUT_FAILED: " + e.getClass().getSimpleName();
+                checkpoint(job);
+            }
+        });
+        return snapshot(job);
+    }
+
+    /**
+     * Resume after an unambiguous HTTP 422 validation REJECTION of the
+     * unbilled Lip Sync POST. The three prior provider IDs remain immutable.
+     * This is the ONLY 422 variant we unlock: an invalid sync_mode field.
+     * An unknown 422 or an ambiguous timeout must NEVER resubmit.
+     */
+    public synchronized Map<String,Object> resumeAfterLipSyncMode422(String ownerUid,
+                                                                      String jobId,
+                                                                      boolean consented) {
+        if (!consented) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "EXPLICIT_NEW_LIPSYNC_PAYMENT_CONSENT_REQUIRED");
+        if (!enabled || key == null || key.isBlank() || jdbc == null ||
+                objectStore == null || !objectStore.configured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_PROVIDER_OR_ARCHIVE_NOT_READY");
+        }
+        Job job=loadJobById(jobId);
+        if (job==null || !ownerUid.equals(job.ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        }
+        if (!"failed".equals(job.state) || job.error == null ||
+                !job.error.startsWith("GENAPI_HTTP_422 sync_mode:") ||
+                !"lipsync".equals(job.submittingModel) ||
+                job.sceneAssignment == null || job.sceneAssignment.isBlank() ||
+                !job.providerRequests.containsKey("tts") ||
+                !job.providerRequests.containsKey("chatterbox-speech") ||
+                !job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+                job.providerRequests.containsKey("lipsync") ||
+                job.sourceCameraKey==null || job.sourceVoiceKey==null ||
+                job.cameraMime==null || job.voiceMime==null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_LIPSYNC_422_NOT_ELIGIBLE");
+        }
+        // A cross-instance database compare-and-set claims the exact
+        // rejected job once. No new room, no fresh paid video or voice.
+        int claimed=jdbc.update("""
+            UPDATE neuro_replacement_job
+               SET state='processing', stage='Повтор Lip Sync с проверенным sync_mode',
+                   error_message=NULL, submitting_model=NULL
+             WHERE job_id=? AND owner_uid=? AND state='failed'
+               AND error_message LIKE 'GENAPI_HTTP_422 sync_mode:%'
+               AND submitting_model='lipsync'
+               AND scene_assignment IS NOT NULL
+               AND source_camera_key IS NOT NULL AND source_voice_key IS NOT NULL
+               AND jsonb_exists(provider_requests,'tts')
+               AND jsonb_exists(provider_requests,'chatterbox-speech')
+               AND jsonb_exists(provider_requests,'kling-video-o3')
+               AND NOT jsonb_exists(provider_requests,'lipsync')
+            """,jobId,ownerUid);
+        if (claimed!=1) throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "NEURO_LIPSYNC_422_ALREADY_CLAIMED");
+        job.state="processing";
+        job.stage="Повтор Lip Sync с проверенным sync_mode";
+        job.error=null;
+        job.submittingModel=null; // Only documented definitive 422 refusal.
+        byRoom.put(job.roomId,job);
+        executor.execute(()->{
+            try{
+                byte[] camera=objectStore.get(job.sourceCameraKey);
+                byte[] voice=objectStore.get(job.sourceVoiceKey);
+                // paidStage() resolves the three old GenAPI IDs by GET.
+                // Exactly one NEW Lip Sync POST requires this fresh consent.
+                process(job,camera,job.cameraMime,voice,job.voiceMime,job.startSeconds);
+            }catch(Exception error){
+                if(error instanceof InterruptedException || Thread.currentThread().isInterrupted())return;
+                job.state="failed";
+                job.stage="Ошибка продолжения Lip Sync";
+                job.error="NEURO_LIPSYNC_422_RESUME_INPUT_FAILED: "+
+                        error.getClass().getSimpleName();
                 checkpoint(job);
             }
         });
@@ -1421,6 +1500,46 @@ public class NeuroReplacementPilotService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_ORIGINAL_NOT_ARCHIVED");
         }
         return objectStore.get(job.sourceCameraKey);
+    }
+
+    /**
+     * Give the owner the actual previously paid Kling MP4 independently
+     * from the final lip-synced output, even after a 422. Only GenAPI GET,
+     * never a new billable generation request. Cache the result in S3.
+     */
+    public byte[] paidKlingPreview(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if (job==null || !ownerUid.equals(job.ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        }
+        String id=job.providerRequests.get(VIDEO_MODEL_ID);
+        if (id==null || id.isBlank() || objectStore==null || !objectStore.configured()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_PAID_KLING_NOT_AVAILABLE");
+        }
+        String archiveKey="neuro-replacements/"+ownerUid+"/"+jobId+"-paid-kling.mp4";
+        try {
+            byte[] video;
+            try {
+                video=objectStore.get(archiveKey);
+            }catch(Exception notYetCached){
+                String url=completedPaidResultUrl(VIDEO_MODEL_ID,id); // GET existing paid ID
+                video=download(url,MAX_RESULT_BYTES); // GET existing MP4
+                MediaProbe info=probeMp4(video);
+                int expected=job.sceneAssignment==null?VIDEO_DURATION_SECONDS:
+                        NeuroScenePlan.plan(job.sceneAssignment).durationSeconds();
+                if(!info.video || info.seconds<expected-0.7 ||
+                        info.seconds>expected+0.7) {
+                    throw new IOException("NEURO_PAID_KLING_VIDEO_INVALID");
+                }
+                objectStore.put(archiveKey,video,"video/mp4");
+            }
+            return video;
+        }catch(Exception failure){
+            LOG.warn("Could not recover already-paid Kling MP4 job={} error={}",
+                    jobId,failure.getClass().getSimpleName());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "NEURO_PAID_KLING_DOWNLOAD_UNAVAILABLE");
+        }
     }
 
     public String originalMime(String ownerUid,String jobId) {
