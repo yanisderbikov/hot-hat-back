@@ -193,6 +193,32 @@ public class NeuroReplacementPilotService {
     }
 
     @EventListener(ApplicationReadyEvent.class)
+    public void runConfiguredFreeVideoPreflight() {
+        String id=startupPreflightJobId;
+        if(id==null || !id.matches("[a-f0-9-]{36}") || jdbc==null ||
+                objectStore==null || !objectStore.configured())return;
+        executor.execute(()->{
+            try {
+                Job job=loadJobById(id);
+                if(job==null) {
+                    LOG.warn("Free Kling preflight: job not found");
+                    return;
+                }
+                Map<String,Object> status=inspectKlingReference(job.ownerUid,id);
+                // No keys, prompts, signed URLs, or private video bytes in log.
+                LOG.info("Free Kling preflight job={} check={} sourceVideo={} seconds={} " +
+                                "publicGet={} mp4Signature={} paidCalls=0",
+                        id,status.get("check"),status.get("inputVideo"),
+                        status.get("inputSeconds"),status.get("publicGetStatus"),
+                        status.get("mp4Signature"));
+            } catch(Exception exception) {
+                LOG.warn("Free Kling preflight failed job={} type={}",
+                        id,exception.getClass().getSimpleName());
+            }
+        });
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
     public void recoverPendingJobs() {
         if (jdbc == null || objectStore == null || !objectStore.configured()) return;
         try {
@@ -769,6 +795,10 @@ public class NeuroReplacementPilotService {
 
     @Value("${neuro-replacement.pilot.enabled:false}")
     private boolean enabled;
+
+    // Optional one-off read-only owner diagnostic at startup; no GenAPI POST.
+    @Value("${NEURO_PREFLIGHT_JOB_ID:}")
+    private String startupPreflightJobId;
 
     @Value("${GENAPI_API_KEY:}")
     private String key;
