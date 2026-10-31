@@ -167,6 +167,21 @@ public class NeuroReplacementHistoryController {
     }
 
 
+    @GetMapping("/{jobId}/paid-kling/quality")
+    @ApiResponse(responseCode= "200", description="Бесплатное сравнение оплаченного Kling с оригиналом по SSIM, без GenAPI POST")
+    public Map<String,Object> paidKlingQuality(@AuthenticationPrincipal HotHatUser owner,
+                                                @PathVariable String jobId) {
+        return pilot.paidActingQuality(owner.uid(),jobId);
+    }
+
+    @PostMapping("/{jobId}/resume-reviewed-acting")
+    @ApiResponse(responseCode= "200", description="Продолжение только Lip Sync после просмотра и явного одобрения движений в уже оплаченном Kling MP4")
+    public Map<String,Object> resumeReviewedActing(@AuthenticationPrincipal HotHatUser owner,
+                                                    @PathVariable String jobId,
+                                                    @RequestParam(name="consented",defaultValue="false") boolean consented) {
+        return pilot.resumeReviewedActing(owner.uid(),jobId,consented);
+    }
+
     @PostMapping("/{jobId}/resume-lipsync-422")
     @ApiResponse(responseCode= "200", description="Единичное платное продолжение Lip Sync после подтверждённого отказа GenAPI 422 sync_mode; старые ID Kling/TTS/Chatterbox не оплачиваются повторно")
     public Map<String,Object> resumeLipSyncMode422(@AuthenticationPrincipal HotHatUser owner,
