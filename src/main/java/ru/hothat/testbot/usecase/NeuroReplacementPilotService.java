@@ -172,7 +172,7 @@ public class NeuroReplacementPilotService {
             SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
                    final_video_url,error_message,final_video_key,
                    source_camera_key,source_voice_key,source_camera_mime,source_voice_mime,
-                   window_start_seconds,submitting_model,scene_assignment
+                   window_start_seconds,submitting_model,scene_assignment,kling_422_retry_count
               FROM neuro_replacement_job WHERE job_id=?
             """, (rs,n) -> {
             Job job = new Job(rs.getString(1), rs.getString(2), rs.getString(3));
@@ -186,6 +186,7 @@ public class NeuroReplacementPilotService {
             job.cameraMime=rs.getString(12);job.voiceMime=rs.getString(13);
             job.startSeconds=rs.getDouble(14);job.submittingModel=rs.getString(15);
             job.sceneAssignment=rs.getString(16);
+            job.kling422Retries=rs.getInt(17);
             return job;
         }, id);
         return jobs.isEmpty()?null:jobs.get(0);
@@ -275,7 +276,7 @@ public class NeuroReplacementPilotService {
         if (jdbc == null) return List.of();
         return jdbc.query("""
             SELECT job_id,room_id,owner_uid,state,stage,provider_requests::text,
-                   final_video_url,error_message,final_video_key,created_at,scene_assignment
+                   final_video_url,error_message,final_video_key,created_at,scene_assignment,kling_422_retry_count
             FROM neuro_replacement_job WHERE owner_uid=? ORDER BY created_at DESC
             """, (rs, rowNum) -> {
             Job job = new Job(rs.getString(1),rs.getString(2),rs.getString(3));
@@ -287,6 +288,7 @@ public class NeuroReplacementPilotService {
             job.finalVideo = rs.getString(7);
             job.error = rs.getString(8); job.finalVideoKey = rs.getString(9);
             job.sceneAssignment = rs.getString(11);
+            job.kling422Retries=rs.getInt(12);
             Map<String,Object> result = snapshot(job);
             result.put("roomId",job.roomId);
             result.put("createdAt",rs.getTimestamp(10).toInstant().toString());
@@ -618,6 +620,8 @@ public class NeuroReplacementPilotService {
         if (job==null || !ownerUid.equals(job.ownerUid)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
         }
+        if (job.kling422Retries>=1) throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "NEURO_KLING_422_RETRY_LIMIT_REACHED");
         if (!"failed".equals(job.state) || job.error==null ||
                 !job.error.startsWith("GENAPI_HTTP_422") ||
                 !VIDEO_MODEL_ID.equals(job.submittingModel) ||
@@ -633,8 +637,10 @@ public class NeuroReplacementPilotService {
         int claimed=jdbc.update("""
             UPDATE neuro_replacement_job
                SET state='processing',stage='Повтор проверки отклонённого Kling JSON',
-                   error_message=NULL,submitting_model=NULL
+                   error_message=NULL,submitting_model=NULL,
+                   kling_422_retry_count=kling_422_retry_count+1
              WHERE job_id=? AND owner_uid=? AND state='failed'
+               AND kling_422_retry_count<1
                AND error_message LIKE 'GENAPI_HTTP_422%'
                AND submitting_model='kling-video-o3'
                AND scene_assignment IS NOT NULL
@@ -645,6 +651,7 @@ public class NeuroReplacementPilotService {
             """,jobId,ownerUid);
         if (claimed!=1) throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "NEURO_KLING_422_RESUME_ALREADY_CLAIMED");
+        job.kling422Retries++;
         job.state="processing";
         job.stage="Повтор проверки отклонённого Kling JSON";
         job.error=null;
@@ -838,6 +845,7 @@ public class NeuroReplacementPilotService {
         // Owner-only metadata for the history/video archive: an exact account of
         // what was ordered. Older paid 15s jobs remain identifiable, not rewritten.
         result.put("sceneAssignment", job.sceneAssignment);
+        result.put("kling422RetryCount", job.kling422Retries);
         result.put("sceneType", job.sceneAssignment == null ? "legacy-pilot" : "custom");
         if (job.sceneAssignment != null) {
             NeuroScenePlan scene = NeuroScenePlan.plan(job.sceneAssignment);
@@ -1615,6 +1623,7 @@ public class NeuroReplacementPilotService {
         volatile double startSeconds;
         volatile String submittingModel;
         volatile String sceneAssignment;
+        volatile int kling422Retries;
         final Map<String, String> providerRequests = new ConcurrentHashMap<>();
 
         Job(String id, String roomId, String ownerUid) {
