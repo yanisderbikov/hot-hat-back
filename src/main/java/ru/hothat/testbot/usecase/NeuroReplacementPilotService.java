@@ -1319,6 +1319,11 @@ public class NeuroReplacementPilotService {
         result.put("sceneAssignment", job.sceneAssignment);
         result.put("kling422RetryCount", job.kling422Retries);
         result.put("originalAvailable",job.sourceCameraKey!=null && !job.sourceCameraKey.isBlank());
+        // Both saved camera and separate microphone are needed for the 8s
+        // video-character sample. No raw S3 keys are exposed to the client.
+        result.put("characterSourceAvailable",job.sourceCameraKey!=null &&
+                !job.sourceCameraKey.isBlank() && job.sourceVoiceKey!=null &&
+                !job.sourceVoiceKey.isBlank());
         result.put("originalMime",job.cameraMime);
 
         result.put("sceneType",job.roomId.startsWith("hat-fac7ed") ? "studio" :
@@ -1520,6 +1525,61 @@ public class NeuroReplacementPilotService {
                 video.getSize()>MAX_VIDEO_BYTES || voice.getSize()>MAX_VOICE_BYTES)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "NEURO_CHARACTER_REFERENCE_MEDIA_INVALID");
+        try {
+            return prepareVideoCharacterPreviewBytes(
+                    video.getBytes(),videoMime,voice.getBytes(),voiceMime,startSeconds);
+        } catch(IOException exception) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "NEURO_CHARACTER_SOURCE_READ_FAILED");
+        }
+    }
+
+    /**
+     * Reuse an owner-owned, already archived recording and its separately
+     * archived voice sample. This never creates a job or touches GenAPI.
+     */
+    public byte[] prepareArchivedVideoCharacterPreview(String ownerUid,
+                                                       String jobId,double startSeconds) {
+        if(jdbc==null || objectStore==null || !objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_CHARACTER_ARCHIVE_NOT_READY");
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(job.sourceCameraKey==null || job.sourceVoiceKey==null ||
+                job.cameraMime==null || job.voiceMime==null)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_CHARACTER_ARCHIVED_CAMERA_OR_VOICE_MISSING");
+        if(!Double.isFinite(startSeconds) || startSeconds<0 || startSeconds>22)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_CHARACTER_REFERENCE_START_INVALID");
+        try {
+            byte[] camera=objectStore.get(job.sourceCameraKey);
+            byte[] voice=objectStore.get(job.sourceVoiceKey);
+            return prepareVideoCharacterPreviewBytes(camera,job.cameraMime,
+                    voice,job.voiceMime,startSeconds);
+        }catch(ResponseStatusException error) {
+            throw error;
+        }catch(Exception error) {
+            LOG.warn("Archive character preview failed job={} reason={}",
+                    jobId,error.getClass().getSimpleName());
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "NEURO_CHARACTER_ARCHIVE_SAMPLE_UNAVAILABLE");
+        }
+    }
+
+    private byte[] prepareVideoCharacterPreviewBytes(byte[] videoBytes,String videoMime,
+                                                      byte[] voiceBytes,String voiceMime,
+                                                      double startSeconds) {
+        if(videoBytes==null || voiceBytes==null || videoBytes.length==0 ||
+                voiceBytes.length==0 || videoBytes.length>MAX_VIDEO_BYTES ||
+                voiceBytes.length>MAX_VOICE_BYTES ||
+                videoMime==null || !(videoMime.equals("video/webm")||videoMime.equals("video/mp4")) ||
+                voiceMime==null || !(voiceMime.equals("audio/webm")||
+                    voiceMime.equals("audio/mp4")||voiceMime.equals("audio/wav")||
+                    voiceMime.equals("audio/x-wav")))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_CHARACTER_ARCHIVED_MEDIA_INVALID");
         Path camera=null,microphone=null,output=null;
         try{
             camera=Files.createTempFile("neuro-character-video-",
@@ -1527,8 +1587,8 @@ public class NeuroReplacementPilotService {
             microphone=Files.createTempFile("neuro-character-voice-",
                     voiceMime.contains("wav")?".wav":voiceMime.equals("audio/mp4")?".m4a":".webm");
             output=Files.createTempFile("neuro-character-preview-",".mp4");
-            Files.write(camera,video.getBytes());
-            Files.write(microphone,voice.getBytes());
+            Files.write(camera,videoBytes);
+            Files.write(microphone,voiceBytes);
             Process proc=new ProcessBuilder("ffmpeg","-hide_banner",
                     "-loglevel","error","-nostdin","-y",
                     "-ss",String.valueOf(startSeconds),"-i",camera.toString(),
