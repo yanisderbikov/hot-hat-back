@@ -103,6 +103,47 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void rejectedReferenceStartImage422OnSameJobCannotBeDoubleClaimed() throws Exception {
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","test-existing-genapi-key");
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        var archive=mock(ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        String id="25e45c7a-64a1-45ad-b080-973e9ad20009", owner="owner-1";
+        ResultSet row=mock(ResultSet.class);
+        when(row.getString(1)).thenReturn(id);
+        when(row.getString(2)).thenReturn("hat-fac7edcharacter25e45c7a64a145adb080973e9ad20009");
+        when(row.getString(3)).thenReturn(owner);
+        when(row.getString(4)).thenReturn("failed");
+        when(row.getString(6)).thenReturn(
+                "{\"character-mode\":\"genapi-o3-video-identity-reference\"}");
+        when(row.getString(8)).thenReturn(
+                "GenAPI kling-video-o3 submission: GENAPI_HTTP_422 start_image_url: "+
+                "Поле start image url обязательно для заполнения");
+        when(row.getString(10)).thenReturn("saved-camera.webm");
+        when(row.getString(11)).thenReturn("saved-voice.webm");
+        when(row.getString(12)).thenReturn("video/webm");
+        when(row.getString(13)).thenReturn("audio/webm");
+        when(row.getString(15)).thenReturn("kling-video-o3");
+        when(row.getString(16)).thenReturn(
+                "Сказать «А вы всё ещё кипятите?», потом «Тогда мы идём к вам!», "+
+                "показать большой палец, кулак, встать и уйти из кадра.");
+        when(row.getInt(17)).thenReturn(0);
+        when(db.query(anyString(),any(RowMapper.class),eq(id)))
+                .thenAnswer(call->List.of(((RowMapper)call.getArgument(1)).mapRow(row,0)));
+        // Someone on another Railway worker claimed the only eligible retry.
+        when(db.update(anyString(),eq(id),eq(owner))).thenReturn(0);
+        ResponseStatusException denied=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeVideoReferenceStartImage422(owner,id,true));
+        assertEquals(HttpStatus.CONFLICT,denied.getStatusCode());
+        assertTrue(denied.getReason().contains("ALREADY_CLAIMED"));
+        verify(db,times(1)).update(anyString(),eq(id),eq(owner));
+    }
+
+    @Test
     void videoCharacter3RequiresExplicitConsentAndSameOfficialKlingAccount() {
         ResponseStatusException noConsent=assertThrows(ResponseStatusException.class,
                 ()->pilot.startVideoCharacterFromArchive("owner-1",
