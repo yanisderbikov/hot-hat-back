@@ -673,6 +673,68 @@ public class NeuroReplacementPilotService {
         return snapshot(job);
     }
 
+    /**
+     * Owner-only FREE preflight for a failed paid scene.
+     * This method makes ZERO calls to /networks/*: it only tests that the
+     * archived webcam reference is decodable and reachable over signed HTTPS.
+     * Never returns a private video, owner ID, or signed S3 URL to the browser.
+     */
+    public Map<String,Object> inspectKlingReference(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        }
+        Map<String,Object> result=new LinkedHashMap<>();
+        result.put("jobId",jobId);
+        result.put("paidCalls",0);
+        result.put("generationStarted",false);
+        result.put("safeToRetry",false);
+        if(job.sceneAssignment==null || job.sourceCameraKey==null ||
+                objectStore==null || !objectStore.configured()) {
+            result.put("check","MISSING_ARCHIVED_REFERENCE");
+            return result;
+        }
+        try {
+            byte[] camera=objectStore.get(job.sourceCameraKey);
+            byte[] mp4=transcodeMedia(camera,
+                    "video/mp4".equals(job.cameraMime)?"mp4":"webm","mp4",true,job.startSeconds);
+            MediaProbe probe=probeMp4(mp4);
+            result.put("inputVideo",probe.video);
+            result.put("inputSeconds",Math.round(probe.seconds*10.0)/10.0);
+            result.put("inputBytes",mp4.length);
+            if(!probe.video || probe.seconds<8.0 || probe.seconds>10.7) {
+                result.put("check","INVALID_REFERENCE_VIDEO");
+                return result;
+            }
+            String signedUrl=publishSceneCameraReference(job,mp4);
+            HttpRequest request=HttpRequest.newBuilder(URI.create(signedUrl))
+                    .timeout(Duration.ofSeconds(20)).header("Range","bytes=0-31").GET().build();
+            HttpResponse<java.io.InputStream> response=http.send(request,
+                    HttpResponse.BodyHandlers.ofInputStream());
+            byte[] header;
+            try(java.io.InputStream input=response.body()){
+                header=input.readNBytes(16);
+            }
+            boolean publicAccess=(response.statusCode()==200 || response.statusCode()==206);
+            boolean mp4Signature=header.length>=8 &&
+                    header[4]=='f' && header[5]=='t' && header[6]=='y' && header[7]=='p';
+            result.put("signedUrlReachable",publicAccess);
+            result.put("publicGetStatus",response.statusCode());
+            result.put("mp4Signature",mp4Signature);
+            result.put("model",VIDEO_INPUT_REFERENCE_MODE);
+            result.put("durationSeconds",NeuroScenePlan.plan(job.sceneAssignment).durationSeconds());
+            result.put("check",publicAccess && mp4Signature
+                    ? "REFERENCE_READY_PROVIDER_SCHEMA_NOT_PROVEN"
+                    : "SIGNED_REFERENCE_REJECTED");
+        } catch(Exception error) {
+            result.put("check","REFERENCE_PREFLIGHT_FAILED");
+            result.put("technicalReason",error.getClass().getSimpleName());
+        }
+        // Even a green S3 check cannot prove the GenAPI generation request is
+        // valid. Never release the payment guard from this endpoint.
+        return result;
+    }
+
     public byte[] archivedVideo(String ownerUid, String jobId) {
         Job job = findOwnerJob(ownerUid,jobId);
         if (job == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
