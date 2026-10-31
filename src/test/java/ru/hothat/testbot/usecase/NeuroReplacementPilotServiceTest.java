@@ -356,6 +356,45 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void documentedGenApi422ErrorsValidationRevealsRejectedFieldsWithoutSignedUrls() throws Exception {
+        var data = new ObjectMapper().readTree("""
+                {"error":true,"errors_validation":{
+                  "model":["Unknown generation mode"],
+                  "video_url":["Cannot download https://private.example.test/?Signature=SECRET123"],
+                  "duration":["Must be between 3 and 15 seconds"]
+                }}
+                """);
+        String diagnostic=ReflectionTestUtils.invokeMethod(pilot,"validationDetails",data);
+        assertTrue(diagnostic.contains("model: Unknown generation mode"),diagnostic);
+        assertTrue(diagnostic.contains("video_url: Cannot download"),diagnostic);
+        assertTrue(diagnostic.contains("duration: Must be between 3 and 15"),diagnostic);
+        assertFalse(diagnostic.contains("private.example.test"),diagnostic);
+        assertFalse(diagnostic.contains("SECRET123"),diagnostic);
+    }
+
+    @Test
+    void documentedGenApi422NestedErrorsRemainActionable() throws Exception {
+        var data = new ObjectMapper().readTree("""
+                {"error":true,"errors_validation":{"body":{
+                  "model":{"errors":[{"loc":["body","model"],"msg":"Unsupported generation mode"}]},
+                  "video_url":["Invalid input format"]
+                }}}
+                """);
+        String diagnostic=ReflectionTestUtils.invokeMethod(pilot,"validationDetails",data);
+        assertTrue(diagnostic.contains("model: Unsupported generation mode"),diagnostic);
+        assertTrue(diagnostic.contains("video_url: Invalid input format"),diagnostic);
+    }
+
+    @Test
+    void documentedGenApi422EmptyValidationMapDoesNotPretendFieldIsKnown() throws Exception {
+        var data = new ObjectMapper().readTree("""
+                {"error":true,"errors_validation":{}}
+                """);
+        String diagnostic=ReflectionTestUtils.invokeMethod(pilot,"validationDetails",data);
+        assertTrue(diagnostic.contains("without field descriptions"),diagnostic);
+    }
+
+    @Test
     void definitiveKling422RequiresNewConsentAndRefusesStaleClaim() throws Exception {
         ResponseStatusException declined=assertThrows(ResponseStatusException.class,
                 () -> pilot.resumeAfterKlingValidation("owner-1","old-422",false));
