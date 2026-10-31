@@ -85,6 +85,14 @@ public class NeuroReplacementHistoryController {
                 .body(clip);
     }
 
+    @PostMapping(value="/studio/archive", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Map<String,Object> archiveStudio(@AuthenticationPrincipal HotHatUser owner,
+            @RequestParam("testId") String testId,
+            @RequestPart("video") MultipartFile video,
+            @RequestPart("voice") MultipartFile voice) {
+        return pilot.archiveStudioReference(owner.uid(),testId,video,voice);
+    }
+
     @PostMapping(value="/studio", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
     @ApiResponse(responseCode = "202", description = "Вручную записанная камера и голос, новый idempotent тест без игровой комнаты")
     public ResponseEntity<Map<String,Object>> studio(@AuthenticationPrincipal HotHatUser owner,
