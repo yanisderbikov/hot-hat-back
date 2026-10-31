@@ -162,6 +162,28 @@ class NeuroReplacementPipelineSimulationTest {
     }
 
     @Test
+    void sourceMotionCopyGetsBlockedBeforePaidLipSyncAndUnrelatedVideoPasses() throws Exception {
+        byte[] source=generatedMedia(".webm",List.of(
+                "-f","lavfi","-i","testsrc2=size=320x180:rate=24",
+                "-t","9","-an","-c:v","libvpx","-deadline","realtime","-b:v","160k"));
+        byte[] sameFrames=generatedMedia(".mp4",List.of(
+                "-f","lavfi","-i","testsrc2=size=320x180:rate=24",
+                "-t","9","-an","-c:v","libx264","-preset","ultrafast",
+                "-pix_fmt","yuv420p"));
+        byte[] different=generatedMedia(".mp4",List.of(
+                "-f","lavfi","-i","color=c=red:size=320x180:rate=24",
+                "-t","9","-an","-c:v","libx264","-preset","ultrafast",
+                "-pix_fmt","yuv420p"));
+        pilot=new NeuroReplacementPilotService(new ObjectMapper());
+        double copied=ReflectionTestUtils.invokeMethod(pilot,
+                "measureSourceCopySsim",source,"video/webm",sameFrames);
+        double novel=ReflectionTestUtils.invokeMethod(pilot,
+                "measureSourceCopySsim",source,"video/webm",different);
+        assertTrue(copied>=0.965,"Re-encoding must not fool the copied-motion detector: "+copied);
+        assertTrue(novel<0.965,"Clearly changed motion should not be blocked: "+novel);
+    }
+
+    @Test
     void videoWithoutSynthesizedSpeechIsNeverAcceptedAsReady() throws Exception {
         byte[] silent = generatedMedia(".mp4", List.of(
                 "-f", "lavfi", "-i", "color=c=black:size=320x180:rate=24",
