@@ -1627,6 +1627,132 @@ public class NeuroReplacementPilotService {
         return resp.body();
     }
 
+    /**
+     * GenAPI-only 3rd variant: video is a VISUAL identity reference, never
+     * a moving target to edit/imitate. Unlike official Kling advanced custom
+     * elements, this does NOT create a persistent element_id.
+     *
+     * All spending uses the one already configured GENAPI_API_KEY. Video is
+     * a separate paid O3 request with a durable GenAPI ID; after owner
+     * visual review the existing saved TTS, voice transfer and Lip Sync
+     * pipeline completes the result. Explicit approval is mandatory.
+     */
+    private void processGenApiVisualReference(Job job,byte[] camera,
+                                               String cameraMime,byte[] voice,
+                                               String voiceMime) {
+        boolean ownerReviewed="Владелец одобрил видеоперсонажа и движения".equals(job.stage);
+        try{
+            NeuroScenePlan scene=NeuroScenePlan.planForCharacter(job.sceneAssignment);
+            if(key==null||key.isBlank())
+                throw new IOException("NEURO_GENAPI_KEY_MISSING");
+            String referenceKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
+                    "-kling-reference.mp4";
+            if(!job.providerRequests.containsKey(VIDEO_MODEL_ID)){
+                job.stage="Готовлю видеореференс внешности для GenAPI O3";
+                checkpoint(job);
+                byte[] sample=prepareVideoCharacterPreviewBytes(camera,cameraMime,
+                        voice,voiceMime,job.startSeconds);
+                objectStore.put(referenceKey,sample,"video/mp4");
+            }
+            job.stage="GenAPI Kling O3: генерирую НОВУЮ сцену по видеореференсу";
+            checkpoint(job);
+            String videoUrl=paidStage(job,VIDEO_MODEL_ID,()->{
+                String cleanUrl=cleanGenApiInputUrl(job,referenceKey,"mp4");
+                return submitJson(VIDEO_MODEL_ID,genApiVisualReferenceFields(scene,cleanUrl));
+            });
+            String paidKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
+                    "-paid-kling.mp4";
+            byte[] acting;
+            try{acting=objectStore.get(paidKey);}
+            catch(Exception missing){acting=null;}
+            if(acting==null||acting.length<256){
+                acting=download(videoUrl,MAX_RESULT_BYTES);
+                MediaProbe media=probeMp4(acting);
+                if(!media.video||media.seconds<scene.durationSeconds()-0.8||
+                        media.seconds>scene.durationSeconds()+0.8)
+                    throw new IOException("NEURO_GENAPI_REFERENCE_VIDEO_DURATION_INVALID "+
+                            media.seconds+"s expected "+scene.durationSeconds()+"s");
+                objectStore.put(paidKey,acting,"video/mp4");
+            }
+            if(!job.providerRequests.containsKey("lipsync")){
+                double copy=measureSourceCopySsim(camera,cameraMime,acting,job.startSeconds);
+                if(copy>=MAX_ACCEPTED_SOURCE_COPY_SSIM)
+                    throw new IOException("NEURO_GENAPI_REFERENCE_COPIED_SOURCE "+
+                            String.format(java.util.Locale.ROOT,"%.4f",copy)+
+                            "; no paid Lip Sync submitted");
+                if(!ownerReviewed){
+                    job.state="review";
+                    job.stage="Просмотри новые жесты в GenAPI Kling MP4 перед оплатой голоса и Lip Sync";
+                    checkpoint(job);
+                    return;
+                }
+            }
+            job.state="processing";
+            job.stage="GenAPI Gemini TTS: новая русская речь";checkpoint(job);
+            String tts=paidStage(job,"tts",()->submitJson(TTS_MODEL_ID,Map.of(
+                    "prompt",scene.spokenText(),"voice","Puck",
+                    "style_instructions",scene.speechStyle(),
+                    "language_code","Russian (Russia)",
+                    "model","gemini-2.5-flash-tts","output_format","mp3")));
+            byte[] refVoice=transcodeMedia(voice,
+                    voiceMime.contains("wav")?"wav":
+                            voiceMime.equals("audio/mp4")?"m4a":"webm",
+                    "wav",false,0);
+            job.stage="GenAPI Chatterbox: переношу индивидуальный голос";checkpoint(job);
+            String transferred=paidStage(job,"chatterbox-speech",
+                    ()->submitMultipart("chatterbox-speech",
+                            Map.of("source_audio_url",tts),
+                            "target_voice_audio_url","reference.wav","audio/wav",refVoice));
+            double tempo=verifyExpressiveSpeechDuration(transferred,scene);
+            String aligned=alignSpeechToActingTimeline(job,transferred,scene,tempo);
+            job.stage="GenAPI Lip Sync: синхронизирую губы с новой речью";checkpoint(job);
+            String finished=paidStage(job,"lipsync",()->submitJson("lipsync",Map.of(
+                    "video_url",videoUrl,"audio_url",aligned,
+                    "model","lipsync-1.9.0-beta","sync_mode",LIPSYNC_SYNC_MODE)));
+            byte[] finalVideo=recoverPaidLipSyncVideo(job,finished);
+            verifyPlayableMp4(finalVideo,scene.durationSeconds());
+            String finalKey="neuro-replacements/"+job.ownerUid+"/"+job.id+".mp4";
+            objectStore.put(finalKey,finalVideo,"video/mp4");
+            job.finalVideo=finished;
+            job.finalVideoKey=finalKey;
+            job.stage="Нейроподмена через GenAPI готова";
+            job.state="ready";
+            job.error=null;
+            checkpoint(job);
+        }catch(Exception e){
+            if(e instanceof InterruptedException || Thread.currentThread().isInterrupted())return;
+            job.state="failed";
+            String message=String.valueOf(e.getMessage());
+            job.error=message.substring(0,Math.min(message.length(),350));
+            job.stage="GenAPI Нейроподмена: ошибка, оплаченные ID не повторять";
+            checkpoint(job);
+            LOG.warn("GenAPI visual reference job={} failed with {}",job.id,
+                    e.getClass().getSimpleName());
+        }
+    }
+
+    /** Only documented GenAPI O3 fields, preserving appearance not source motion. */
+    private Map<String,Object> genApiVisualReferenceFields(NeuroScenePlan scene,String videoUrl) {
+        if(scene==null||videoUrl==null||!videoUrl.startsWith("https://")||
+                !videoUrl.contains("/input.mp4"))
+            throw new IllegalArgumentException("NEURO_GENAPI_VIDEO_VISUAL_REFERENCE_INVALID");
+        return Map.of(
+                "model",GENAPI_VISUAL_REFERENCE_MODEL,
+                "prompt",scene.videoPrompt()+
+                        " The reference clip supplies ONLY real facial identity, clothing, "+
+                        "microexpressions and appearance across angles. Generate new acting "+
+                        "from the written stage directions. DO NOT reproduce the timing, "+
+                        "head motion, hand motions, mouth gestures or poses from the reference.",
+                "duration",String.valueOf(scene.durationSeconds()),
+                "video_url",videoUrl,
+                "pro",true,
+                "generate_audio",false,
+                "keep_audio",false,
+                "aspect_ratio","16:9",
+                "translate_input",false
+        );
+    }
+
     private void processVideoCharacter(Job job,byte[] camera,String cameraMime,
                                        byte[] voice,String voiceMime) {
         boolean ownerReviewed="Владелец одобрил видеоперсонажа и движения".equals(job.stage);
