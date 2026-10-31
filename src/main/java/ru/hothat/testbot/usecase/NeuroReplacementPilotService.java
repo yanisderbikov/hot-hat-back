@@ -68,6 +68,8 @@ public class NeuroReplacementPilotService {
     private static final String VIDEO_INPUT_REFERENCE_MODE = "video-to-video-reference";
     private static final int VIDEO_DURATION_SECONDS = 15;
     private static final String LIPSYNC_SYNC_MODE = "silence";
+    // Upper bound for local pitch-preserving tempo correction. Never crop spoken words.
+    private static final double MAX_SAFE_SPEECH_TEMPO = 1.45;
     private static final String TTS_MODEL_ID = "gemini-tts";
     private static final String SPEECH_STYLE =
             "Russian male human speaker delivering a playful, expressive, clear catchphrase to a friend. " +
@@ -1225,7 +1227,14 @@ public class NeuroReplacementPilotService {
             // it before paying for new video and lip sync.
             job.stage = "Проверка дикции и темпа речи";
             checkpoint(job);
-            verifyExpressiveSpeechDuration(voiceUrl, scene);
+            double speechTempo = verifyExpressiveSpeechDuration(voiceUrl, scene);
+            // Prepare AND validate the actual Lip Sync audio before buying Kling.
+            // A generated voice may contain real speech beyond the estimated scene
+            // window: the FFmpeg atempo filter preserves pitch and all phonemes.
+            // If the voice cannot fit at a restrained tempo, fail without a video POST.
+            String preflightAlignedVoice = scene != null &&
+                    !job.providerRequests.containsKey("lipsync")
+                    ? alignSpeechToActingTimeline(job, voiceUrl, scene, speechTempo) : null;
             job.stage = scene == null ? "Новая игра актёра: поворот, речь, палец, взмах, уход"
                     : "Новая игра актёра по заданию пользователя";
             checkpoint(job);
@@ -1264,7 +1273,8 @@ public class NeuroReplacementPilotService {
             // Old paid Lip Sync IDs are never submitted again, so do not
             // regenerate/swap their original provider input on recovery.
             String alignedVoiceUrl = job.providerRequests.containsKey("lipsync")
-                    ? voiceUrl : alignSpeechToActingTimeline(job, voiceUrl, scene);
+                    ? voiceUrl : preflightAlignedVoice != null
+                    ? preflightAlignedVoice : alignSpeechToActingTimeline(job, voiceUrl, scene, speechTempo);
             job.stage = "Синхронизация губ";
             checkpoint(job);
             String finalVideo = paidStage(job, "lipsync", () -> submitJson("lipsync", Map.of(
@@ -1538,7 +1548,14 @@ public class NeuroReplacementPilotService {
         String klingUrl = completedPaidResultUrl(VIDEO_MODEL_ID, klingId);
         String voiceUrl = completedPaidResultUrl("chatterbox-speech", voiceId);
         byte[] kling = download(klingUrl, MAX_RESULT_BYTES);
-        byte[] voice = download(voiceUrl, MAX_RESULT_BYTES);
+        // Dynamic scenes MUST mux the same pre-aligned voice that Lip Sync
+        // received. The raw 12s Chatterbox audio would be cut at 9s here.
+        byte[] voice = job.sceneAssignment == null
+                ? download(voiceUrl, MAX_RESULT_BYTES)
+                : objectStore.get("neuro-replacements/"+job.ownerUid+"/"+job.id+"-lipsync-voice.wav");
+        if (voice == null || voice.length < 256) {
+            throw new IOException("NEURO_ALIGNED_VOICE_ARCHIVE_MISSING");
+        }
         byte[] repaired = composePaidLipSyncWithOriginalTail(result, kling, voice, media.seconds, sceneSeconds);
         if (job.sceneAssignment == null) verifyPlayableMp4(repaired);
         else verifyPlayableMp4(repaired, sceneSeconds);
@@ -1662,7 +1679,8 @@ public class NeuroReplacementPilotService {
      * with silence. Uses private S3 + expiring signed URL for the Lip Sync
      * provider to fetch; no new provider request is made at this step.
      */
-    private String alignSpeechToActingTimeline(Job job, String voiceUrl, NeuroScenePlan scene) throws Exception {
+    private String alignSpeechToActingTimeline(Job job, String voiceUrl, NeuroScenePlan scene,
+                                               double speechTempo) throws Exception {
         byte[] inputBytes = download(voiceUrl,MAX_VOICE_BYTES);
         Path source = Files.createTempFile("neuro-voice-render-", ".audio");
         Path output = Files.createTempFile("neuro-voice-render-", ".wav");
@@ -1670,7 +1688,8 @@ public class NeuroReplacementPilotService {
             Files.write(source,inputBytes);
             Process tool = new ProcessBuilder("ffmpeg", "-hide_banner", "-loglevel", "error",
                     "-nostdin", "-y", "-i", source.toString(), "-vn",
-                    "-af", "adelay="+(scene == null ? 1500 : (int)Math.round(scene.speechStartSeconds()*1000))+",apad",
+                    "-af", "atempo="+String.format(java.util.Locale.ROOT,"%.5f",speechTempo)+
+                            ",adelay="+(scene == null ? 1500 : (int)Math.round(scene.speechStartSeconds()*1000))+",apad",
                     "-t", String.valueOf(scene == null ? VIDEO_DURATION_SECONDS : scene.durationSeconds()),
                     "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le",
                     output.toString()).redirectErrorStream(true).start();
@@ -1704,7 +1723,7 @@ public class NeuroReplacementPilotService {
         verifyExpressiveSpeechDuration(voiceUrl, null);
     }
 
-    private void verifyExpressiveSpeechDuration(String voiceUrl, NeuroScenePlan scene) throws Exception {
+    private double verifyExpressiveSpeechDuration(String voiceUrl, NeuroScenePlan scene) throws Exception {
         byte[] voiceBytes = download(voiceUrl, MAX_VOICE_BYTES);
         Path input = Files.createTempFile("neuro-speech-", ".audio");
         Path decoded = Files.createTempFile("neuro-speech-", ".pcm");
@@ -1752,15 +1771,23 @@ public class NeuroReplacementPilotService {
             double fileSeconds = pcm.length / 16000.0;
             boolean tooShortOrSilent = activeFrames < minimumVoicedFrames ||
                     lastActiveSeconds < minimumLastSpeech;
+            // Never mistake the padded file's total duration for speech duration.
+            // If active words extend beyond a dynamic scene, use restrained,
+            // pitch-preserving atempo in the ACTUAL audio sent to Lip Sync.
+            // Reserving 0.10s keeps the last consonant clear of the scene cut.
+            double speechTempo = scene == null ? 1.0 :
+                    Math.max(1.0, (lastActiveSeconds + 0.10) / maximumVoiceSeconds);
             boolean exceedsSceneWindow = scene == null
                     ? fileSeconds > maximumVoiceSeconds + 0.25
-                    : lastActiveSeconds > maximumVoiceSeconds + 0.15;
+                    : speechTempo > MAX_SAFE_SPEECH_TEMPO;
             if (tooShortOrSilent || exceedsSceneWindow) {
                 throw new IOException("NEURO_SPEECH_TOO_FAST_OR_SILENT voiced=" +
                         (activeFrames/10.0) + "s lastSpeech=" + lastActiveSeconds +
                         "s fullFile=" + fileSeconds + "s available=" + maximumVoiceSeconds +
-                        "s; no expensive video ordered");
+                        "s requiredTempo=" + speechTempo +
+                        "; no expensive video ordered");
             }
+            return speechTempo;
         } finally {
             Files.deleteIfExists(input);
             Files.deleteIfExists(decoded);
