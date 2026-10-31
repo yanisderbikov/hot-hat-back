@@ -221,6 +221,21 @@ public class NeuroReplacementHistoryController {
         return pilot.resumeAfterSpeechGate(owner.uid(), jobId, consented);
     }
 
+    @GetMapping("/{jobId}/video-character/media-preflight")
+    @ApiResponse(responseCode="200",description="Бесплатная проверка скачивания GenAPI обоих публичных файлов MP4 и JPG через HTTPS без токена авторизации")
+    public Map<String,Object> referenceMediaPreflight(
+            @AuthenticationPrincipal HotHatUser owner,@PathVariable String jobId) {
+        return pilot.inspectCharacterProviderMedia(owner.uid(),jobId);
+    }
+
+    @PostMapping("/{jobId}/resume-reference-file-422")
+    @ApiResponse(responseCode="200",description="Одно платное продолжение того же задания после определённого GenAPI FILE_ERROR 422, только после бесплатной проверки обоих файлов")
+    public Map<String,Object> resumeReferenceMedia422(
+            @AuthenticationPrincipal HotHatUser owner,@PathVariable String jobId,
+            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+        return pilot.resumeVideoReferenceMedia422(owner.uid(),jobId,consented);
+    }
+
     @PostMapping("/{jobId}/resume-reference-start-image-422")
     @ApiResponse(responseCode="200",
             description="Повтор только определённого отказа GenAPI 422 из-за отсутствующего start_image_url; прежнее задание, явное согласие, без двойной оплаты")
