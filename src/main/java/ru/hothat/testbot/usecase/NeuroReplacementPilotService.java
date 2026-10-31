@@ -700,6 +700,85 @@ public class NeuroReplacementPilotService {
     }
 
     /**
+     * Controlled, owner-confirmed FINAL test of the fixed Kling O3 model
+     * shape for the 31-Oct job. Earlier rejections used the wrong model
+     * before any Kling request ID. The new request is explicitly billable.
+     * This path cannot reopen generic jobs or loop on future HTTP 422.
+     */
+    public synchronized Map<String,Object> resumeVerifiedKlingFinal(String ownerUid,String jobId,
+                                                                     boolean consented) {
+        if(!consented) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "EXPLICIT_FINAL_VIDEO_AND_LIPSYNC_PAYMENT_CONSENT_REQUIRED");
+        if(!enabled || key==null || key.isBlank() || jdbc==null ||
+                objectStore==null || !objectStore.configured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_PROVIDER_OR_ARCHIVE_NOT_READY");
+        }
+        // Specific historical order only; other failed orders remain locked.
+        if(!"f3c3190a-8f68-4a38-95df-26dc3fe17f0e".equals(jobId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_FINAL_RETRY_NOT_ELIGIBLE");
+        }
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(job.kling422Retries!=2 || !"failed".equals(job.state) ||
+                job.error==null || !job.error.startsWith("GENAPI_HTTP_422") ||
+                !VIDEO_MODEL_ID.equals(job.submittingModel) ||
+                job.providerRequests.get("tts")==null ||
+                job.providerRequests.get("chatterbox-speech")==null ||
+                job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+                job.providerRequests.containsKey("lipsync") ||
+                job.sceneAssignment==null || job.sourceCameraKey==null ||
+                job.sourceVoiceKey==null || job.cameraMime==null || job.voiceMime==null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_FINAL_RETRY_ALREADY_USED_OR_NOT_ELIGIBLE");
+        }
+        // The no-charge network test MUST succeed on the same source first.
+        Map<String,Object> preflight=inspectKlingReference(ownerUid,jobId);
+        if(!"REFERENCE_READY_PROVIDER_SCHEMA_NOT_PROVEN".equals(preflight.get("check"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_FINAL_VIDEO_PREFLIGHT_FAILED");
+        }
+        int claimed=jdbc.update("""
+            UPDATE neuro_replacement_job
+               SET state='processing',stage='Последняя разрешённая попытка Kling O3 Pro',
+                   error_message=NULL,submitting_model=NULL,
+                   kling_422_retry_count=kling_422_retry_count+1
+             WHERE job_id=? AND owner_uid=? AND state='failed'
+               AND kling_422_retry_count=2
+               AND error_message LIKE 'GENAPI_HTTP_422%'
+               AND submitting_model='kling-video-o3'
+               AND scene_assignment IS NOT NULL
+               AND jsonb_exists(provider_requests,'tts')
+               AND jsonb_exists(provider_requests,'chatterbox-speech')
+               AND NOT jsonb_exists(provider_requests,'kling-video-o3')
+               AND NOT jsonb_exists(provider_requests,'lipsync')
+            """,jobId,ownerUid);
+        if(claimed!=1)throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "NEURO_FINAL_RETRY_ALREADY_CLAIMED");
+        job.kling422Retries=3;
+        job.state="processing";
+        job.stage="Последняя разрешённая попытка Kling O3 Pro";
+        job.error=null;
+        job.submittingModel=null;
+        byRoom.put(job.roomId,job);
+        executor.execute(()->{
+            try{
+                byte[] camera=objectStore.get(job.sourceCameraKey);
+                byte[] voice=objectStore.get(job.sourceVoiceKey);
+                process(job,camera,job.cameraMime,voice,job.voiceMime,job.startSeconds);
+            }catch(Exception exception){
+                if(exception instanceof InterruptedException || Thread.currentThread().isInterrupted())return;
+                job.state="failed";
+                job.stage="Последняя попытка: ошибка загрузки исходников";
+                job.error="NEURO_FINAL_RETRY_INPUT_FAILED: "+exception.getClass().getSimpleName();
+                checkpoint(job);
+            }
+        });
+        return snapshot(job);
+    }
+
+    /**
      * Owner-only FREE preflight for a failed paid scene.
      * This method makes ZERO calls to /networks/*: it only tests that the
      * archived webcam reference is decodable and reachable over signed HTTPS.
