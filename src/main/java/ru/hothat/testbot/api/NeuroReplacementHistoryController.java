@@ -84,6 +84,16 @@ public class NeuroReplacementHistoryController {
         return pilot.resumeAfterLimit(owner.uid(),jobId,consented);
     }
 
+    @PostMapping("/{jobId}/resume-speech-gate")
+    @ApiResponse(responseCode = "200", description = "Продолжить отказавшее на проверке темпа задание с прежними оплаченными TTS/Chatterbox ID; Kling и Lip Sync оплачиваются отдельно")
+    public Map<String,Object> resumeSpeechGate(@AuthenticationPrincipal HotHatUser owner,
+                                               @Parameter(description = "Существующий ID задания. Новый заказ не создаётся.")
+                                               @PathVariable String jobId,
+                                               @Parameter(description = "Отдельное согласие на оплату только ещё не выполненных Kling и Lip Sync")
+                                               @RequestParam(name="consented", defaultValue="false") boolean consented) {
+        return pilot.resumeAfterSpeechGate(owner.uid(), jobId, consented);
+    }
+
     @GetMapping("/{jobId}/video")
     @ApiResponse(responseCode = "200", description = "Архивный MP4 Нейроподмены с видео и голосом",
             content = @Content(mediaType = "video/mp4",
