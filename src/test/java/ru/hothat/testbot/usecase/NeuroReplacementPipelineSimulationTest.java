@@ -94,6 +94,7 @@ class NeuroReplacementPipelineSimulationTest {
                     throw new IOException("Unexpected provider call: " + request.uri());
                 });
         pilot = new NeuroReplacementPilotService(new ObjectMapper(), client);
+        ReflectionTestUtils.setField(pilot,"referencePublicOrigin","https://hot-hat-back.up.railway.app");
         JdbcTemplate database = mock(JdbcTemplate.class);
         ObjectStore archive = mock(ObjectStore.class);
         when(archive.configured()).thenReturn(true);
@@ -146,6 +147,7 @@ class NeuroReplacementPipelineSimulationTest {
                             + "\"result\":[\"https://gen-api.storage.yandexcloud.net/resumed.mp4\"]}");
                 });
         pilot = new NeuroReplacementPilotService(new ObjectMapper(), client);
+        ReflectionTestUtils.setField(pilot,"referencePublicOrigin","https://hot-hat-back.up.railway.app");
         pilot.setJdbcTemplate(mock(JdbcTemplate.class));
         Object job = newJob("existing-id", "hat-0123456789abcdef", "owner-1");
         Map<String, String> refs = (Map<String, String>) ReflectionTestUtils.getField(job, "providerRequests");
@@ -212,6 +214,7 @@ class NeuroReplacementPipelineSimulationTest {
                     throw new IOException("Unexpected provider request: " + req.uri());
                 });
         pilot = new NeuroReplacementPilotService(new ObjectMapper(), client);
+        ReflectionTestUtils.setField(pilot,"referencePublicOrigin","https://hot-hat-back.up.railway.app");
         ReflectionTestUtils.setField(pilot, "enabled", true);
         ReflectionTestUtils.setField(pilot, "key", "simulated-key");
 
@@ -578,6 +581,7 @@ class NeuroReplacementPipelineSimulationTest {
                     throw new IOException("Unexpected provider call "+req.method()+" "+req.uri());
                 });
         pilot=new NeuroReplacementPilotService(new ObjectMapper(),client);
+        ReflectionTestUtils.setField(pilot,"referencePublicOrigin","https://hot-hat-back.up.railway.app");
         ReflectionTestUtils.setField(pilot,"enabled",true);
         ReflectionTestUtils.setField(pilot,"key","simulated-key");
 
