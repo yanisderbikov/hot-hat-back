@@ -520,9 +520,16 @@ class NeuroReplacementPilotServiceTest {
         // A second browser won the atomic claim; the first must NOT start
         // another provider task. Preflight can also refuse before CAS.
         when(db.update(anyString(),eq(jobId),eq("owner-1"))).thenReturn(0);
+        // Simulate the already-passing, free S3/MP4 preflight, then force
+        // the DB CAS to lose. No paid provider POST must be reachable.
+        pilot=spy(pilot);
+        doReturn(Map.of("check","REFERENCE_READY_PROVIDER_SCHEMA_NOT_PROVEN"))
+                .when(pilot).inspectKlingReference("owner-1",jobId);
         var result=assertThrows(ResponseStatusException.class,
                 ()->pilot.resumeMinimalKlingOnce("owner-1",jobId,true));
-        assertTrue(result.getStatusCode()==HttpStatus.CONFLICT);
+        assertEquals(HttpStatus.CONFLICT,result.getStatusCode());
+        assertTrue(String.valueOf(result.getReason()).contains("ALREADY_CLAIMED"));
+        verify(db).update(anyString(),eq(jobId),eq("owner-1"));
     }
 
 }
