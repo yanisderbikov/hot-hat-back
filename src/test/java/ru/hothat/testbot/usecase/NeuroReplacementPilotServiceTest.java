@@ -80,7 +80,7 @@ class NeuroReplacementPilotServiceTest {
         assertTrue(fields.containsKey("start_image_url"));
         assertFalse(fields.containsKey("klingApiKey"));
         assertFalse(fields.containsKey("video-to-video-reference"));
-        assertTrue(fields.get("prompt").toString().contains("DO NOT reproduce"));
+        assertTrue(fields.get("prompt").toString().contains("do not replay"));
         assertThrows(IllegalArgumentException.class,
                 ()->ReflectionTestUtils.invokeMethod(pilot,
                     "genApiVisualReferenceFields",scene,"http://untrusted.test/input.mp4",stillUrl));
