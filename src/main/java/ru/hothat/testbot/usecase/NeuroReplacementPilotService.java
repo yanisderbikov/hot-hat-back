@@ -1305,8 +1305,15 @@ public class NeuroReplacementPilotService {
         }
         String keyPath="neuro-replacements/"+job.ownerUid+"/"+job.id+"-kling-reference.mp4";
         objectStore.put(keyPath,mp4,"video/mp4");
-        // GenAPI mis-parses S3 query params as part of the MP4 extension (422).
-        // Use an unguessable, expiring, path-only URL ending in .mp4.
+        return cleanGenApiInputUrl(job,keyPath,"mp4");
+    }
+
+    /** Signed-by-capability public path without a query, for both MP4 and WAV. */
+    private String cleanGenApiInputUrl(Job job,String keyPath,String extension) throws Exception {
+        if(!("mp4".equals(extension)||"wav".equals(extension)) ||
+                jdbc==null || objectStore==null || !objectStore.configured()) {
+            throw new IOException("NEURO_CLEAN_MEDIA_REFERENCE_INVALID");
+        }
         String token=UUID.randomUUID().toString().replace("-","")+
                 UUID.randomUUID().toString().replace("-","");
         String origin=referencePublicOrigin==null?"":referencePublicOrigin.trim();
@@ -1327,11 +1334,19 @@ public class NeuroReplacementPilotService {
                 VALUES (?, ?, ?, now() + interval '2 hours')
                 """,token,job.id,keyPath);
         return origin.replaceAll("/+$","")+
-                "/api/v2/public/neuro-references/"+token+"/input.mp4";
+                "/api/v2/public/neuro-references/"+token+"/input."+extension;
     }
 
     /** Strict capability URL: no open bucket, no arbitrary key input. */
     public byte[] publicKlingReference(String token) {
+        return publicProviderReference(token,false);
+    }
+
+    public byte[] publicVoiceReference(String token) {
+        return publicProviderReference(token,true);
+    }
+
+    private byte[] publicProviderReference(String token,boolean audio) {
         if (token==null || !token.matches("[a-f0-9]{64}") || jdbc==null ||
                 objectStore==null || !objectStore.configured()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_NOT_FOUND");
@@ -1344,11 +1359,12 @@ public class NeuroReplacementPilotService {
                 "NEURO_REFERENCE_EXPIRED_OR_NOT_FOUND");
         String keyPath=matches.get(0);
         if (!keyPath.startsWith("neuro-replacements/") ||
-                !keyPath.endsWith("-kling-reference.mp4")) {
+                !(audio ? keyPath.endsWith("-lipsync-voice.wav")
+                        : keyPath.endsWith("-kling-reference.mp4"))) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_INVALID");
         }
         byte[] mp4=objectStore.get(keyPath);
-        if(mp4==null || mp4.length<256 || mp4.length>MAX_VIDEO_BYTES) {
+        if(mp4==null || mp4.length<256 || mp4.length>(audio ? MAX_VOICE_BYTES : MAX_VIDEO_BYTES)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_MEDIA_INVALID");
         }
         return mp4;
@@ -1638,12 +1654,7 @@ public class NeuroReplacementPilotService {
             }
             String keyPath="neuro-replacements/"+job.ownerUid+"/"+job.id+"-lipsync-voice.wav";
             objectStore.put(keyPath,Files.readAllBytes(output),"audio/wav");
-            String signed=objectStore.presignGet(keyPath,Duration.ofHours(2),
-                    "audio/wav",null,"private, no-store");
-            if(signed==null || !signed.startsWith("https://")) {
-                throw new IOException("NEURO_ALIGNED_VOICE_SIGNED_URL_UNAVAILABLE");
-            }
-            return signed;
+            return cleanGenApiInputUrl(job,keyPath,"wav");
         } finally {
             Files.deleteIfExists(source);
             Files.deleteIfExists(output);
