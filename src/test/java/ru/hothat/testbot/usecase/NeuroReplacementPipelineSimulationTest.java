@@ -627,6 +627,41 @@ class NeuroReplacementPipelineSimulationTest {
                 aryEq(finalMp4),eq("video/mp4"));
     }
 
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void actualHttp422UsesDocumentedGenApiErrorsValidationField() throws Exception {
+        HttpClient provider=mock(HttpClient.class);
+        when(provider.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)))
+                .thenAnswer(call -> {
+                    HttpResponse reply=mock(HttpResponse.class);
+                    when(reply.statusCode()).thenReturn(422);
+                    doReturn("""
+                        {"error":true,"errors_validation":{
+                            "model":["Unsupported mode for video reference"],
+                            "video_url":["Not accessible at https://signed.invalid/?signature=SECRET"]
+                        }}
+                        """).when(reply).body();
+                    return reply;
+                });
+        pilot=new NeuroReplacementPilotService(new ObjectMapper(),provider);
+        HttpRequest request=HttpRequest.newBuilder(
+                java.net.URI.create("https://api.gen-api.ru/api/v1/networks/kling-video-o3"))
+                .GET().build();
+        Exception failed=assertThrows(Exception.class,() ->
+                ReflectionTestUtils.invokeMethod(pilot,"send",request));
+        StringBuilder trace=new StringBuilder();
+        Throwable error=failed;
+        for(int depth=0;error!=null && depth<5;depth++,error=error.getCause()){
+            trace.append(' ').append(error.getMessage());
+        }
+        String reason=trace.toString();
+        assertTrue(reason.contains("GENAPI_HTTP_422"),reason);
+        assertTrue(reason.contains("model: Unsupported mode"),reason);
+        assertTrue(reason.contains("video_url: Not accessible"),reason);
+        assertFalse(reason.contains("signed.invalid"),reason);
+        assertFalse(reason.contains("SECRET"),reason);
+    }
+
     private static Object newJob(String id, String room, String owner) throws Exception {
         Class<?> type = Class.forName(NeuroReplacementPilotService.class.getName() + "$Job");
         var ctor = type.getDeclaredConstructor(String.class, String.class, String.class);
