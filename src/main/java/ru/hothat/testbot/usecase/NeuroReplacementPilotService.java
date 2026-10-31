@@ -1622,11 +1622,11 @@ public class NeuroReplacementPilotService {
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         JsonNode data = json.readTree(response.body());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            String reason=errorCode(data);
-            // Pydantic/FastAPI 422 frequently puts the actual field failure
-            // under detail[0].msg, not "message". Never persist raw payloads:
-            // they may contain URLs, personally-identifying prompts or keys.
-            if (reason.isBlank()) reason=validationDetails(data);
+            // GenAPI 422 is a field validation failure: errors_validation
+            // wins over generic "error"/"message". The former code checked
+            // errorCode first and silently hid the actionable field details.
+            String reason=response.statusCode()==422 ? validationDetails(data) : errorCode(data);
+            if (reason.isBlank()) reason=errorCode(data);
             if (reason.isBlank()) reason="provider rejected request without validation details";
             throw new IOException("GENAPI_HTTP_" + response.statusCode() + " " + reason);
         }
