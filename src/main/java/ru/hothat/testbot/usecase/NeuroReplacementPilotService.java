@@ -568,6 +568,71 @@ public class NeuroReplacementPilotService {
     }
 
     /**
+     * The studio owner inspected the existing paid video and confirmed the
+     * instructed gestures BEFORE giving separate consent to buy Lip Sync.
+     * A DB CAS protects duplicate devices and retries. Old Kling/TTS/voice
+     * provider IDs are reused (GET only) by process().
+     */
+    public synchronized Map<String,Object> resumeReviewedActing(String ownerUid,
+                                                                  String jobId,
+                                                                  boolean consented) {
+        if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "EXPLICIT_LIPSYNC_PAYMENT_CONSENT_REQUIRED");
+        if(!enabled || key==null || key.isBlank() || jdbc==null ||
+                objectStore==null || !objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_PROVIDER_OR_ARCHIVE_NOT_READY");
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(!"review".equals(job.state) ||
+                !job.roomId.startsWith("hat-fac7ed") ||
+                job.sceneAssignment==null || job.sourceCameraKey==null ||
+                job.sourceVoiceKey==null || job.cameraMime==null || job.voiceMime==null ||
+                !job.providerRequests.containsKey("tts") ||
+                !job.providerRequests.containsKey("chatterbox-speech") ||
+                !job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+                job.providerRequests.containsKey("lipsync") || job.submittingModel!=null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_ACTING_REVIEW_NOT_ELIGIBLE");
+        }
+        Map<String,Object> quality=paidActingQuality(ownerUid,jobId);
+        if(Boolean.TRUE.equals(quality.get("copyDetected")))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_KLING_SOURCE_COPY_DETECTED_NO_LIPSYNC_CHARGE");
+        int claimed=jdbc.update("""
+            UPDATE neuro_replacement_job
+               SET state='processing',stage='Владелец подтвердил движения Kling'
+             WHERE job_id=? AND owner_uid=? AND state='review'
+               AND scene_assignment IS NOT NULL
+               AND submitting_model IS NULL
+               AND jsonb_exists(provider_requests,'tts')
+               AND jsonb_exists(provider_requests,'chatterbox-speech')
+               AND jsonb_exists(provider_requests,'kling-video-o3')
+               AND NOT jsonb_exists(provider_requests,'lipsync')
+            """,jobId,ownerUid);
+        if(claimed!=1)throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "NEURO_ACTING_REVIEW_ALREADY_CLAIMED");
+        job.state="processing";
+        job.stage="Владелец подтвердил движения Kling";
+        byRoom.put(job.roomId,job);
+        executor.execute(()->{
+            try{
+                byte[] camera=objectStore.get(job.sourceCameraKey);
+                byte[] voice=objectStore.get(job.sourceVoiceKey);
+                process(job,camera,job.cameraMime,voice,job.voiceMime,job.startSeconds);
+            }catch(Exception error){
+                if(error instanceof InterruptedException || Thread.currentThread().isInterrupted())return;
+                job.state="failed";
+                job.stage="Ошибка восстановления проверенного Kling";
+                job.error="NEURO_REVIEW_INPUT_FAILED: "+error.getClass().getSimpleName();
+                checkpoint(job);
+            }
+        });
+        return snapshot(job);
+    }
+
+    /**
      * Resume after an unambiguous HTTP 422 validation REJECTION of the
      * unbilled Lip Sync POST. The three prior provider IDs remain immutable.
      * This is the ONLY 422 variant we unlock: an invalid sync_mode field.
@@ -600,6 +665,12 @@ public class NeuroReplacementPilotService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "NEURO_LIPSYNC_422_NOT_ELIGIBLE");
         }
+        // No Lip Sync spending on an almost frame-for-frame copy even when
+        // the owner previously accepted the 422 retry dialog.
+        Map<String,Object> actingCheck=paidActingQuality(ownerUid,jobId);
+        if(Boolean.TRUE.equals(actingCheck.get("copyDetected")))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_KLING_SOURCE_COPY_DETECTED_NO_LIPSYNC_CHARGE");
         // A cross-instance database compare-and-set claims the exact
         // rejected job once. No new room, no fresh paid video or voice.
         int claimed=jdbc.update("""
