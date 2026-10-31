@@ -57,7 +57,7 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
-    void genApiReferenceUsesVideoForAppearanceButNotMotionAndNeverRequestsOfficialKlingElement() {
+    void genApiReferenceUsesVideoCharacterElementAndFirstFrameWithoutVideoMotionEdit() {
         var scene=NeuroScenePlan.planForCharacter(
                 "Повернуться прямо в камеру, сказать «А вы всё ещё кипятите?», "+
                 "сказать «Тогда мы идём к вам!», показать большой палец, "+
@@ -71,16 +71,24 @@ class NeuroReplacementPilotServiceTest {
         assertEquals("reference-to-video",fields.get("model"));
         assertEquals(stillUrl,fields.get("start_image_url"),
                 "GenAPI 422 requires start_image_url whenever reference-to-video");
-        assertEquals(videoUrl,fields.get("video_url"));
+        assertFalse(fields.containsKey("video_url"),
+                "Top-level video_url belongs to VIDEO-to-video, not image/element reference-to-video");
+        assertEquals(1,((List<?>)fields.get("elements")).size());
+        assertEquals(Map.of("video_url",videoUrl),((List<?>)fields.get("elements")).get(0),
+                "Keep the archived 8s video as a character identity element");
         assertEquals(scene.durationSeconds()+"",fields.get("duration"));
         assertEquals(true,fields.get("pro"));
         assertEquals(false,fields.get("generate_audio"));
-        assertEquals(false,fields.get("keep_audio"));
+        assertFalse(fields.containsKey("keep_audio"),
+                "Keep-audio is a video-edit/reference mode field, not image/element mode");
         assertFalse(fields.containsKey("element_list"));
         assertTrue(fields.containsKey("start_image_url"));
         assertFalse(fields.containsKey("klingApiKey"));
         assertFalse(fields.containsKey("video-to-video-reference"));
-        assertTrue(fields.get("prompt").toString().contains("do not replay"));
+        assertTrue(fields.get("prompt").toString().contains("@Element1"));
+        assertFalse(fields.get("prompt").toString().contains("@Video1"));
+        assertTrue(fields.get("prompt").toString().contains("not the source gestures"));
+        assertTrue(fields.get("prompt").toString().length()<=2500);
         assertThrows(IllegalArgumentException.class,
                 ()->ReflectionTestUtils.invokeMethod(pilot,
                     "genApiVisualReferenceFields",scene,"http://untrusted.test/input.mp4",stillUrl));
