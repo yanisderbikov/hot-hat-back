@@ -1370,6 +1370,79 @@ public class NeuroReplacementPilotService {
     }
 
     /**
+     * Reuse the SAME failed GenAPI reference job after the provider's
+     * explicit HTTP 422 start_image_url validation rejection.
+     * This prior POST was rejected before a GenAPI task ID was issued.
+     * Never retry an ambiguous timeout, an existing paid video task ID,
+     * or any other 422. The new POST requires separate informed consent.
+     */
+    public synchronized Map<String,Object> resumeVideoReferenceStartImage422(
+            String ownerUid,String jobId,boolean consented) {
+        if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "EXPLICIT_GENAPI_KLING_PAYMENT_CONSENT_REQUIRED");
+        if(!enabled||key==null||key.isBlank()||jdbc==null||
+                objectStore==null||!objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_GENAPI_OR_ARCHIVE_UNAVAILABLE");
+        Job job=loadJobById(jobId);
+        if(job==null||!ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        boolean definiteRejection=job.error!=null &&
+                job.error.contains("GENAPI_HTTP_422 start_image_url:");
+        if(!GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode")) ||
+                !"failed".equals(job.state)||!definiteRejection||
+                !VIDEO_MODEL_ID.equals(job.submittingModel)||
+                job.kling422Retries!=0||
+                job.providerRequests.containsKey(VIDEO_MODEL_ID)||
+                job.providerRequests.containsKey("lipsync")||
+                job.sourceCameraKey==null||job.sourceVoiceKey==null||
+                job.cameraMime==null||job.voiceMime==null||
+                job.sceneAssignment==null||job.sceneAssignment.isBlank())
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_GENAPI_REFERENCE_422_RETRY_NOT_ELIGIBLE");
+        // CAS across Railway instances and browser double-clicks. If the
+        // provider rejected the parameters, no task ID exists to recover.
+        int changed=jdbc.update("""
+            UPDATE neuro_replacement_job
+               SET state='processing',
+                   stage='Повтор отклонённого GenAPI O3 с обязательным стартовым кадром',
+                   error_message=NULL,submitting_model=NULL,
+                   kling_422_retry_count=kling_422_retry_count+1
+             WHERE job_id=? AND owner_uid=? AND state='failed'
+               AND provider_requests->>'character-mode'='genapi-o3-video-identity-reference'
+               AND error_message LIKE '%GENAPI_HTTP_422 start_image_url:%'
+               AND submitting_model='kling-video-o3'
+               AND kling_422_retry_count=0
+               AND NOT jsonb_exists(provider_requests,'kling-video-o3')
+               AND NOT jsonb_exists(provider_requests,'lipsync')
+               AND source_camera_key IS NOT NULL
+               AND source_voice_key IS NOT NULL
+            """,jobId,ownerUid);
+        if(changed!=1)throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "NEURO_GENAPI_REFERENCE_422_ALREADY_CLAIMED");
+        job.kling422Retries=1;
+        job.state="processing";
+        job.stage="Повтор отклонённого GenAPI O3 с обязательным стартовым кадром";
+        job.error=null;
+        job.submittingModel=null;
+        byRoom.put(job.roomId,job);
+        executor.execute(()->{
+            try{
+                process(job,objectStore.get(job.sourceCameraKey),job.cameraMime,
+                        objectStore.get(job.sourceVoiceKey),job.voiceMime,job.startSeconds);
+            }catch(Exception e){
+                if(e instanceof InterruptedException||Thread.currentThread().isInterrupted())return;
+                job.state="failed";
+                job.error="NEURO_GENAPI_RETRY_SOURCE_UNAVAILABLE: "+
+                        e.getClass().getSimpleName();
+                job.stage="Не удалось возобновить отклонённый GenAPI O3";
+                checkpoint(job);
+            }
+        });
+        return snapshot(job);
+    }
+
+    /**
      * Recording studio in /neuro-replacement/: no room, match or bots.
      * testId is the client-generated stable UUID and makes double submits
      * idempotent across refreshes and Railway instances. Each new recording
