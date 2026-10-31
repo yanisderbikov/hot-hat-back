@@ -1517,8 +1517,36 @@ public class NeuroReplacementPilotService {
         if(!videos.isArray()||videos.isEmpty())
             throw new IOException("KLING_VIDEO_RESULT_MISSING");
         String url=videos.path(0).path("url").asText();
-        validatedResultUri(url);
+        validatedKlingResultUri(url);
         return url;
+    }
+
+    /** Official Kling result origins only; never treat an arbitrary URL as safe. */
+    private URI validatedKlingResultUri(String url) throws IOException {
+        try {
+            URI uri=URI.create(url);
+            String host=uri.getHost()==null?"":uri.getHost().toLowerCase(java.util.Locale.ROOT);
+            boolean trusted=host.equals("klingai.com")||host.endsWith(".klingai.com")||
+                    host.equals("kechuangai.com")||host.endsWith(".kechuangai.com")||
+                    host.equals("klingai.cn")||host.endsWith(".klingai.cn")||
+                    host.equals("ksyun.com")||host.endsWith(".ksyun.com");
+            if(!"https".equals(uri.getScheme())||!trusted||
+                    uri.getRawUserInfo()!=null||uri.getPort()!=-1)
+                throw new IllegalArgumentException();
+            return uri;
+        }catch(RuntimeException e){
+            throw new IOException("UNTRUSTED_KLING_RESULT_ORIGIN");
+        }
+    }
+
+    private byte[] downloadKling(String url) throws Exception {
+        HttpRequest req=HttpRequest.newBuilder(validatedKlingResultUri(url))
+                .timeout(Duration.ofSeconds(90)).GET().build();
+        HttpResponse<byte[]> resp=http.send(req,HttpResponse.BodyHandlers.ofByteArray());
+        if(resp.statusCode()!=200 || resp.body()==null ||
+                resp.body().length<512 || resp.body().length>MAX_RESULT_BYTES)
+            throw new IOException("KLING_MP4_DOWNLOAD_FAILED");
+        return resp.body();
     }
 
     private void processVideoCharacter(Job job,byte[] camera,String cameraMime,
@@ -1572,7 +1600,7 @@ public class NeuroReplacementPilotService {
             try{paidVideo=objectStore.get(paidKey);}
             catch(Exception notCached){paidVideo=null;}
             if(paidVideo==null||paidVideo.length<256){
-                paidVideo=download(videoUrl,MAX_RESULT_BYTES);
+                paidVideo=downloadKling(videoUrl);
                 MediaProbe info=probeMp4(paidVideo);
                 if(!info.video||Math.abs(info.seconds-scene.durationSeconds())>0.8)
                     throw new IOException("NEURO_CHARACTER_ACTING_VIDEO_LENGTH_INVALID");
