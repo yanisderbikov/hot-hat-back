@@ -87,6 +87,50 @@ class NeuroReplacementPipelineSimulationTest {
     }
 
     @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void ownerReusesAlreadyArchivedTwentyFiveSecondRecordingForFreeCharacterWithoutNewRecording()
+            throws Exception {
+        final String jobId="f8011911-f38d-4706-92cb-546049d42d0d";
+        byte[] oldCamera=generatedMedia(".webm",List.of(
+                "-f","lavfi","-i","testsrc2=size=320x180:rate=15",
+                "-t","25","-an","-c:v","libvpx","-deadline","realtime",
+                "-b:v","110k"));
+        byte[] oldVoice=generatedMedia(".wav",List.of(
+                "-f","lavfi","-i","sine=frequency=440:sample_rate=16000",
+                "-t","25","-ac","1","-c:a","pcm_s16le"));
+        HttpClient provider=mock(HttpClient.class);
+        pilot=new NeuroReplacementPilotService(new ObjectMapper(),provider);
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        ResultSet row=mock(ResultSet.class);
+        when(row.getString(1)).thenReturn(jobId);
+        when(row.getString(2)).thenReturn("hat-fac7edabcd123456");
+        when(row.getString(3)).thenReturn("owner-1");
+        when(row.getString(4)).thenReturn("failed");
+        when(row.getString(6)).thenReturn("{}");
+        when(row.getString(10)).thenReturn("saved-camera.webm");
+        when(row.getString(11)).thenReturn("saved-voice.wav");
+        when(row.getString(12)).thenReturn("video/webm");
+        when(row.getString(13)).thenReturn("audio/wav");
+        when(db.query(anyString(),any(RowMapper.class),eq(jobId)))
+                .thenAnswer(call->List.of(((RowMapper)call.getArgument(1)).mapRow(row,0)));
+        pilot.setJdbcTemplate(db);
+        ObjectStore archive=mock(ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        when(archive.get("saved-camera.webm")).thenReturn(oldCamera);
+        when(archive.get("saved-voice.wav")).thenReturn(oldVoice);
+        pilot.setObjectStore(archive);
+        byte[] preview=pilot.prepareArchivedVideoCharacterPreview("owner-1",jobId,12);
+        assertTrue(preview.length>25000,"Archived 25s source yields fresh 8s MP4 without paying");
+        verify(archive).get("saved-camera.webm");
+        verify(archive).get("saved-voice.wav");
+        verifyNoInteractions(provider);
+        ResponseStatusException otherOwner=assertThrows(ResponseStatusException.class,
+                ()->pilot.prepareArchivedVideoCharacterPreview("other-owner",jobId,12));
+        assertEquals(HttpStatus.NOT_FOUND,otherOwner.getStatusCode());
+        verifyNoInteractions(provider);
+    }
+
+    @Test
     void characterPreviewRejectsInvalidTimestampBeforeProviderOrFfmpeg() {
         HttpClient provider=mock(HttpClient.class);
         pilot=new NeuroReplacementPilotService(new ObjectMapper(),provider);
