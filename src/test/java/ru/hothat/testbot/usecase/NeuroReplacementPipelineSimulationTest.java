@@ -42,7 +42,7 @@ class NeuroReplacementPipelineSimulationTest {
     }
 
     @Test
-    void videoCharacterPreparationIsFreeAudioVisual1080pAndEightSeconds() throws Exception {
+    void videoCharacterPreparationIsFreeAudioVisual1080pAndWithinStrictEightSecondLimit() throws Exception {
         byte[] camera=generatedMedia(".webm",List.of(
                 "-f","lavfi","-i","testsrc2=size=320x180:rate=15",
                 "-t","12","-an","-c:v","libvpx","-deadline","realtime",
@@ -55,7 +55,7 @@ class NeuroReplacementPipelineSimulationTest {
         Map<String,Object> capability=pilot.videoCharacterCapability();
         assertEquals(false,capability.get("paidGenerationEnabled"));
         assertEquals(false,capability.get("genApiVideoCharacterCreationVerified"));
-        assertEquals(8,capability.get("referenceSeconds"));
+        assertEquals(7.5,capability.get("referenceSeconds"));
 
         byte[] clip=pilot.prepareVideoCharacterPreview(
                 new org.springframework.mock.web.MockMultipartFile(
@@ -81,7 +81,9 @@ class NeuroReplacementPipelineSimulationTest {
             java.util.regex.Matcher duration=java.util.regex.Pattern.compile(
                     "duration=([0-9]+(?:\\.[0-9]+)?)").matcher(info);
             assertTrue(duration.find(),info);
-            assertEquals(8,Double.parseDouble(duration.group(1)),0.2);
+            assertTrue(Double.parseDouble(duration.group(1))>=7.25 &&
+                    Double.parseDouble(duration.group(1))<8.0,
+                    "Kling video-element strict max 8s including AAC tail: "+info);
         } finally { Files.deleteIfExists(tmp); }
         verifyNoInteractions(provider);
     }
