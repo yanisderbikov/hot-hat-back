@@ -56,7 +56,7 @@ public class NeuroReplacementPilotService {
     @Value("${NEURO_REFERENCE_PUBLIC_ORIGIN:https://hot-hat-back.up.railway.app}")
     private String referencePublicOrigin;
 
-    private static final int MAX_VIDEO_BYTES = 12 * 1024 * 1024;
+    private static final int MAX_VIDEO_BYTES = 16 * 1024 * 1024;
     private static final int MAX_VOICE_BYTES = 3 * 1024 * 1024;
     private static final int MAX_RESULT_BYTES = 40 * 1024 * 1024;
     // This is a fresh performance, not an edit of the recorded person's gestures.
@@ -1152,6 +1152,13 @@ public class NeuroReplacementPilotService {
     private static final String CHARACTER_MODE = "kling-video-character-v3";
     private static final String GENAPI_REFERENCE_MODE = "genapi-o3-video-identity-reference";
     private static final String GENAPI_VISUAL_REFERENCE_MODEL = "reference-to-video";
+    private static final String UPLOAD_MODE = "genapi-upload-video-10";
+    private static final String UPLOAD_ASSIGNMENT =
+            "Повернуться к веб-камере и смотреть прямо в камеру. "+
+            "Выразительно сказать «А вы всё ещё кипятите?». "+
+            "Сделать короткую паузу. Затем сказать «Тогда мы идём к вам!». "+
+            "Показать большой палец, погрозить кулаком, помахать на прощание, "+
+            "встать со стула и уйти из кадра.";
     private static boolean isCharacterWorkflow(Job job) {
         String mode=job.providerRequests.get("character-mode");
         return CHARACTER_MODE.equals(mode) || GENAPI_REFERENCE_MODE.equals(mode);
@@ -1804,9 +1811,12 @@ public class NeuroReplacementPilotService {
     private void processGenApiVisualReference(Job job,byte[] camera,
                                                String cameraMime,byte[] voice,
                                                String voiceMime) {
-        boolean ownerReviewed="Владелец одобрил видеоперсонажа и движения".equals(job.stage);
+        boolean simpleUpload=UPLOAD_MODE.equals(job.providerRequests.get("character-mode"));
+        boolean ownerReviewed=simpleUpload ||
+                "Владелец одобрил видеоперсонажа и движения".equals(job.stage);
         try{
-            NeuroScenePlan scene=NeuroScenePlan.planForCharacter(job.sceneAssignment);
+            NeuroScenePlan scene=simpleUpload?NeuroScenePlan.plan(job.sceneAssignment):
+                    NeuroScenePlan.planForCharacter(job.sceneAssignment);
             if(key==null||key.isBlank())
                 throw new IOException("NEURO_GENAPI_KEY_MISSING");
             String referenceKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
@@ -2136,7 +2146,8 @@ public class NeuroReplacementPilotService {
     }
 
     private void process(Job job, byte[] camera, String cameraMime, byte[] voice, String voiceMime, double startSeconds) {
-        if(GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode"))) {
+        if(GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode")) ||
+                UPLOAD_MODE.equals(job.providerRequests.get("character-mode"))) {
             processGenApiVisualReference(job,camera,cameraMime,voice,voiceMime);
             return;
         }
