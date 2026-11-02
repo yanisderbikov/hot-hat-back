@@ -102,6 +102,13 @@ public class WebSecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v2/public/neuro-references/*/input.mp4").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v2/public/neuro-references/*/input.jpg").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v2/public/neuro-references/*/input.wav").permitAll()
+                        // GenAPI Kling probes the same opaque, expiring media URL via
+                        // HEAD before it downloads the file. A 401 here rejects
+                        // the already-submitted paid task even though GET is 200.
+                        // Keep token validation in the controller/service unchanged.
+                        .requestMatchers(HttpMethod.HEAD, "/api/v2/public/neuro-references/*/input.mp4",
+                                "/api/v2/public/neuro-references/*/input.jpg",
+                                "/api/v2/public/neuro-references/*/input.wav").permitAll()
                         // Справочник дивизионов нужен экрану регистрации, где токена
                         // ещё нет. Оба сценария объявлены permitAll и в @PreAuthorize —
                         // без записи здесь до метода дело бы не дошло и права
