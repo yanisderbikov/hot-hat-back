@@ -1953,7 +1953,8 @@ public class NeuroReplacementPilotService {
                 acting=download(videoUrl,MAX_RESULT_BYTES);
                 MediaProbe media=probeMp4(acting);
                 if(!media.video||media.seconds<scene.durationSeconds()-0.8||
-                        media.seconds>scene.durationSeconds()+0.8)
+                        media.seconds>scene.durationSeconds()+0.8||
+                        (simpleUpload && media.seconds>10.05))
                     throw new IOException("NEURO_GENAPI_REFERENCE_VIDEO_DURATION_INVALID "+
                             media.seconds+"s expected "+scene.durationSeconds()+"s");
                 objectStore.put(paidKey,acting,"video/mp4");
@@ -1995,6 +1996,8 @@ public class NeuroReplacementPilotService {
                     "model","lipsync-1.9.0-beta","sync_mode",LIPSYNC_SYNC_MODE)));
             byte[] finalVideo=recoverPaidLipSyncVideo(job,finished);
             verifyPlayableMp4(finalVideo,scene.durationSeconds());
+            if(simpleUpload && probeMp4(finalVideo).seconds>10.05)
+                throw new IOException("NEURO_UPLOAD_RESULT_OVER_TEN_SECONDS");
             String finalKey="neuro-replacements/"+job.ownerUid+"/"+job.id+".mp4";
             objectStore.put(finalKey,finalVideo,"video/mp4");
             job.finalVideo=finished;
