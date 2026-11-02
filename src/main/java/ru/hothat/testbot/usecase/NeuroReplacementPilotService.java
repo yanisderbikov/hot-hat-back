@@ -1593,7 +1593,8 @@ public class NeuroReplacementPilotService {
         return Map.of("assignment",plan.assignment(),"spokenText",plan.spokenText(),
                 "durationSeconds",plan.durationSeconds(),"maximumSourceBytes",MAX_VIDEO_BYTES,
                 "priceEstimateRoubles",(int)Math.ceil(plan.durationSeconds()*(84+200.0/60)+20),
-                "priceIsEstimate",true,"readiness",readiness());
+                "priceIsEstimate",true,"readiness",readiness(),
+                "providerReady",enabled && key!=null && !key.isBlank());
     }
 
     /** Resolve client UUID if the paid POST response was lost. */
