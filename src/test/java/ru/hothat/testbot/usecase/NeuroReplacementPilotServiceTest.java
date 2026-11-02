@@ -74,6 +74,42 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void chromeLiveWebmWithoutDurationHeaderIsAcceptedFromActualPacketTimestamps() throws Exception {
+        // Chrome MediaRecorder emits streaming WebM with NO format.duration.
+        // Real owner example was 1280x720, ~21 fps, 30 seconds, Opus audio.
+        java.nio.file.Path webm=java.nio.file.Files.createTempFile("neuro-chrome-live-",".webm");
+        try {
+            Process live=new ProcessBuilder("ffmpeg","-hide_banner","-loglevel","error",
+                    "-nostdin","-y",
+                    "-f","lavfi","-i","color=c=gray:s=320x180:r=12",
+                    "-f","lavfi","-i","sine=frequency=330:sample_rate=24000",
+                    "-t","25","-c:v","libvpx","-deadline","realtime",
+                    "-cpu-used","8","-b:v","100k",
+                    "-c:a","libopus","-f","webm","-live","1","pipe:1")
+                    .redirectOutput(webm.toFile()).start();
+            assertTrue(live.waitFor(35,java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(0,live.exitValue());
+
+            byte[] original=java.nio.file.Files.readAllBytes(webm);
+            Object checked=ReflectionTestUtils.invokeMethod(pilot,"probeMp4",original);
+            var durationGetter=checked.getClass().getDeclaredMethod("seconds");
+            durationGetter.setAccessible(true);
+            double seconds=(Double)durationGetter.invoke(checked);
+            assertTrue(seconds>=24.8 && seconds<=25.3,
+                    "Missing WebM container duration must be recovered from packets: "+seconds);
+            var videoGetter=checked.getClass().getDeclaredMethod("video");
+            videoGetter.setAccessible(true);
+            var audioGetter=checked.getClass().getDeclaredMethod("audio");
+            audioGetter.setAccessible(true);
+            assertEquals(true,videoGetter.invoke(checked));
+            assertEquals(true,audioGetter.invoke(checked));
+            // This is fully local: no GenAPI POST, no money spent.
+        }finally{
+            java.nio.file.Files.deleteIfExists(webm);
+        }
+    }
+
+    @Test
     void simpleUploadNeverChargesWithoutExplicitOwnerConsent() {
         var error=assertThrows(ResponseStatusException.class,()->
                 pilot.startUploadedVideo("owner","e6b8de6b-3008-4bf4-a71c-a0bd9d2a5c9a",
