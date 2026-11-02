@@ -2838,6 +2838,23 @@ public class NeuroReplacementPilotService {
                   first[6]=='y' && first[7]=='p';
         if(!valid || total < ("image/jpeg".equals(expectedType)?2048:25000))
             throw new IOException("NEURO_MEDIA_PREFLIGHT_INVALID_OR_SHORT_FILE");
+        // GenAPI may probe a reference using HEAD, even though fetching
+        // the actual MP4/JPEG via GET succeeded. On 02-Nov paid task
+        // 57179646, reference HEAD returned 401 while GET was 200.
+        // Reject the input BEFORE any paid Kling POST if either method fails.
+        HttpRequest headRequest=HttpRequest.newBuilder(url)
+                .timeout(Duration.ofSeconds(20))
+                .method("HEAD",HttpRequest.BodyPublishers.noBody())
+                .build();
+        HttpResponse<Void> head=http.send(headRequest,
+                HttpResponse.BodyHandlers.discarding());
+        if(head.statusCode()!=200)
+            throw new IOException("NEURO_MEDIA_PREFLIGHT_HEAD_REJECTED_"+
+                    expectedType.replace("/","_")+"_HTTP_"+head.statusCode());
+        String headType=head.headers().firstValue("Content-Type")
+                .orElse("").toLowerCase(java.util.Locale.ROOT);
+        if(!headType.startsWith(expectedType))
+            throw new IOException("NEURO_MEDIA_PREFLIGHT_HEAD_WRONG_CONTENT_TYPE");
     }
 
     /** Owner-only free check, no API provider or paid model POST. */
