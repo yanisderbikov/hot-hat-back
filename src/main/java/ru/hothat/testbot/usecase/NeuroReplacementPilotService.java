@@ -1586,6 +1586,97 @@ public class NeuroReplacementPilotService {
         return start(roomId,ownerUid,consented,video,voice,0,assignment);
     }
 
+
+    /** Read-only quote and fixed scenario; no provider POST. */
+    public Map<String,Object> uploadConfig() {
+        NeuroScenePlan plan=NeuroScenePlan.plan(UPLOAD_ASSIGNMENT);
+        return Map.of("assignment",plan.assignment(),"spokenText",plan.spokenText(),
+                "durationSeconds",plan.durationSeconds(),"maximumSourceBytes",MAX_VIDEO_BYTES,
+                "priceEstimateRoubles",(int)Math.ceil(plan.durationSeconds()*(84+200.0/60)+20),
+                "priceIsEstimate",true,"readiness",readiness());
+    }
+
+    /** Resolve client UUID if the paid POST response was lost. */
+    public Map<String,Object> uploadByTestId(String ownerUid,String testId) {
+        if(testId==null||!testId.matches("[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"NEURO_UPLOAD_TEST_ID_INVALID");
+        Job job=existingRoomJob("hat-fac7edupload"+testId.replace("-",""));
+        if(job==null||!ownerUid.equals(job.ownerUid)||
+                !UPLOAD_MODE.equals(job.providerRequests.get("character-mode")))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_UPLOAD_JOB_NOT_FOUND");
+        return snapshot(job);
+    }
+
+    /**
+     * Single recorded MP4/WebM (20-30 sec) is BOTH voice and identity
+     * reference. Archive before paid GenAPI calls. Stable client testId
+     * prevents duplicate billing after refresh, double click or timeout.
+     */
+    public synchronized Map<String,Object> startUploadedVideo(
+            String ownerUid,String testId,boolean consented,MultipartFile video) {
+        if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "NEURO_UPLOAD_IMAGE_VOICE_PAYMENT_CONSENT_REQUIRED");
+        if(testId==null||!testId.matches("[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"NEURO_UPLOAD_TEST_ID_INVALID");
+        String roomId="hat-fac7edupload"+testId.replace("-","");
+        Job old=existingRoomJob(roomId);
+        if(old!=null){
+            if(!ownerUid.equals(old.ownerUid)||
+                    !UPLOAD_MODE.equals(old.providerRequests.get("character-mode")))
+                throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_UPLOAD_JOB_CONFLICT");
+            return snapshot(old); // never re-submit paid stages
+        }
+        if(!enabled||key==null||key.isBlank()||jdbc==null||
+                objectStore==null||!objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_UPLOAD_PROVIDER_OR_ARCHIVE_NOT_READY");
+        if(video==null||video.isEmpty()||video.getSize()>MAX_VIDEO_BYTES)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"NEURO_UPLOAD_SOURCE_TOO_LARGE");
+        String mime=video.getContentType()==null?"":video.getContentType().split(";")[0].trim();
+        if(!("video/mp4".equals(mime)||"video/webm".equals(mime)))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_UPLOAD_MP4_OR_WEBM_REQUIRED");
+        byte[] camera,voice;
+        try{
+            camera=video.getBytes();
+            MediaProbe info=probeMp4(camera);
+            if(!info.video||!info.audio||!Double.isFinite(info.seconds)||
+                    info.seconds<20||info.seconds>30.5)
+                throw new IOException("NEURO_UPLOAD_NEEDS_20_TO_30_SECONDS_WITH_SPEECH");
+            // FREE extraction of the exact person's voice from uploaded video.
+            voice=transcodeMedia(camera,"video/mp4".equals(mime)?"mp4":"webm",
+                    "wav",false,0);
+            if(voice.length<25000||voice.length>MAX_VOICE_BYTES||
+                    !probeMp4(voice).audio)throw new IOException("NEURO_UPLOAD_NO_VOICE");
+        }catch(Exception e){
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "NEURO_UPLOAD_MEDIA_PREFLIGHT_FAILED_NO_CHARGE");
+        }
+        NeuroScenePlan scene=NeuroScenePlan.plan(UPLOAD_ASSIGNMENT);
+        if(scene.durationSeconds()>10)
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "NEURO_UPLOAD_SCENE_EXCEEDS_TEN_SECONDS");
+        Job job=new Job(UUID.randomUUID().toString(),roomId,ownerUid);
+        job.sceneAssignment=scene.assignment();
+        job.cameraMime=mime;job.voiceMime="audio/wav";job.startSeconds=0;
+        job.providerRequests.put("character-mode",UPLOAD_MODE);
+        String prefix="neuro-replacements/"+ownerUid+"/"+job.id;
+        job.sourceCameraKey=prefix+("video/mp4".equals(mime)?"-input.mp4":"-input.webm");
+        job.sourceVoiceKey=prefix+"-voice.wav";
+        job.stage="Исходный 25-секундный образец проверен. Подготовка GenAPI.";
+        try{
+            objectStore.put(job.sourceCameraKey,camera,mime);
+            objectStore.put(job.sourceVoiceKey,voice,"audio/wav");
+            persist(job);
+        }catch(Exception e){
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_UPLOAD_ARCHIVE_FAILED_NO_CHARGE");
+        }
+        byRoom.put(roomId,job);
+        executor.execute(()->process(job,camera,mime,voice,"audio/wav",0));
+        return snapshot(job);
+    }
+
     public Map<String,Object> statusByJob(String ownerUid,String jobId) {
         Job job=loadJobById(jobId);
         if(job==null || !ownerUid.equals(job.ownerUid)) {
