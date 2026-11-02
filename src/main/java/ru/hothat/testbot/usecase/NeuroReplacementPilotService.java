@@ -3271,12 +3271,57 @@ public class NeuroReplacementPilotService {
                 audio |= "audio".equals(stream.path("codec_type").asText());
             }
             double duration = info.path("format").path("duration").asDouble(0);
+            // Chrome MediaRecorder WebM files frequently have no container
+            // duration although video and Opus audio are complete. Real
+            // players can be on weak connections, so these 20-30 second
+            // recordings must not be rejected as 0 seconds before any paid
+            // GenAPI attempt. Derive duration from the final packet time.
+            if(!Double.isFinite(duration)||duration<=0)
+                duration=probePacketDuration(file);
             return new MediaProbe(video, audio, duration);
         } finally {
             Files.deleteIfExists(file);
         }
     }
 
+
+    /**
+     * Free duration fallback for valid live WebM without a duration header.
+     * Read packet timestamps from local FFprobe; never send video to an AI
+     * provider or approximate seconds from frame rate alone.
+     */
+    private double probePacketDuration(Path file) throws Exception {
+        Path packetTimes=Files.createTempFile("neuro-packet-duration-", ".csv");
+        try {
+            Process probe=new ProcessBuilder("ffprobe","-v","error",
+                    "-show_entries","packet=pts_time,duration_time",
+                    "-of","csv=p=0",file.toString())
+                    .redirectErrorStream(true)
+                    .redirectOutput(packetTimes.toFile()).start();
+            if(!probe.waitFor(15,TimeUnit.SECONDS)){
+                probe.destroyForcibly();
+                throw new IOException("NEURO_PACKET_DURATION_TIMEOUT");
+            }
+            if(probe.exitValue()!=0)
+                throw new IOException("NEURO_PACKET_DURATION_INVALID");
+            double seconds=0;
+            for(String line:Files.readAllLines(packetTimes,StandardCharsets.UTF_8)){
+                String[] values=line.split(",",-1);
+                if(values.length<1)continue;
+                try{
+                    double start=Double.parseDouble(values[0].trim());
+                    double length=values.length>1 && !"N/A".equals(values[1].trim())
+                            ? Double.parseDouble(values[1].trim()) : 0;
+                    if(Double.isFinite(start)&&start>=0 && start<3600 &&
+                            Double.isFinite(length)&&length>=0&&length<60)
+                        seconds=Math.max(seconds,start+length);
+                }catch(NumberFormatException ignored){}
+            }
+            return seconds;
+        }finally{
+            Files.deleteIfExists(packetTimes);
+        }
+    }
 
     /**
      * Time-align the paid, cloned voice to the directed 15-second performance.
