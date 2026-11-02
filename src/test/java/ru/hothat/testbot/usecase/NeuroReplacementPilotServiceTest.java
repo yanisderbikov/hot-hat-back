@@ -51,6 +51,29 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void prerecordedTwentyFiveSecondVideoProducesLocalVoiceWithoutGenApiCharge() throws Exception {
+        java.nio.file.Path mp4=java.nio.file.Files.createTempFile("neuro-25s-source-", ".mp4");
+        try{
+            Process make=new ProcessBuilder("ffmpeg","-hide_banner","-loglevel","error",
+                    "-nostdin","-y","-f","lavfi","-i",
+                    "color=c=gray:s=320x180:r=12",
+                    "-f","lavfi","-i","sine=frequency=330:sample_rate=24000",
+                    "-t","25","-c:v","mpeg4","-q:v","10","-c:a","aac",
+                    "-shortest",mp4.toString()).redirectErrorStream(true).start();
+            assertTrue(make.waitFor(30,java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(0,make.exitValue());
+            byte[] source=java.nio.file.Files.readAllBytes(mp4);
+            byte[] voice=ReflectionTestUtils.invokeMethod(pilot,
+                    "transcodeMedia",source,"mp4","wav",false,0.0);
+            assertTrue(voice.length>25000 && voice.length<3*1024*1024);
+            assertEquals("RIFF",new String(voice,0,4,java.nio.charset.StandardCharsets.US_ASCII));
+            // No call to GenAPI is needed to extract the user's voice.
+        }finally{
+            java.nio.file.Files.deleteIfExists(mp4);
+        }
+    }
+
+    @Test
     void simpleUploadNeverChargesWithoutExplicitOwnerConsent() {
         var error=assertThrows(ResponseStatusException.class,()->
                 pilot.startUploadedVideo("owner","e6b8de6b-3008-4bf4-a71c-a0bd9d2a5c9a",
