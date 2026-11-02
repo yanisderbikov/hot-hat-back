@@ -74,6 +74,32 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void klingO3EightSecondIdentityVideoMustBe1080pH264Aac24fpsBeforePayment()
+            throws Exception {
+        java.nio.file.Path mp4=java.nio.file.Files.createTempFile("neuro-kling-identity-",".mp4");
+        try{
+            Process ffmpeg=new ProcessBuilder("ffmpeg","-hide_banner","-loglevel","error",
+                    "-nostdin","-y",
+                    "-f","lavfi","-i","color=c=gray:s=1920x1080:r=24",
+                    "-f","lavfi","-i","sine=frequency=350:sample_rate=48000",
+                    "-t","8","-threads","1","-c:v","libx264",
+                    "-preset","ultrafast","-pix_fmt","yuv420p",
+                    "-c:a","aac","-movflags","+faststart",mp4.toString()).start();
+            assertTrue(ffmpeg.waitFor(45,java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(0,ffmpeg.exitValue());
+            byte[] valid=java.nio.file.Files.readAllBytes(mp4);
+            assertDoesNotThrow(()->ReflectionTestUtils.invokeMethod(
+                    pilot,"verifyKlingElementReference",valid));
+            byte[] bad=new byte[26_000];
+            assertThrows(Exception.class,()->ReflectionTestUtils.invokeMethod(
+                    pilot,"verifyKlingElementReference",bad),
+                    "Corrupt media is caught LOCALLY, before GenAPI can charge.");
+        }finally{
+            java.nio.file.Files.deleteIfExists(mp4);
+        }
+    }
+
+    @Test
     void chromeLiveWebmWithoutDurationHeaderIsAcceptedFromActualPacketTimestamps() throws Exception {
         // Chrome MediaRecorder emits streaming WebM with NO format.duration.
         // Real owner example was 1280x720, ~21 fps, 30 seconds, Opus audio.
