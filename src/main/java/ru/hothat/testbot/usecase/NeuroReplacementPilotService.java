@@ -3668,7 +3668,15 @@ public class NeuroReplacementPilotService {
     private String awaitResult(Job job, String model, String id) throws Exception {
         job.providerRequests.put(model, id);
         // This ID is the durable guard against a duplicate paid submission.
-        persist(job);
+        // A submitted GenAPI task is PROCESSING, not waiting in our queue.
+        // Restored paid tasks also keep their original ID and never POST again.
+        if("queued".equals(job.state)) {
+            job.state="processing";
+            job.stage="GenAPI "+model+": уже отправлено, ожидаю результат ID "+id;
+            checkpoint(job);
+        } else {
+            persist(job);
+        }
         LOG.info("Neuro provider started job={} model={} request_id={}", job.id, model, id);
         long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(30);
         while (System.nanoTime() < deadline) {
