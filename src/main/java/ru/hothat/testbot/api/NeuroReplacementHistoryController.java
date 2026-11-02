@@ -73,6 +73,18 @@ public class NeuroReplacementHistoryController {
         return pilot.uploadByTestId(owner.uid(),testId);
     }
 
+    /** FREE recheck of the original paid Kling ID, then continue the owner's
+     * original authorized pipeline only after Kling is confirmed completed.
+     * Does not generate or pay for any second Kling task.
+     */
+    @PostMapping("/studio/upload/{jobId}/resume-timeout")
+    public ResponseEntity<Map<String,Object>> resumeTimedOutUpload(
+            @AuthenticationPrincipal HotHatUser owner,
+            @PathVariable String jobId) {
+        return ResponseEntity.accepted().body(
+                pilot.resumeTimedOutUpload(owner.uid(),jobId));
+    }
+
     @PostMapping(value="/studio/upload", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
     @ApiResponse(responseCode="202",description="Single owner-approved 20-30s webcam MP4/WebM with voice, <=10s paid GenAPI pipeline")
     public ResponseEntity<Map<String,Object>> uploadVideo(
