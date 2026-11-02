@@ -57,6 +57,33 @@ public class NeuroReplacementHistoryController {
         return pilot.history(owner.uid());
     }
 
+
+    /**
+     * Simple 25-second video upload UI. One owner-confirmed payment action,
+     * all subsequent stages are the saved GenAPI pipeline; no extra Kling key.
+     */
+    @GetMapping("/studio/upload/config")
+    public Map<String,Object> uploadConfig(@AuthenticationPrincipal HotHatUser owner) {
+        return pilot.uploadConfig();
+    }
+
+    @GetMapping("/studio/upload/by-test/{testId}")
+    public Map<String,Object> uploadByTestId(@AuthenticationPrincipal HotHatUser owner,
+                                             @PathVariable String testId) {
+        return pilot.uploadByTestId(owner.uid(),testId);
+    }
+
+    @PostMapping(value="/studio/upload", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ApiResponse(responseCode="202",description="Single owner-approved 20-30s webcam MP4/WebM with voice, <=10s paid GenAPI pipeline")
+    public ResponseEntity<Map<String,Object>> uploadVideo(
+            @AuthenticationPrincipal HotHatUser owner,
+            @RequestParam("testId") String testId,
+            @RequestParam(name="consented",defaultValue="false") boolean consented,
+            @RequestPart("video") MultipartFile video) {
+        return ResponseEntity.accepted().body(
+                pilot.startUploadedVideo(owner.uid(),testId,consented,video));
+    }
+
     @PostMapping(value="/studio/video-character/plan",
                  consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
     public NeuroScenePlan videoCharacterPlan(@AuthenticationPrincipal HotHatUser owner,
