@@ -2024,6 +2024,10 @@ public class NeuroReplacementPilotService {
             // BOTH public media URLs passed independent unauthenticated GET.
             // 2026-11-01 real incident: JPG was 401, MP4 was 200; GenAPI
             // returned 422 FILE_ERROR and no video task ID.
+            // Validate the actual transcoded element sample, not merely the
+            // player's original WebM. Kling O3 video-character references
+            // require a compatible 3-8s MP4 with stable 24fps/1080p.
+            verifyKlingElementReference(objectStore.get(referenceKey));
             String cleanVideo=cleanGenApiInputUrl(job,referenceKey,"mp4");
             String cleanImage=cleanGenApiInputUrl(job,stillKey,"jpg");
             checkGenApiMediaDownload(cleanVideo,"video/mp4");
@@ -2629,6 +2633,56 @@ public class NeuroReplacementPilotService {
         }
     }
 
+    /**
+     * Free FFprobe audit of the EXACT H.264/AAC 8-second video that will be
+     * sent as an O3 identity element (not the potentially low-quality WebM).
+     * Don't let GenAPI bill or queue tasks from invalid reference media.
+     */
+    private void verifyKlingElementReference(byte[] mp4) throws Exception {
+        if(mp4==null||mp4.length<25_000||mp4.length>22*1024*1024)
+            throw new IOException("NEURO_KLING_ELEMENT_SAMPLE_SIZE_INVALID_NO_CHARGE");
+        Path file=Files.createTempFile("neuro-o3-element-audit-", ".mp4");
+        try{
+            Files.write(file,mp4);
+            Process probe=new ProcessBuilder("ffprobe","-v","error",
+                    "-show_entries","format=duration:stream=codec_name,codec_type,width,height,avg_frame_rate",
+                    "-of","json",file.toString())
+                    .redirectErrorStream(true).start();
+            if(!probe.waitFor(15,TimeUnit.SECONDS)){
+                probe.destroyForcibly();
+                throw new IOException("NEURO_KLING_ELEMENT_FFPROBE_TIMEOUT_NO_CHARGE");
+            }
+            if(probe.exitValue()!=0)
+                throw new IOException("NEURO_KLING_ELEMENT_FFPROBE_FAILED_NO_CHARGE");
+            JsonNode data=json.readTree(probe.getInputStream());
+            double seconds=data.path("format").path("duration").asDouble(0);
+            if(!Double.isFinite(seconds)||seconds<7.7||seconds>8.1)
+                throw new IOException("NEURO_KLING_ELEMENT_DURATION_INVALID_NO_CHARGE");
+            boolean video=false,audio=false;
+            for(JsonNode stream:data.path("streams")){
+                String type=stream.path("codec_type").asText("");
+                if("video".equals(type)){
+                    int w=stream.path("width").asInt(),h=stream.path("height").asInt();
+                    String rate=stream.path("avg_frame_rate").asText("0/0");
+                    String[] parts=rate.split("/",-1);
+                    double fps=0;
+                    if(parts.length==2){
+                        double denominator=Double.parseDouble(parts[1]);
+                        if(denominator>0)fps=Double.parseDouble(parts[0])/denominator;
+                    }
+                    video="h264".equals(stream.path("codec_name").asText()) &&
+                            w==1920&&h==1080&&fps>=23.95&&fps<=60.05;
+                }
+                if("audio".equals(type))
+                    audio="aac".equals(stream.path("codec_name").asText());
+            }
+            if(!video||!audio)
+                throw new IOException("NEURO_KLING_ELEMENT_CODEC_GEOMETRY_OR_FPS_INVALID_NO_CHARGE");
+        }finally{
+            Files.deleteIfExists(file);
+        }
+    }
+
     /** No live Kling/GenAPI POST: expose exact integration blocker. */
     public Map<String,Object> videoCharacterCapability() {
         Map<String,Object> result=new LinkedHashMap<>();
@@ -2779,7 +2833,7 @@ public class NeuroReplacementPilotService {
         jdbc.update("""
                 INSERT INTO neuro_kling_video_reference
                     (access_token, job_id, object_key, expires_at)
-                VALUES (?, ?, ?, now() + interval '2 hours')
+                VALUES (?, ?, ?, now() + interval '6 hours')
                 """,token,job.id,keyPath);
         return origin.replaceAll("/+$","")+
                 "/api/v2/public/neuro-references/"+token+"/input."+extension;
