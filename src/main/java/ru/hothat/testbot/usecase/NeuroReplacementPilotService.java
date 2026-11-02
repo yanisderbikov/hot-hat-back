@@ -2598,7 +2598,9 @@ public class NeuroReplacementPilotService {
                     "-filter_threads","1","-threads","1",
                     "-ss",String.valueOf(startSeconds),"-i",camera.toString(),
                     "-ss",String.valueOf(startSeconds),"-i",microphone.toString(),
-                    "-t","8","-map","0:v:0","-map","1:a:0",
+                    // Kling O3 video element maximum is 8 seconds. AAC caused -t 8
+                    // to yield 8.005s in the owner sample, violating the limit.
+                    "-t","7.5","-map","0:v:0","-map","1:a:0",
                     "-vf","scale=1920:1080:force_original_aspect_ratio=decrease:flags=bilinear,"+
                             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24,setsar=1",
                     "-c:v","libx264","-preset","ultrafast","-tune","zerolatency",
@@ -2613,9 +2615,9 @@ public class NeuroReplacementPilotService {
                 throw new IOException("NEURO_CHARACTER_PREVIEW_TRANSCODE_INVALID");
             byte[] sample=Files.readAllBytes(output);
             MediaProbe info=probeMp4(sample);
-            if(!info.video || !info.audio || info.seconds<7.7 || info.seconds>8.3 ||
+            if(!info.video || !info.audio || !validKlingElementDuration(info.seconds) ||
                     sample.length>22*1024*1024 || sample.length<25_000)
-                throw new IOException("NEURO_CHARACTER_PREVIEW_REQUIRES_EIGHT_SECONDS_WITH_AUDIO");
+                throw new IOException("NEURO_CHARACTER_PREVIEW_REQUIRES_7_5_SECONDS_WITH_AUDIO");
             return sample;
         }catch(InterruptedException error){
             Thread.currentThread().interrupt();
@@ -2638,6 +2640,11 @@ public class NeuroReplacementPilotService {
      * sent as an O3 identity element (not the potentially low-quality WebM).
      * Don't let GenAPI bill or queue tasks from invalid reference media.
      */
+    /** Exact provider max 8s: do not round 8.005 down to 8. */
+    private static boolean validKlingElementDuration(double seconds) {
+        return Double.isFinite(seconds)&&seconds>=7.25&&seconds<8.0;
+    }
+
     private void verifyKlingElementReference(byte[] mp4) throws Exception {
         if(mp4==null||mp4.length<25_000||mp4.length>22*1024*1024)
             throw new IOException("NEURO_KLING_ELEMENT_SAMPLE_SIZE_INVALID_NO_CHARGE");
@@ -2656,7 +2663,7 @@ public class NeuroReplacementPilotService {
                 throw new IOException("NEURO_KLING_ELEMENT_FFPROBE_FAILED_NO_CHARGE");
             JsonNode data=json.readTree(probe.getInputStream());
             double seconds=data.path("format").path("duration").asDouble(0);
-            if(!Double.isFinite(seconds)||seconds<7.7||seconds>8.1)
+            if(!validKlingElementDuration(seconds))
                 throw new IOException("NEURO_KLING_ELEMENT_DURATION_INVALID_NO_CHARGE");
             boolean video=false,audio=false;
             for(JsonNode stream:data.path("streams")){
@@ -2687,7 +2694,7 @@ public class NeuroReplacementPilotService {
     public Map<String,Object> videoCharacterCapability() {
         Map<String,Object> result=new LinkedHashMap<>();
         result.put("variant","genapi-o3-video-reference");
-        result.put("referenceSeconds",8);
+        result.put("referenceSeconds",7.5);
         result.put("sourceVideoAndVoice",true);
         result.put("freeLocalVideoPreview",true);
         result.put("genApiO3AcceptsExistingElements",true);
