@@ -65,6 +65,20 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("SCRUM-38: чужой или истёкший media token возвращает 404, а не 500")
+    void absentOpaqueMediaTokenIsNotInternalServerError() {
+        String token="f".repeat(64);
+        var error=new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.NOT_FOUND,
+                "NEURO_REFERENCE_EXPIRED_OR_NOT_FOUND");
+        var result=new GlobalExceptionHandler(false).handleResponseStatus(error,
+                request("HEAD","/api/v2/public/neuro-references/"+token+"/input.mp4"));
+        assertThat(result.getStatusCode().value()).isEqualTo(404);
+        assertThat(result.getBody().code()).isEqualTo("NEURO_REFERENCE_NOT_AVAILABLE");
+        assertThat(result.getBody().error()).doesNotContain(token);
+    }
+
+    @Test
     @DisplayName("SCRUM-36: остальные ResponseStatusException сохраняют прежний обработчик")
     void unrelatedResponseStatusRemainsUnchanged() {
         var error=new org.springframework.web.server.ResponseStatusException(
