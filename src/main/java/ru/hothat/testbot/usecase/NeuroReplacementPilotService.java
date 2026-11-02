@@ -1609,6 +1609,91 @@ public class NeuroReplacementPilotService {
     }
 
     /**
+     * Resume ONLY the already-authorized one-video pipeline after our
+     * artificial 30-minute wait timed out. GenAPI may still be processing
+     * the paid Kling ID, and a timeout is not a provider failure.
+     *
+     * Never repeat the Kling POST. First FREE GET that saved provider ID.
+     * Claim the failed DB row atomically only when GenAPI says success;
+     * this prevents browser refresh, multiple tabs, or Railway replicas
+     * from making two TTS/Chatterbox/LipSync submissions.
+     *
+     * The owner's first explicit consent for the full pipeline is recorded
+     * by UPLOAD_MODE; callers cannot use this to revive arbitrary paid jobs.
+     */
+    public synchronized Map<String,Object> resumeTimedOutUpload(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null||!ownerUid.equals(job.ownerUid)||
+                !UPLOAD_MODE.equals(job.providerRequests.get("character-mode")))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_UPLOAD_JOB_NOT_FOUND");
+        if("ready".equals(job.state)||"processing".equals(job.state)||
+                "queued".equals(job.state))return snapshot(job);
+        String klingId=job.providerRequests.get(VIDEO_MODEL_ID);
+        if(!"failed".equals(job.state) || job.error==null ||
+                !job.error.startsWith("GenAPI "+VIDEO_MODEL_ID+" timeout") ||
+                klingId==null||!klingId.matches("[A-Za-z0-9_-]{1,100}") ||
+                job.submittingModel!=null ||
+                job.sourceCameraKey==null||job.sourceVoiceKey==null)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_UPLOAD_RESUME_ONLY_SAVED_KLING_TIMEOUT");
+        if(jdbc==null||objectStore==null||!objectStore.configured()||
+                key==null||key.isBlank())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_UPLOAD_RECOVERY_NOT_READY");
+        try {
+            JsonNode provider=send(baseRequest(GENAPI.resolve("request/get/"+klingId))
+                    .GET().build()); // free GET only; no paid Kling submission
+            String status=provider.path("status").asText("").toLowerCase(java.util.Locale.ROOT);
+            if(!"success".equals(status)&&!"completed".equals(status)){
+                Map<String,Object> waiting=snapshot(job);
+                waiting.put("providerStatus",status);
+                waiting.put("recoveryStarted",false);
+                return waiting;
+            }
+            // Never resume the pipeline if no valid trusted result is present.
+            JsonNode result=provider.path("result");
+            String url=result.isArray()&&!result.isEmpty()
+                    ? result.get(0).asText(""):result.asText("");
+            validatedResultUri(url);
+            int claimed=jdbc.update("""
+                UPDATE neuro_replacement_job
+                   SET state='processing',stage='GenAPI Kling завершён: восстанавливаю исходный оплаченный запуск',
+                       error_message=NULL,updated_at=now()
+                 WHERE job_id=? AND owner_uid=? AND state='failed'
+                   AND error_message LIKE 'GenAPI kling-video-o3 timeout%'
+                   AND provider_requests->>'kling-video-o3'=?
+                   AND provider_requests->>'character-mode'=?
+                   AND submitting_model IS NULL
+                """,jobId,ownerUid,klingId,UPLOAD_MODE);
+            Job current=loadJobById(jobId);
+            if(claimed!=1) return snapshot(current==null?job:current);
+            if(current==null)throw new IOException("NEURO_RESUME_CHECKPOINT_LOST");
+            byRoom.put(current.roomId,current);
+            executor.execute(()->{
+                try {
+                    process(current,objectStore.get(current.sourceCameraKey),current.cameraMime,
+                            objectStore.get(current.sourceVoiceKey),current.voiceMime,
+                            current.startSeconds);
+                }catch(Exception e){
+                    current.state="failed";
+                    current.stage="Не удалось восстановить исходный архив";
+                    current.error="NEURO_RESUME_INPUT_UNAVAILABLE";
+                    checkpoint(current);
+                }
+            });
+            Map<String,Object> response=snapshot(current);
+            response.put("recoveryStarted",true);
+            return response;
+        }catch(ResponseStatusException error){throw error;}
+        catch(Exception failure){
+            LOG.warn("Free provider recovery check failed job={} type={}",
+                    jobId,failure.getClass().getSimpleName());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "NEURO_UPLOAD_PROVIDER_RECOVERY_CHECK_FAILED");
+        }
+    }
+
+    /**
      * Single recorded MP4/WebM (20-30 sec) is BOTH voice and identity
      * reference. Archive before paid GenAPI calls. Stable client testId
      * prevents duplicate billing after refresh, double click or timeout.
