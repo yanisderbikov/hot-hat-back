@@ -74,6 +74,22 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void klingO3ElementRequiresActualDurationStrictlyBelowEightSeconds() {
+        // Reproduced on the owner's 25s WebM: -t 8 produced 8.005s
+        // due to AAC packet duration. The provider limit is 8.0s.
+        assertEquals(Boolean.FALSE,ReflectionTestUtils.invokeMethod(
+                pilot,"validKlingElementDuration",8.005));
+        assertEquals(Boolean.FALSE,ReflectionTestUtils.invokeMethod(
+                pilot,"validKlingElementDuration",8.0));
+        assertEquals(Boolean.TRUE,ReflectionTestUtils.invokeMethod(
+                pilot,"validKlingElementDuration",7.507));
+        assertEquals(Boolean.FALSE,ReflectionTestUtils.invokeMethod(
+                pilot,"validKlingElementDuration",3.0));
+        assertEquals(Boolean.FALSE,ReflectionTestUtils.invokeMethod(
+                pilot,"validKlingElementDuration",Double.NaN));
+    }
+
+    @Test
     void chromeLiveWebmWithoutDurationHeaderIsAcceptedFromActualPacketTimestamps() throws Exception {
         // Chrome MediaRecorder emits streaming WebM with NO format.duration.
         // Real owner example was 1280x720, ~21 fps, 30 seconds, Opus audio.
