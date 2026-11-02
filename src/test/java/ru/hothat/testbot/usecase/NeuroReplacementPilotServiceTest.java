@@ -82,7 +82,8 @@ class NeuroReplacementPilotServiceTest {
                     "-nostdin","-y",
                     "-f","lavfi","-i","color=c=gray:s=1920x1080:r=24",
                     "-f","lavfi","-i","sine=frequency=350:sample_rate=48000",
-                    "-t","8","-threads","1","-c:v","libx264",
+                    "-t","8","-threads","1","-filter_threads","1",
+                    "-c:v","libx264","-threads:v","1",
                     "-preset","ultrafast","-pix_fmt","yuv420p",
                     "-c:a","aac","-movflags","+faststart",mp4.toString()).start();
             assertTrue(ffmpeg.waitFor(45,java.util.concurrent.TimeUnit.SECONDS));
