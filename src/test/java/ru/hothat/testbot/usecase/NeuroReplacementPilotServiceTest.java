@@ -37,6 +37,29 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void simpleUploadPlanFitsTenSecondsWithAllGesturesAndExactTwoRussianPhrases() {
+        Map<String,Object> plan=pilot.uploadConfig();
+        int seconds=(Integer)plan.get("durationSeconds");
+        assertTrue(seconds>=8 && seconds<=10,"Entire scene fits ten seconds");
+        assertEquals("А вы всё ещё кипятите? ... Тогда мы идём к вам!",
+                plan.get("spokenText"));
+        String script=(String)plan.get("assignment");
+        for(String action:new String[]{"палец","кулаком","помахать","встать","уйти"})
+            assertTrue(script.contains(action),action);
+        assertEquals(16*1024*1024,plan.get("maximumSourceBytes"));
+        assertEquals(true,plan.get("priceIsEstimate"));
+    }
+
+    @Test
+    void simpleUploadNeverChargesWithoutExplicitOwnerConsent() {
+        var error=assertThrows(ResponseStatusException.class,()->
+                pilot.startUploadedVideo("owner","e6b8de6b-3008-4bf4-a71c-a0bd9d2a5c9a",
+                        false,null));
+        assertEquals(HttpStatus.BAD_REQUEST,error.getStatusCode());
+        assertTrue(error.getReason().contains("CONSENT"));
+    }
+
+    @Test
     void genApiOnlyCapabilityActivatesWithoutAnOfficialKlingApiKey() {
         ReflectionTestUtils.setField(pilot,"enabled",true);
         ReflectionTestUtils.setField(pilot,"key","existing-genapi-key");
