@@ -59,6 +59,18 @@ public class GlobalExceptionHandler {
             org.springframework.web.server.ResponseStatusException e,
             HttpServletRequest request) {
         String code=e.getReason();
+        // Opaque media capability URLs may legitimately be stale, revoked or
+        // never issued. A missing token was wrongly reported as HTTP 500
+        // (02-Nov: 404 NEURO_REFERENCE_EXPIRED_OR_NOT_FOUND wrapped in 500).
+        // Preserve the correct 404, without exposing the token in the body.
+        if(request.getRequestURI().matches(
+                "/api/v2/public/neuro-references/[a-f0-9]{64}/input\\.(mp4|jpg|wav)")
+                && e.getStatusCode().value()==404 &&
+                code!=null && code.startsWith("NEURO_REFERENCE_")) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ErrorResponses.of(request,404,"NEURO_REFERENCE_NOT_AVAILABLE",
+                            "Медиафайл недоступен или срок ссылки истёк."));
+        }
         if(code == null || !code.matches("NEURO_PAID_KLING_[A-Z_]+"))
             return handleOther(e,request);
         int status=e.getStatusCode().value();
