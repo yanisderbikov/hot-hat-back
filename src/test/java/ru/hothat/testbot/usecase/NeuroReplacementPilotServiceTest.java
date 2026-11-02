@@ -283,9 +283,16 @@ class NeuroReplacementPilotServiceTest {
             jpeg[0]=(byte)0xff;jpeg[1]=(byte)0xd8;jpeg[2]=(byte)0xff;
             when(response.body()).thenAnswer(call->
                     new java.io.ByteArrayInputStream(jpeg));
+            java.net.http.HttpResponse<Void> head=mock(java.net.http.HttpResponse.class);
+            when(head.statusCode()).thenReturn(200);
+            when(head.headers()).thenReturn(java.net.http.HttpHeaders.of(
+                    Map.of("Content-Type",List.of("image/jpeg")),(key,value)->true));
             when(client.send(any(java.net.http.HttpRequest.class),
                     any(java.net.http.HttpResponse.BodyHandler.class)))
-                    .thenReturn(response);
+                    .thenAnswer(call->{
+                        java.net.http.HttpRequest req=call.getArgument(0);
+                        return "HEAD".equals(req.method())?head:response;
+                    });
             String url="https://hot-hat-back.up.railway.app"+
                     "/api/v2/public/neuro-references/"+"b".repeat(64)+"/input.jpg";
             ReflectionTestUtils.invokeMethod(service,
@@ -298,6 +305,46 @@ class NeuroReplacementPilotServiceTest {
                     String.valueOf(invalid.getCause())+
                     (invalid.getCause()==null?"":String.valueOf(invalid.getCause().getCause()));
             assertTrue(details.contains("INVALID_OR_SHORT_FILE"),details);
+        }finally{service.close();}
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void publicMediaGet200ButHead401BlocksPaidKlingBeforeSubmission() throws Exception {
+        java.net.http.HttpClient client=mock(java.net.http.HttpClient.class);
+        NeuroReplacementPilotService service=new NeuroReplacementPilotService(
+                new ObjectMapper(),client);
+        try{
+            ReflectionTestUtils.setField(service,"referencePublicOrigin",
+                    "https://hot-hat-back.up.railway.app");
+            java.net.http.HttpResponse<java.io.InputStream> get=mock(
+                    java.net.http.HttpResponse.class);
+            when(get.statusCode()).thenReturn(200);
+            when(get.headers()).thenReturn(java.net.http.HttpHeaders.of(
+                    Map.of("Content-Type",List.of("image/jpeg")),(key,value)->true));
+            byte[] jpeg=new byte[3000];
+            jpeg[0]=(byte)0xff;jpeg[1]=(byte)0xd8;jpeg[2]=(byte)0xff;
+            when(get.body()).thenAnswer(call->new java.io.ByteArrayInputStream(jpeg));
+            java.net.http.HttpResponse<Void> head=mock(java.net.http.HttpResponse.class);
+            when(head.statusCode()).thenReturn(401);
+            when(client.send(any(java.net.http.HttpRequest.class),
+                    any(java.net.http.HttpResponse.BodyHandler.class)))
+                    .thenAnswer(call->{
+                        java.net.http.HttpRequest req=call.getArgument(0);
+                        return "HEAD".equals(req.method())?head:get;
+                    });
+            String url="https://hot-hat-back.up.railway.app"+
+                    "/api/v2/public/neuro-references/"+"c".repeat(64)+"/input.jpg";
+            Exception refused=assertThrows(Exception.class,
+                    ()->ReflectionTestUtils.invokeMethod(service,
+                            "checkGenApiMediaDownload",url,"image/jpeg"));
+            String details=String.valueOf(refused)+String.valueOf(refused.getCause());
+            assertTrue(details.contains("HEAD_REJECTED_image_jpeg_HTTP_401"),details);
+            var requests=org.mockito.ArgumentCaptor.forClass(java.net.http.HttpRequest.class);
+            verify(client,times(2)).send(requests.capture(),
+                    any(java.net.http.HttpResponse.BodyHandler.class));
+            assertEquals(List.of("GET","HEAD"),
+                    requests.getAllValues().stream().map(java.net.http.HttpRequest::method).toList());
         }finally{service.close();}
     }
 
