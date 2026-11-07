@@ -12,6 +12,11 @@ on:
       - 'src/main/java/ru/hothat/testbot/api/NeuroReplacementHistoryController.java'
   workflow_dispatch:
 
+# Avoid two rapid source commits racing to write the same generated snapshot.
+concurrency:
+  group: refresh-api-contract-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
