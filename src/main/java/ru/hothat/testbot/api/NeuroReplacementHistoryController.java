@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import ru.hothat.testbot.api.dto.NeuroJobResponseDTO;
+import ru.hothat.testbot.api.dto.NeuroDetailedResponseDTO;
 import ru.hothat.testbot.api.dto.NeuroReadinessResponseDTO;
 import ru.hothat.testbot.api.dto.NeuroProviderStatusResponseDTO;
 import org.springframework.http.HttpHeaders;
@@ -63,13 +64,17 @@ public class NeuroReplacementHistoryController {
      * all subsequent stages are the saved GenAPI pipeline; no extra Kling key.
      */
     @GetMapping("/studio/upload/config")
+        @ApiResponse(responseCode = "200", description = "Бесплатный расчёт стоимости и настроек загрузки видео Нейроподмены",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroDetailedResponseDTO.UploadConfig.class)))
     public Map<String,Object> uploadConfig(@AuthenticationPrincipal HotHatUser owner) {
         return pilot.uploadConfig();
     }
 
     @GetMapping("/studio/upload/by-test/{testId}")
+        @ApiResponse(responseCode = "200", description = "Найти исходную попытку по idempotent UUID без нового заказа",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> uploadByTestId(@AuthenticationPrincipal HotHatUser owner,
-                                             @PathVariable String testId) {
+                                             @Parameter(description = "Идемпотентный UUID одной попытки; повторная отправка не создаёт второй заказ") @PathVariable String testId) {
         return pilot.uploadByTestId(owner.uid(),testId);
     }
 
@@ -78,19 +83,22 @@ public class NeuroReplacementHistoryController {
      * Does not generate or pay for any second Kling task.
      */
     @PostMapping("/studio/upload/{jobId}/resume-timeout")
+        @ApiResponse(responseCode = "202", description = "Бесплатно проверить прежний оплаченный запрос и продолжить только при готовом результате",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public ResponseEntity<Map<String,Object>> resumeTimedOutUpload(
             @AuthenticationPrincipal HotHatUser owner,
-            @PathVariable String jobId) {
+            @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId) {
         return ResponseEntity.accepted().body(
                 pilot.resumeTimedOutUpload(owner.uid(),jobId));
     }
 
     @PostMapping(value="/studio/upload", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
-    @ApiResponse(responseCode="202",description="Single owner-approved 20-30s webcam MP4/WebM with voice, <=10s paid GenAPI pipeline")
+    @ApiResponse(responseCode = "202", description = "Single owner-approved 20-30s webcam MP4/WebM with voice, <=10s paid GenAPI pipeline",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public ResponseEntity<Map<String,Object>> uploadVideo(
             @AuthenticationPrincipal HotHatUser owner,
-            @RequestParam("testId") String testId,
-            @RequestParam(name="consented",defaultValue="false") boolean consented,
+            @Parameter(description = "Идемпотентный UUID одной попытки; повторная отправка не создаёт второй заказ") @RequestParam("testId") String testId,
+            @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented",defaultValue="false") boolean consented,
             @RequestPart("video") MultipartFile video) {
         return ResponseEntity.accepted().body(
                 pilot.startUploadedVideo(owner.uid(),testId,consented,video));
@@ -99,29 +107,31 @@ public class NeuroReplacementHistoryController {
     @PostMapping(value="/studio/video-character/plan",
                  consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
     public NeuroScenePlan videoCharacterPlan(@AuthenticationPrincipal HotHatUser owner,
-            @RequestParam("assignment") String assignment) {
+            @Parameter(description = "Точное текстовое задание движений и произнесённых фраз") @RequestParam("assignment") String assignment) {
         return NeuroScenePlan.planForCharacter(assignment);
     }
 
     @PostMapping(value="/studio/plan", consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
     @ApiResponse(responseCode="200",description="Бесплатный расчёт нового студийного задания до оплаты")
     public NeuroScenePlan studioPlan(@AuthenticationPrincipal HotHatUser owner,
-                                    @RequestParam("assignment") String assignment) {
+                                    @Parameter(description = "Точное текстовое задание движений и произнесённых фраз") @RequestParam("assignment") String assignment) {
         return NeuroScenePlan.plan(assignment);
     }
 
     @GetMapping("/studio/video-character/capability")
-    @ApiResponse(responseCode="200", description="Бесплатная проверка доступности полного видеоперсонажа и причины запрета платного запуска")
+    @ApiResponse(responseCode = "200", description = "Бесплатная проверка доступности полного видеоперсонажа и причины запрета платного запуска",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroDetailedResponseDTO.VideoCharacterCapability.class)))
     public Map<String,Object> videoCharacterCapability(@AuthenticationPrincipal HotHatUser owner) {
         return pilot.videoCharacterCapability();
     }
 
     @PostMapping(value="/studio/video-character/preview",consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
-    @ApiResponse(responseCode="200",description="Подготовить и просмотреть восьмисекундный MP4 образец с синхронным голосом без платных API запросов")
+    @ApiResponse(responseCode = "200", description = "Подготовить и просмотреть восьмисекундный MP4 образец с синхронным голосом без платных API запросов",
+            content = @Content(mediaType = "video/mp4", schema = @Schema(type = "string", format = "binary")))
     public ResponseEntity<byte[]> videoCharacterPreview(@AuthenticationPrincipal HotHatUser owner,
                                                          @RequestPart("video") MultipartFile video,
                                                          @RequestPart("voice") MultipartFile voice,
-                                                         @RequestParam(name="startSeconds",defaultValue="0") double startSeconds) {
+                                                         @Parameter(description = "Смещение начала бесплатного видеопримера в секундах") @RequestParam(name="startSeconds",defaultValue="0") double startSeconds) {
         byte[] clip=pilot.prepareVideoCharacterPreview(video,voice,startSeconds);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
@@ -132,19 +142,22 @@ public class NeuroReplacementHistoryController {
     }
 
     @PostMapping(value="/studio/archive", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
+        @ApiResponse(responseCode = "200", description = "Сохранение исходной камеры и голоса в архиве владельца",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> archiveStudio(@AuthenticationPrincipal HotHatUser owner,
-            @RequestParam("testId") String testId,
+            @Parameter(description = "Идемпотентный UUID одной попытки; повторная отправка не создаёт второй заказ") @RequestParam("testId") String testId,
             @RequestPart("video") MultipartFile video,
             @RequestPart("voice") MultipartFile voice) {
         return pilot.archiveStudioReference(owner.uid(),testId,video,voice);
     }
 
     @PostMapping(value="/studio", consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
-    @ApiResponse(responseCode = "202", description = "Вручную записанная камера и голос, новый idempotent тест без игровой комнаты")
+    @ApiResponse(responseCode = "202", description = "Вручную записанная камера и голос, новый idempotent тест без игровой комнаты",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public ResponseEntity<Map<String,Object>> studio(@AuthenticationPrincipal HotHatUser owner,
-                                    @RequestParam("testId") String testId,
-                                    @RequestParam(name="consented",defaultValue="false") boolean consented,
-                                    @RequestParam("assignment") String assignment,
+                                    @Parameter(description = "Идемпотентный UUID одной попытки; повторная отправка не создаёт второй заказ") @RequestParam("testId") String testId,
+                                    @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented",defaultValue="false") boolean consented,
+                                    @Parameter(description = "Точное текстовое задание движений и произнесённых фраз") @RequestParam("assignment") String assignment,
                                     @RequestPart("video") MultipartFile video,
                                     @RequestPart("voice") MultipartFile voice) {
         return ResponseEntity.status(HttpStatus.ACCEPTED)
@@ -153,22 +166,24 @@ public class NeuroReplacementHistoryController {
 
     @PostMapping(value="/{jobId}/video-character/start",
                  consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
-    @ApiResponse(responseCode="202",description="Explicitly approved new direct Kling video-character/Omni task; never repeats the old GenAPI order")
+    @ApiResponse(responseCode = "202", description = "Explicitly approved new direct Kling video-character/Omni task; never repeats the old GenAPI order",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public ResponseEntity<Map<String,Object>> startVideoCharacter(
             @AuthenticationPrincipal HotHatUser owner,
-            @PathVariable String jobId,
-            @RequestParam("testId") String testId,
-            @RequestParam("assignment") String assignment,
-            @RequestParam(name="startSeconds",defaultValue="0") double startSeconds,
-            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+            @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId,
+            @Parameter(description = "Идемпотентный UUID одной попытки; повторная отправка не создаёт второй заказ") @RequestParam("testId") String testId,
+            @Parameter(description = "Точное текстовое задание движений и произнесённых фраз") @RequestParam("assignment") String assignment,
+            @Parameter(description = "Смещение начала бесплатного видеопримера в секундах") @RequestParam(name="startSeconds",defaultValue="0") double startSeconds,
+            @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented",defaultValue="false") boolean consented) {
         return ResponseEntity.accepted().body(pilot.startVideoCharacterFromArchive(
                 owner.uid(),jobId,testId,startSeconds,assignment,consented));
     }
 
     @GetMapping("/{jobId}/video-character/acting")
-    @ApiResponse(responseCode="200",description="Already purchased Kling 3 Omni scene for owner inspection before Lip Sync")
+    @ApiResponse(responseCode = "200", description = "Already purchased Kling 3 Omni scene for owner inspection before Lip Sync",
+            content = @Content(mediaType = "video/mp4", schema = @Schema(type = "string", format = "binary")))
     public ResponseEntity<byte[]> paidVideoCharacterActing(
-            @AuthenticationPrincipal HotHatUser owner,@PathVariable String jobId) {
+            @AuthenticationPrincipal HotHatUser owner,@Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
                 .contentType(MediaType.parseMediaType("video/mp4"))
@@ -176,21 +191,22 @@ public class NeuroReplacementHistoryController {
     }
 
     @PostMapping("/{jobId}/video-character/approve")
-    @ApiResponse(responseCode="200",description="Owner verifies new gestures and allows only voice/lip sync paid stages")
+    @ApiResponse(responseCode = "200", description = "Owner verifies new gestures and allows only voice/lip sync paid stages",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> approveCharacterVideo(
-            @AuthenticationPrincipal HotHatUser owner,@PathVariable String jobId,
-            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+            @AuthenticationPrincipal HotHatUser owner,@Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId,
+            @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented",defaultValue="false") boolean consented) {
         return pilot.approveCharacterActing(owner.uid(),jobId,consented);
     }
 
     @PostMapping(value="/{jobId}/video-character/preview",
                  consumes=MediaType.APPLICATION_FORM_URLENCODED_VALUE)
-    @ApiResponse(responseCode="200",
-            description="Бесплатно подготовить восьмисекундного видеоперсонажа из уже сохранённых видео и голоса, без новых записей и платных GenAPI запросов")
+    @ApiResponse(responseCode = "200", description = "Бесплатно подготовить восьмисекундного видеоперсонажа из уже сохранённых видео и голоса, без новых записей и платных GenAPI запросов",
+            content = @Content(mediaType = "video/mp4", schema = @Schema(type = "string", format = "binary")))
     public ResponseEntity<byte[]> archivedVideoCharacterPreview(
             @AuthenticationPrincipal HotHatUser owner,
-            @PathVariable String jobId,
-            @RequestParam(name="startSeconds",defaultValue="0") double startSeconds) {
+            @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId,
+            @Parameter(description = "Смещение начала бесплатного видеопримера в секундах") @RequestParam(name="startSeconds",defaultValue="0") double startSeconds) {
         byte[] sample=pilot.prepareArchivedVideoCharacterPreview(
                 owner.uid(),jobId,startSeconds);
         return ResponseEntity.ok()
@@ -202,15 +218,18 @@ public class NeuroReplacementHistoryController {
     }
 
     @GetMapping("/{jobId}")
+        @ApiResponse(responseCode = "200", description = "Статус сохранённого задания Нейроподмены",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> job(@AuthenticationPrincipal HotHatUser owner,
-                                  @PathVariable String jobId) {
+                                  @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId) {
         return pilot.statusByJob(owner.uid(),jobId);
     }
 
     @GetMapping("/{jobId}/original")
-    @ApiResponse(responseCode="200",description="Полная исходная запись до Нейроподмены; только владелец")
+    @ApiResponse(responseCode = "200", description = "Полная исходная запись до Нейроподмены; только владелец",
+            content = @Content(mediaType = "application/octet-stream", schema = @Schema(type = "string", format = "binary")))
     public ResponseEntity<byte[]> original(@AuthenticationPrincipal HotHatUser owner,
-                                            @PathVariable String jobId) {
+                                            @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId) {
         byte[] bytes=pilot.originalVideo(owner.uid(),jobId);
         String mime=pilot.originalMime(owner.uid(),jobId);
         return ResponseEntity.ok()
@@ -251,7 +270,8 @@ public class NeuroReplacementHistoryController {
     }
 
     @PostMapping("/{jobId}/resume-speech-gate")
-    @ApiResponse(responseCode = "200", description = "Продолжить отказавшее на проверке темпа задание с прежними оплаченными TTS/Chatterbox ID; Kling и Lip Sync оплачиваются отдельно")
+    @ApiResponse(responseCode = "200", description = "Продолжить отказавшее на проверке темпа задание с прежними оплаченными TTS/Chatterbox ID; Kling и Lip Sync оплачиваются отдельно",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> resumeSpeechGate(@AuthenticationPrincipal HotHatUser owner,
                                                @Parameter(description = "Существующий ID задания. Новый заказ не создаётся.")
                                                @PathVariable String jobId,
@@ -261,89 +281,99 @@ public class NeuroReplacementHistoryController {
     }
 
     @GetMapping("/{jobId}/video-character/media-preflight")
-    @ApiResponse(responseCode="200",description="Бесплатная проверка скачивания GenAPI обоих публичных файлов MP4 и JPG через HTTPS без токена авторизации")
+    @ApiResponse(responseCode = "200", description = "Бесплатная проверка скачивания GenAPI обоих публичных файлов MP4 и JPG через HTTPS без токена авторизации",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroDetailedResponseDTO.ReferenceMediaPreflight.class)))
     public Map<String,Object> referenceMediaPreflight(
-            @AuthenticationPrincipal HotHatUser owner,@PathVariable String jobId) {
+            @AuthenticationPrincipal HotHatUser owner,@Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId) {
         return pilot.inspectCharacterProviderMedia(owner.uid(),jobId);
     }
 
     @PostMapping("/{jobId}/resume-reference-file-422")
-    @ApiResponse(responseCode="200",description="Одно платное продолжение того же задания после определённого GenAPI FILE_ERROR 422, только после бесплатной проверки обоих файлов")
+    @ApiResponse(responseCode = "200", description = "Одно платное продолжение того же задания после определённого GenAPI FILE_ERROR 422, только после бесплатной проверки обоих файлов",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> resumeReferenceMedia422(
-            @AuthenticationPrincipal HotHatUser owner,@PathVariable String jobId,
-            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+            @AuthenticationPrincipal HotHatUser owner,@Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId,
+            @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented",defaultValue="false") boolean consented) {
         return pilot.resumeVideoReferenceMedia422(owner.uid(),jobId,consented);
     }
 
     @PostMapping("/{jobId}/resume-reference-start-image-422")
-    @ApiResponse(responseCode="200",
-            description="Повтор только определённого отказа GenAPI 422 из-за отсутствующего start_image_url; прежнее задание, явное согласие, без двойной оплаты")
+    @ApiResponse(responseCode = "200", description = "Повтор только определённого отказа GenAPI 422 из-за отсутствующего start_image_url; прежнее задание, явное согласие, без двойной оплаты",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> resumeReferenceStartImage422(
             @AuthenticationPrincipal HotHatUser owner,
-            @PathVariable String jobId,
-            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+            @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId,
+            @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented",defaultValue="false") boolean consented) {
         return pilot.resumeVideoReferenceStartImage422(owner.uid(),jobId,consented);
     }
 
     @PostMapping("/{jobId}/resume-kling-422")
-    @ApiResponse(responseCode = "200", description = "Однократно продолжить после определённого отказа 422 с JSON HTTPS MP4. Старые TTS/Chatterbox ID сохраняются.")
+    @ApiResponse(responseCode = "200", description = "Однократно продолжить после определённого отказа 422 с JSON HTTPS MP4. Старые TTS/Chatterbox ID сохраняются.",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> resumeKling422(@AuthenticationPrincipal HotHatUser owner,
-                                              @PathVariable String jobId,
-                                              @RequestParam(name="consented", defaultValue="false") boolean consented) {
+                                              @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId,
+                                              @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented", defaultValue="false") boolean consented) {
         return pilot.resumeAfterKlingValidation(owner.uid(),jobId,consented);
     }
 
     @PostMapping("/{jobId}/resume-verified-kling-final")
-    @ApiResponse(responseCode = "200", description = "Строго однократный подтверждённый платный тест Kling+LipSync существующего задания после бесплатной проверки видеовхода")
+    @ApiResponse(responseCode = "200", description = "Строго однократный подтверждённый платный тест Kling+LipSync существующего задания после бесплатной проверки видеовхода",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> resumeVerifiedKlingFinal(@AuthenticationPrincipal HotHatUser owner,
-                                                        @PathVariable String jobId,
-                                                        @RequestParam(name="consented", defaultValue="false") boolean consented) {
+                                                        @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId,
+                                                        @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented", defaultValue="false") boolean consented) {
         return pilot.resumeVerifiedKlingFinal(owner.uid(),jobId,consented);
     }
 
     @PostMapping("/{jobId}/resume-minimal-kling-once")
-    @ApiResponse(responseCode = "200", description = "Одна подтверждённая попытка минимального JSON Kling с сохранёнными TTS и Chatterbox ID")
+    @ApiResponse(responseCode = "200", description = "Одна подтверждённая попытка минимального JSON Kling с сохранёнными TTS и Chatterbox ID",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> resumeMinimalKlingOnce(@AuthenticationPrincipal HotHatUser owner,
-                                                      @PathVariable String jobId,
-                                                      @RequestParam(name="consented", defaultValue="false") boolean consented) {
+                                                      @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId,
+                                                      @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented", defaultValue="false") boolean consented) {
         return pilot.resumeMinimalKlingOnce(owner.uid(),jobId,consented);
     }
 
     @GetMapping("/{jobId}/kling-preflight")
-    @ApiResponse(responseCode = "200", description = "Бесплатно проверить сохранённый MP4 и HTTPS ссылку для Kling без создания нового GenAPI запроса")
+    @ApiResponse(responseCode = "200", description = "Бесплатно проверить сохранённый MP4 и HTTPS ссылку для Kling без создания нового GenAPI запроса",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroDetailedResponseDTO.KlingReferencePreflight.class)))
     public Map<String,Object> klingPreflight(@AuthenticationPrincipal HotHatUser owner,
-                                              @PathVariable String jobId) {
+                                              @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId) {
         return pilot.inspectKlingReference(owner.uid(),jobId);
     }
 
 
     @GetMapping("/{jobId}/paid-kling/quality")
-    @ApiResponse(responseCode= "200", description="Бесплатное сравнение оплаченного Kling с оригиналом по SSIM, без GenAPI POST")
+    @ApiResponse(responseCode = "200", description = "Бесплатное сравнение оплаченного Kling с оригиналом по SSIM, без GenAPI POST",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroDetailedResponseDTO.KlingActingQuality.class)))
     public Map<String,Object> paidKlingQuality(@AuthenticationPrincipal HotHatUser owner,
-                                                @PathVariable String jobId) {
+                                                @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId) {
         return pilot.paidActingQuality(owner.uid(),jobId);
     }
 
     @PostMapping("/{jobId}/resume-reviewed-acting")
-    @ApiResponse(responseCode= "200", description="Продолжение только Lip Sync после просмотра и явного одобрения движений в уже оплаченном Kling MP4")
+    @ApiResponse(responseCode = "200", description = "Продолжение только Lip Sync после просмотра и явного одобрения движений в уже оплаченном Kling MP4",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> resumeReviewedActing(@AuthenticationPrincipal HotHatUser owner,
-                                                    @PathVariable String jobId,
-                                                    @RequestParam(name="consented",defaultValue="false") boolean consented) {
+                                                    @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId,
+                                                    @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented",defaultValue="false") boolean consented) {
         return pilot.resumeReviewedActing(owner.uid(),jobId,consented);
     }
 
     @PostMapping("/{jobId}/resume-lipsync-422")
-    @ApiResponse(responseCode= "200", description="Единичное платное продолжение Lip Sync после подтверждённого отказа GenAPI 422 sync_mode; старые ID Kling/TTS/Chatterbox не оплачиваются повторно")
+    @ApiResponse(responseCode = "200", description = "Единичное платное продолжение Lip Sync после подтверждённого отказа GenAPI 422 sync_mode; старые ID Kling/TTS/Chatterbox не оплачиваются повторно",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroJobResponseDTO.class)))
     public Map<String,Object> resumeLipSyncMode422(@AuthenticationPrincipal HotHatUser owner,
-                                                    @PathVariable String jobId,
-                                                    @RequestParam(name="consented",defaultValue="false") boolean consented) {
+                                                    @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId,
+                                                    @Parameter(description = "Явное согласие владельца на оплату; по умолчанию false") @RequestParam(name="consented",defaultValue="false") boolean consented) {
         return pilot.resumeAfterLipSyncMode422(owner.uid(),jobId,consented);
     }
 
     @GetMapping("/{jobId}/paid-kling")
-    @ApiResponse(responseCode="200",description="Просмотр и скачивание уже оплаченного MP4 Kling до синхронизации губ, без нового платного запроса")
+    @ApiResponse(responseCode = "200", description = "Просмотр и скачивание уже оплаченного MP4 Kling до синхронизации губ, без нового платного запроса",
+            content = @Content(mediaType = "video/mp4", schema = @Schema(type = "string", format = "binary")))
     public ResponseEntity<byte[]> paidKling(@AuthenticationPrincipal HotHatUser owner,
-                                            @PathVariable String jobId) {
+                                            @Parameter(description = "Сохранённый ID задания Нейроподмены, не создаёт новый платный запрос") @PathVariable String jobId) {
         byte[] video=pilot.paidKlingPreview(owner.uid(),jobId);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
