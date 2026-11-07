@@ -47,16 +47,18 @@ class SpecResponseShapeTest {
                 content.fieldNames().forEachRemaining(mediaType -> {
                     JsonNode schema = content.path(mediaType).path("schema");
                     // A typed array of a named DTO is as precise as a single
-                    // named DTO. MP4 streaming is binary, not a JSON schema.
+                    // named DTO. Actual MP4/JPEG/WAV/binary downloads are
+                    // streams, not JSON maps; check the media type and format.
                     boolean named = schema.hasNonNull("$ref");
                     // Springdoc 2.3 / OpenAPI 3.1 omits the redundant
                     // 'type' on these otherwise fully structured media schemas.
                     boolean arrayOfNamed = schema.path("items").hasNonNull("$ref")
                             && (!schema.hasNonNull("type") || "array".equals(schema.path("type").asText()));
-                    boolean binaryVideo = "video/mp4".equals(mediaType)
+                    boolean binaryMedia = Set.of("video/mp4", "video/webm",
+                            "image/jpeg", "audio/wav", "application/octet-stream").contains(mediaType)
                             && "binary".equals(schema.path("format").asText())
                             && (!schema.hasNonNull("type") || "string".equals(schema.path("type").asText()));
-                    if (!named && !arrayOfNamed && !binaryVideo) {
+                    if (!named && !arrayOfNamed && !binaryMedia) {
                         shapeless.add(operation.address() + " → " + status + " (" + mediaType + "): " + schema);
                     }
                 });
