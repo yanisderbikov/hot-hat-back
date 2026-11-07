@@ -1,5 +1,6 @@
 package ru.hothat.testbot.usecase;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -16,13 +17,14 @@ import java.util.regex.Pattern;
  * dialogue can be written naturally after a speech verb, without quotation marks.
  * A long brief is refused BEFORE contacting paid video or audio providers.
  */
+@Schema(description = "Бесплатный план Нейроподмены: проверенные слова, движения, длительность и промпты до оплаты")
 public record NeuroScenePlan(
-        String assignment,
-        String spokenText,
-        int durationSeconds,
-        double speechStartSeconds,
-        String videoPrompt,
-        String speechStyle) {
+        @Schema(description = "Исходное задание владельца после проверки и нормализации") String assignment,
+        @Schema(description = "Точный текст русской речи для синтеза без сценических инструкций") String spokenText,
+        @Schema(description = "Запланированная длительность итоговой сцены в секундах") int durationSeconds,
+        @Schema(description = "Положение начала произнесения речи относительно начала сцены, секунды") double speechStartSeconds,
+        @Schema(description = "Промпт Kling с движениями и сохранением внешности и фона") String videoPrompt,
+        @Schema(description = "Инструкции русской озвучки и переноса голоса") String speechStyle) {
 
     private static final Pattern QUOTED = Pattern.compile("«([^»]+)»|\"([^\"\\n]+)\"");
     private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]+");
