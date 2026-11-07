@@ -1,5 +1,6 @@
 package ru.hothat.testbot.api;
 
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -9,6 +10,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import ru.hothat.testbot.usecase.NeuroReplacementPilotService;
 
+// These time-limited opaque URLs must remain fetchable by GenAPI without a Bearer token.
+@SecurityRequirements
 @RestController
 @RequiredArgsConstructor
 public class NeuroPublicReferenceController {
