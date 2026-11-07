@@ -1,6 +1,10 @@
 package ru.hothat.testbot.api;
 
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -18,14 +22,18 @@ public class NeuroPublicReferenceController {
     private final NeuroReplacementPilotService pilot;
 
     @GetMapping(value="/api/v2/public/neuro-references/{token}/input.mp4",produces="video/mp4")
-    public ResponseEntity<byte[]> reference(@PathVariable String token) {
+    @ApiResponse(responseCode = "200", description = "Временный публичный MP4-видеореференс без Bearer для GenAPI",
+            content = @Content(mediaType = "video/mp4", schema = @Schema(type = "string", format = "binary")))
+    public ResponseEntity<byte[]> reference(@Parameter(description = "Непредсказуемый ограниченный по времени токен уже сохранённого референса") @PathVariable String token) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
                 .contentType(MediaType.parseMediaType("video/mp4"))
                 .body(pilot.publicKlingReference(token));
     }
     @GetMapping(value="/api/v2/public/neuro-references/{token}/input.jpg",produces="image/jpeg")
-    public ResponseEntity<byte[]> still(@PathVariable String token) {
+    @ApiResponse(responseCode = "200", description = "Временный публичный JPEG-кадр для GenAPI",
+            content = @Content(mediaType = "image/jpeg", schema = @Schema(type = "string", format = "binary")))
+    public ResponseEntity<byte[]> still(@Parameter(description = "Непредсказуемый ограниченный по времени токен уже сохранённого референса") @PathVariable String token) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
                 .contentType(MediaType.parseMediaType("image/jpeg"))
@@ -33,7 +41,9 @@ public class NeuroPublicReferenceController {
     }
 
     @GetMapping(value="/api/v2/public/neuro-references/{token}/input.wav",produces="audio/wav")
-    public ResponseEntity<byte[]> voice(@PathVariable String token) {
+    @ApiResponse(responseCode = "200", description = "Временный публичный WAV-референс голоса для GenAPI",
+            content = @Content(mediaType = "audio/wav", schema = @Schema(type = "string", format = "binary")))
+    public ResponseEntity<byte[]> voice(@Parameter(description = "Непредсказуемый ограниченный по времени токен уже сохранённого референса") @PathVariable String token) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
                 .contentType(MediaType.parseMediaType("audio/wav"))
