@@ -400,6 +400,56 @@ class NeuroReplacementPilotServiceTest {
 
     @Test
     @SuppressWarnings({"unchecked","rawtypes"})
+    void fullLengthWavIsGetAndHeadCheckedBeforeAnyPaidLipSync() throws Exception {
+        java.net.http.HttpClient client=mock(java.net.http.HttpClient.class);
+        NeuroReplacementPilotService service=new NeuroReplacementPilotService(
+                new ObjectMapper(),client);
+        try{
+            ReflectionTestUtils.setField(service,"referencePublicOrigin",
+                    "https://hot-hat-back.up.railway.app");
+            java.net.http.HttpResponse<java.io.InputStream> get=mock(
+                    java.net.http.HttpResponse.class);
+            when(get.statusCode()).thenReturn(200);
+            when(get.headers()).thenReturn(java.net.http.HttpHeaders.of(
+                    Map.of("Content-Type",List.of("audio/wav")),(key,value)->true));
+            byte[] wav=new byte[12000];
+            byte[] riff="RIFF".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            byte[] wave="WAVE".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            System.arraycopy(riff,0,wav,0,4);
+            System.arraycopy(wave,0,wav,8,4);
+            when(get.body()).thenAnswer(call->new java.io.ByteArrayInputStream(wav));
+            java.net.http.HttpResponse<Void> head=mock(java.net.http.HttpResponse.class);
+            int[] headStatus={200};
+            when(head.statusCode()).thenAnswer(call->headStatus[0]);
+            when(head.headers()).thenReturn(java.net.http.HttpHeaders.of(
+                    Map.of("Content-Type",List.of("audio/wav")),(key,value)->true));
+            when(client.send(any(java.net.http.HttpRequest.class),
+                    any(java.net.http.HttpResponse.BodyHandler.class)))
+                    .thenAnswer(call->{
+                        java.net.http.HttpRequest req=call.getArgument(0);
+                        return "HEAD".equals(req.method())?head:get;
+                    });
+            String url="https://hot-hat-back.up.railway.app"+
+                    "/api/v2/public/neuro-references/"+"d".repeat(64)+"/input.wav";
+            ReflectionTestUtils.invokeMethod(service,
+                    "checkGenApiMediaDownload",url,"audio/wav");
+            headStatus[0]=401;
+            Exception refused=assertThrows(Exception.class,
+                    ()->ReflectionTestUtils.invokeMethod(service,
+                            "checkGenApiMediaDownload",url,"audio/wav"));
+            String reason=String.valueOf(refused)+String.valueOf(refused.getCause());
+            assertTrue(reason.contains("HEAD_REJECTED_audio_wav_HTTP_401"),reason);
+            var requests=org.mockito.ArgumentCaptor.forClass(java.net.http.HttpRequest.class);
+            verify(client,times(4)).send(requests.capture(),
+                    any(java.net.http.HttpResponse.BodyHandler.class));
+            assertEquals(List.of("GET","HEAD","GET","HEAD"),
+                    requests.getAllValues().stream().map(java.net.http.HttpRequest::method).toList());
+            // This test never calls /networks/lipsync or any paid endpoint.
+        }finally{service.close();}
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
     void media422RetryRequiresSecondExplicitConsentAndFreePreflight() throws Exception {
         ResponseStatusException denied=assertThrows(ResponseStatusException.class,
                 ()->pilot.resumeVideoReferenceMedia422("owner-1",
