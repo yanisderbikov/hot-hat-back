@@ -10,6 +10,7 @@ on:
       - 'src/main/java/ru/hothat/testbot/usecase/NeuroScenePlan.java'
       - 'src/main/java/ru/hothat/testbot/api/NeuroPublicReferenceController.java'
       - 'src/main/java/ru/hothat/testbot/api/NeuroReplacementHistoryController.java'
+      - 'src/main/java/ru/hothat/testbot/api/NeuroReplacementPilotController.java'
   workflow_dispatch:
 
 # Avoid two rapid source commits racing to write the same generated snapshot.
@@ -59,4 +60,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/api/openapi-snapshot.json
           git commit -m "SCRUM-38 - Refresh current Neuro API schema and routes in OpenAPI snapshot"
+          # The source branch may advance while the ~1-minute spec generation runs.
+          # Rebasing prevents failed non-fast-forward commits and stale API docs.
+          git pull --rebase origin new-dev
           git push origin HEAD:new-dev
