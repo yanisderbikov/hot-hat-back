@@ -1272,7 +1272,11 @@ public class NeuroReplacementPilotService {
         }
         Job job = new Job(UUID.randomUUID().toString(), roomId, ownerUid);
         job.sceneAssignment = newScene == null ? null : newScene.assignment();
-        if (newScene != null) job.providerRequests.put("character-mode", GAME_MODE);
+        if (newScene != null) {
+            job.providerRequests.put("character-mode", GAME_MODE);
+            // Keep the player's exact entered text, before whitespace normalization.
+            job.providerRequests.put("__diag.originalAssignment", assignment);
+        }
         job.cameraMime=videoMime;
         job.voiceMime=voiceMime;
         job.startSeconds=windowStartSeconds;
@@ -1408,6 +1412,7 @@ public class NeuroReplacementPilotService {
         newJob.cameraMime=archived.cameraMime;
         newJob.voiceMime=archived.voiceMime;
         newJob.sceneAssignment=scene.assignment();
+        newJob.providerRequests.put("__diag.originalAssignment", assignment);
         newJob.startSeconds=startSeconds;
         newJob.providerRequests.put("character-mode",GENAPI_REFERENCE_MODE);
         newJob.stage="GenAPI O3: подготовка видеореференса внешности и голоса";
@@ -1779,6 +1784,7 @@ public class NeuroReplacementPilotService {
                     "NEURO_UPLOAD_SCENE_EXCEEDS_TEN_SECONDS");
         Job job=new Job(UUID.randomUUID().toString(),roomId,ownerUid);
         job.sceneAssignment=scene.assignment();
+        job.providerRequests.put("__diag.originalAssignment", UPLOAD_ASSIGNMENT);
         job.cameraMime=mime;job.voiceMime="audio/wav";job.startSeconds=0;
         job.providerRequests.put("character-mode",UPLOAD_MODE);
         String prefix="neuro-replacements/"+ownerUid+"/"+job.id;
@@ -1850,6 +1856,9 @@ public class NeuroReplacementPilotService {
         // Owner-only metadata for the history/video archive: an exact account of
         // what was ordered. Older paid 15s jobs remain identifiable, not rewritten.
         result.put("sceneAssignment", job.sceneAssignment);
+        result.put("originalAssignment",
+                job.providerRequests.getOrDefault("__diag.originalAssignment",job.sceneAssignment));
+        result.put("effectiveAssignment", job.sceneAssignment);
         result.put("kling422RetryCount", job.kling422Retries);
         result.put("originalAvailable",job.sourceCameraKey!=null && !job.sourceCameraKey.isBlank());
         // Both saved camera and separate microphone are needed for the 8s
@@ -1874,6 +1883,21 @@ public class NeuroReplacementPilotService {
                     : NeuroScenePlan.plan(job.sceneAssignment);
             result.put("spokenText", scene.spokenText());
             result.put("backgroundLocked", scene.videoPrompt().contains("BACKGROUND LOCK"));
+            result.put("speechStyle",scene.speechStyle());
+            String original=job.providerRequests.getOrDefault("__diag.originalAssignment",
+                    job.sceneAssignment);
+            boolean compressed=scene.videoPrompt().contains("The brief exceeds the time available:");
+            result.put("assignmentAdjusted",compressed || !java.util.Objects.equals(original,scene.assignment()));
+            result.put("promptAdaptation",compressed
+                    ? "Secondary gestures are deprioritized to fit duration; full dialogue retained."
+                    : java.util.Objects.equals(original,scene.assignment())
+                    ? "No textual simplification; provider instructions add identity and timing."
+                    : "Whitespace normalized; provider instructions add identity and timing.");
+            result.put("providerPrompt",job.providerRequests.getOrDefault("__diag.providerPrompt",
+                    GAME_MODE.equals(job.providerRequests.get("character-mode")) ||
+                    UPLOAD_MODE.equals(job.providerRequests.get("character-mode")) ||
+                    GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode"))
+                    ? buildGenApiVisualPrompt(scene) : scene.videoPrompt()));
         }
         // Expose provider IDs to the authenticated owner while still processing.
         // They can recover the paid work in GenAPI if Railway restarts.
@@ -1910,6 +1934,26 @@ public class NeuroReplacementPilotService {
         }
     }
 
+    /** Archived starting frame actually used by GenAPI O3, when this job uses one. */
+    public byte[] identityStartFrame(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(!(GAME_MODE.equals(job.providerRequests.get("character-mode")) ||
+             UPLOAD_MODE.equals(job.providerRequests.get("character-mode")) ||
+             GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode"))))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_START_IMAGE_NOT_APPLICABLE");
+        try {
+            byte[] image=objectStore.get("neuro-replacements/"+ownerUid+"/"+jobId+"-kling-still.jpg");
+            if(image==null || image.length<2048 || (image[0]&255)!=0xff ||
+               (image[1]&255)!=0xd8)
+                throw new IOException("INVALID_JPEG");
+            return image;
+        }catch(Exception error){
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_START_IMAGE_NOT_YET_READY");
+        }
+    }
+
     /** Downloadable owner-only diagnostic: timestamps, stage IDs/costs, exact
      * plan and media links. Read-only GET to GenAPI; never a paid POST. Raw
      * signed URLs and bearer tokens are intentionally excluded.
@@ -1919,32 +1963,67 @@ public class NeuroReplacementPilotService {
         if(job==null || !ownerUid.equals(job.ownerUid))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
         Map<String,Object> report=new LinkedHashMap<>();
-        report.put("reportFormat","hot-hat-neuro-diagnostics-v1");
+        report.put("reportFormat","hot-hat-neuro-diagnostics-v2");
         report.put("generatedAt",java.time.Instant.now().toString());
         report.put("job",snapshot(job));
         report.put("roomId",job.roomId);
         report.put("timeEvents",timeline(job));
+        report.put("originalAssignment",job.providerRequests.getOrDefault("__diag.originalAssignment",job.sceneAssignment));
+        report.put("effectiveAssignment",job.sceneAssignment);
+        report.put("selectedWindowStartSeconds",job.startSeconds);
+        report.put("sourceCameraMime",job.cameraMime);
+        report.put("sourceVoiceMime",job.voiceMime);
+        report.put("errorMessage",job.error);
+        report.put("submittingModelAtCheckpoint",job.submittingModel);
+        report.put("kling422RetryCount",job.kling422Retries);
+        report.put("currentStage",job.stage);
+        report.put("currentStatus",job.state);
+        report.put("checkpointEventsCount",timeline(job).size());
+        Map<String,Object> archivedMedia=new LinkedHashMap<>();
+        archivedMedia.put("originalCameraArchived",job.sourceCameraKey!=null);
+        archivedMedia.put("originalVoiceArchived",job.sourceVoiceKey!=null);
+        archivedMedia.put("finalVideoArchived",job.finalVideoKey!=null);
+        archivedMedia.put("providerVideoRequestRecorded",job.providerRequests.containsKey(VIDEO_MODEL_ID));
+        archivedMedia.put("startingFrameExpected",GAME_MODE.equals(job.providerRequests.get("character-mode")) ||
+                UPLOAD_MODE.equals(job.providerRequests.get("character-mode")) ||
+                GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode")));
+        report.put("mediaChecks",archivedMedia);
+        Map<String,Object> submissionTrace=new LinkedHashMap<>();
+        job.providerRequests.forEach((name,value)->{
+            if(name.startsWith("__diag.providerState.") || name.startsWith("__diag.providerAt.") ||
+               name.startsWith("__diag.providerSubmittedAt.")) submissionTrace.put(name,value);
+        });
+        report.put("providerLifecycle",submissionTrace);
         if(job.sceneAssignment!=null){
             NeuroScenePlan scene=isCharacterWorkflow(job)
                     ? NeuroScenePlan.planForCharacter(job.sceneAssignment)
                     : NeuroScenePlan.plan(job.sceneAssignment);
-            report.put("providerPrompt",scene.videoPrompt().replace("@Video1","@Element1")
-                    .replace("@Image1","the first webcam frame")+
-                    " @Element1 is the identity reference from the person's recorded "+
-                    "webcam video, NOT a motion template. The starting image anchors "+
-                    "the unchanged room and camera angle. Preserve identity, clothing "+
-                    "and facial features. Perform NEW gestures, mouth movements and "+
-                    "actions from the written instructions, not the source gestures.");
+            report.put("providerPrompt",job.providerRequests.getOrDefault("__diag.providerPrompt",
+                    buildGenApiVisualPrompt(scene)));
+            report.put("assignmentAdjusted",snapshot(job).get("assignmentAdjusted"));
+            report.put("promptAdaptation",snapshot(job).get("promptAdaptation"));
+            report.put("durationSeconds",scene.durationSeconds());
+            report.put("speechStartSeconds",scene.speechStartSeconds());
             report.put("spokenText",scene.spokenText());
             report.put("speechStyle",scene.speechStyle());
         }
         String base="/api/v2/admin/neuro-replacements/"+job.id;
         report.put("mediaEndpoints",Map.of("original",base+"/original",
                 "identityReference",base+"/reference-clip",
+                "startingFrame",base+"/starting-frame",
                 "paidKling",base+"/paid-kling","finalVideo",base+"/video"));
         report.put("mediaInputArchived",job.sourceCameraKey!=null &&
                 job.sourceVoiceKey!=null);
-        Map<String,Object> provider=inspectProvider(ownerUid,jobId);
+        Map<String,Object> provider;
+        try {
+            provider=inspectProvider(ownerUid,jobId);
+        } catch(Exception unavailable) {
+            // Never lose the diagnostic report merely because GenAPI status
+            // GET is unavailable, times out or temporarily returns an error.
+            provider=Map.of("check","GENAPI_LIVE_STATUS_UNAVAILABLE",
+                    "reason",unavailable.getClass().getSimpleName(),
+                    "savedRequestIds",snapshot(job).get("providerRequests"));
+        }
         report.put("genApi",provider);
         double total=0.0;int chargedStages=0;
         Object stageMap=provider.get("providerRequests");
@@ -2149,6 +2228,11 @@ public class NeuroReplacementPilotService {
             String cleanImage=cleanGenApiInputUrl(job,stillKey,"jpg");
             checkGenApiMediaDownload(cleanVideo,"video/mp4");
             checkGenApiMediaDownload(cleanImage,"image/jpeg");
+            // Save exactly what is about to be submitted, before any paid POST.
+            job.providerRequests.put("__diag.providerPrompt",buildGenApiVisualPrompt(scene));
+            job.providerRequests.put("__diag.requestedDurationSeconds",
+                    String.valueOf(scene.durationSeconds()));
+            checkpoint(job);
             String videoUrl=paidStage(job,VIDEO_MODEL_ID,()->submitJson(VIDEO_MODEL_ID,
                     genApiVisualReferenceFields(scene,cleanVideo,cleanImage)));
             String paidKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
@@ -2241,6 +2325,16 @@ public class NeuroReplacementPilotService {
      * This field layout still requires real GenAPI verification before claiming
      * the final MP4 is ready; never auto-retry a previously failed provider ID.
      */
+    private static String buildGenApiVisualPrompt(NeuroScenePlan scene) {
+        return scene.videoPrompt().replace("@Video1","@Element1")
+                .replace("@Image1","the first webcam frame")+
+                " @Element1 is the identity reference from the person's recorded "+
+                "webcam video, NOT a motion template. The starting image anchors "+
+                "the unchanged room and camera angle. Preserve identity, clothing "+
+                "and facial features. Perform NEW gestures, mouth movements and "+
+                "actions from the written instructions, not the source gestures.";
+    }
+
     private Map<String,Object> genApiVisualReferenceFields(NeuroScenePlan scene,
             String videoUrl,String startImageUrl) {
         if(scene==null||videoUrl==null||startImageUrl==null||
@@ -2248,13 +2342,7 @@ public class NeuroReplacementPilotService {
                 !startImageUrl.startsWith("https://")||
                 !startImageUrl.contains("/input.jpg"))
             throw new IllegalArgumentException("NEURO_GENAPI_VIDEO_AND_START_IMAGE_REQUIRED");
-        String prompt=scene.videoPrompt().replace("@Video1","@Element1")
-                .replace("@Image1","the first webcam frame")+
-                " @Element1 is the identity reference from the person's recorded "+
-                "webcam video, NOT a motion template. The starting image anchors "+
-                "the unchanged room and camera angle. Preserve identity, clothing "+
-                "and facial features. Perform NEW gestures, mouth movements and "+
-                "actions from the written instructions, not the source gestures.";
+        String prompt=buildGenApiVisualPrompt(scene);
         if(prompt.length()>2500)
             throw new IllegalArgumentException("NEURO_GENAPI_PROVIDER_PROMPT_TOO_LONG");
         return Map.of(
@@ -3952,6 +4040,8 @@ public class NeuroReplacementPilotService {
         job.submittingModel = model;
         persist(job);
         String id = submit.call();
+        job.providerRequests.put("__diag.providerSubmittedAt."+model,
+                java.time.Instant.now().toString());
         // Store provider ID BEFORE any polling or additional paid operation.
         job.providerRequests.put(model, id);
         job.submittingModel = null;
@@ -3976,6 +4066,12 @@ public class NeuroReplacementPilotService {
         while (System.nanoTime() < deadline) {
             JsonNode data = send(baseRequest(GENAPI.resolve("request/get/" + id)).GET().build());
             String status = data.path("status").asText("").toLowerCase();
+            if(!status.equals(job.providerRequests.get("__diag.providerState."+model))) {
+                job.providerRequests.put("__diag.providerState."+model,status);
+                job.providerRequests.put("__diag.providerAt."+model,
+                        java.time.Instant.now().toString());
+                checkpoint(job);
+            }
             if ("success".equals(status) || "completed".equals(status)) {
                 JsonNode result = data.path("result");
                 String url = result.isArray() && !result.isEmpty() ? result.get(0).asText("") : result.asText("");
