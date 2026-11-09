@@ -2387,10 +2387,14 @@ public class NeuroReplacementPilotService {
                     : "Change the background only as directed in the assignment. ")+
                 "No cuts, captions, costume changes or extra people. "+
                 (keyboard
-                    ? "ACTION PRIORITY 1: take a real computer keyboard from the "+
-                      "offscreen desk with both hands, put it on top of the head, "+
-                      "hold it with both hands facing camera during the full "+
-                      "spoken line. "
+                    ? "ACTION PRIORITY 1: keyboard is NOT required in reference "+
+                      "video or first frame. GENERATE one plausible solid "+
+                      "computer keyboard as a new MOVING foreground prop; "+
+                      "do not add it to the room. The actor reaches both hands "+
+                      "BELOW the bottom edge, lifts the keyboard continuously "+
+                      "INTO frame, rests it on top of the head and holds it "+
+                      "with both hands, facing camera during the full line. "+
+                      "No floating, popping, duplicate keyboards or extra hands. "
                     : "")+
                 (putsKeyboardBack
                     ? "ACTION PRIORITY 2: after the line, lower the keyboard "+
