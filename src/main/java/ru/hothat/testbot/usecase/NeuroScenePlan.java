@@ -125,7 +125,8 @@ public record NeuroScenePlan(
                 ? "Only the explicitly instructed background change is allowed; preserve the person's identity, camera realism and continuity. "
                 : "BACKGROUND LOCK: The original webcam room, wall, furniture, objects, lighting, "
                   + "camera angle, focal length, framing and background MUST remain unchanged in every frame. "
-                  + "Do not move the camera, replace the room, or invent objects even if the actor stands or exits. ";
+                  + "Do not move the camera or replace the room. Do not invent NEW background objects, " +
+                  "but a handheld physical prop EXPLICITLY required by the user's assignment is allowed. ";
         String choreography = keyboard && picksObject
                 ? "ACTION PRIORITY 1: take a REAL computer keyboard with both hands from the desk just outside the frame, " +
                   "raise it onto the top of the head, hold it securely with both hands while facing the camera and " +
