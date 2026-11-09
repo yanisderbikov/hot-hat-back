@@ -1928,7 +1928,13 @@ public class NeuroReplacementPilotService {
             NeuroScenePlan scene=isCharacterWorkflow(job)
                     ? NeuroScenePlan.planForCharacter(job.sceneAssignment)
                     : NeuroScenePlan.plan(job.sceneAssignment);
-            report.put("providerPrompt",scene.videoPrompt().replace("@Video1","@Element1"));
+            report.put("providerPrompt",scene.videoPrompt().replace("@Video1","@Element1")
+                    .replace("@Image1","the first webcam frame")+
+                    " @Element1 is the identity reference from the person's recorded "+
+                    "webcam video, NOT a motion template. The starting image anchors "+
+                    "the unchanged room and camera angle. Preserve identity, clothing "+
+                    "and facial features. Perform NEW gestures, mouth movements and "+
+                    "actions from the written instructions, not the source gestures.");
             report.put("spokenText",scene.spokenText());
             report.put("speechStyle",scene.speechStyle());
         }
