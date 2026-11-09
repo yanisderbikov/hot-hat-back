@@ -70,6 +70,13 @@ class NeuroPromptDiagnosticsContractTest {
             assertTrue(providerPrompt.contains("ACTION PRIORITY 1"));
             assertTrue(providerPrompt.contains("ACTION PRIORITY 2"));
             assertTrue(providerPrompt.contains("keyboard"));
+            assertTrue(providerPrompt.contains("NOT required in reference"));
+            assertTrue(providerPrompt.contains("GENERATE one plausible solid"));
+            assertTrue(providerPrompt.contains("BELOW the bottom edge"));
+            assertTrue(providerPrompt.contains("INTO frame"));
+            assertTrue(providerPrompt.contains("SAME"));
+            assertTrue(providerPrompt.contains("OUT through the bottom"));
+            assertTrue(providerPrompt.contains("No floating, popping"));
             assertTrue(providerPrompt.contains(assignment));
             assertTrue(providerPrompt.contains(preview.spokenText()));
             assertTrue(providerPrompt.contains("rap"));
