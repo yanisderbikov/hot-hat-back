@@ -51,6 +51,37 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    void simpleUploadKlingPayloadExactlyMatchesGenApiConfirmedReferenceToVideoFields() {
+        String assignment=(String)ReflectionTestUtils.getField(
+                NeuroReplacementPilotService.class,"UPLOAD_ASSIGNMENT");
+        NeuroScenePlan scene=NeuroScenePlan.plan(assignment);
+        Map<String,Object> fields=ReflectionTestUtils.invokeMethod(pilot,
+                "genApiVisualReferenceFields",scene,
+                "https://hot-hat-back.up.railway.app/api/v2/public/neuro-references/"+
+                    "a".repeat(64)+"/input.mp4",
+                "https://hot-hat-back.up.railway.app/api/v2/public/neuro-references/"+
+                    "b".repeat(64)+"/input.jpg");
+        assertEquals(java.util.Set.of("model","prompt","duration","start_image_url",
+                "elements","pro","generate_audio","aspect_ratio","translate_input"),
+                fields.keySet(),"Only the nine fields confirmed by GenAPI may be sent");
+        assertEquals("reference-to-video",fields.get("model"));
+        assertEquals("10",fields.get("duration"));
+        assertEquals(Boolean.TRUE,fields.get("pro"));
+        assertEquals(Boolean.FALSE,fields.get("generate_audio"));
+        assertEquals(Boolean.FALSE,fields.get("translate_input"));
+        assertEquals("16:9",fields.get("aspect_ratio"));
+        assertEquals(1,((List<?>)fields.get("elements")).size());
+        String prompt=String.valueOf(fields.get("prompt"));
+        assertTrue(prompt.contains("@Element1"));
+        assertTrue(prompt.length()<=2500,"Must not exceed Kling prompt limit");
+        assertFalse(prompt.contains("@Video1"));
+        for(String gesture:new String[]{"палец","кулаком","помахать","встать","уйти"})
+            assertTrue(prompt.contains(gesture),"Missing requested action: "+gesture);
+        assertTrue(scene.spokenText().contains("А вы всё ещё кипятите?"));
+        assertTrue(scene.spokenText().contains("Тогда мы идём к вам!"));
+    }
+
+    @Test
     void prerecordedTwentyFiveSecondVideoProducesLocalVoiceWithoutGenApiCharge() throws Exception {
         java.nio.file.Path mp4=java.nio.file.Files.createTempFile("neuro-25s-source-", ".mp4");
         try{
