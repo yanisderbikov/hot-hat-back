@@ -238,6 +238,34 @@ public class NeuroReplacementHistoryController {
                 .body(bytes);
     }
 
+    @GetMapping("/{jobId}/reference-clip")
+    @ApiResponse(responseCode = "200", description = "Точный бесплатный 7.5-секундный видеореференс внешности, отправленный Kling",
+            content = @Content(mediaType = "video/mp4",
+                    schema = @Schema(type = "string", format = "binary")))
+    public ResponseEntity<byte[]> referenceClip(
+            @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description = "ID существующего задания Нейроподмены") @PathVariable String jobId) {
+        byte[] bytes=pilot.identityReferenceClip(owner.uid(),jobId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+                .header(HttpHeaders.CONTENT_DISPOSITION,"inline; filename=hot-hat-kling-identity-reference.mp4")
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .body(bytes);
+    }
+
+    @GetMapping("/{jobId}/diagnostics/report")
+    @ApiResponse(responseCode = "200", description = "Полный бесплатный отчёт о попытке: этапы, ID и цены GenAPI, промпт, ошибки; без платного POST",
+            content = @Content(mediaType = "application/json",
+                    schema = @Schema(implementation = NeuroDetailedResponseDTO.DiagnosticReport.class)))
+    public ResponseEntity<Map<String,Object>> diagnosticReport(
+            @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description = "ID существующего задания Нейроподмены") @PathVariable String jobId) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+                .header(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename=hot-hat-neuro-diagnostics.json")
+                .body(pilot.diagnosticReport(owner.uid(),jobId));
+    }
+
     @GetMapping("/{jobId}/provider-status")
     @ApiResponse(responseCode = "200", description = "Бесплатная проверка ранее созданных запросов GenAPI",
             content = @Content(mediaType = "application/json",
