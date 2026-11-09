@@ -90,6 +90,40 @@ class NeuroReplacementPilotServiceTest {
     }
 
     @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void correctedSevenPointFiveSecondReferencePreflightAlsoRecognizesSimpleUpload() throws Exception {
+        // This is a read-only check. The old media diagnostic rejected 7.507s
+        // because it expected at least 7.7s, although the paid request strictly
+        // requires less than 8s. Both must use the same duration rule.
+        assertEquals(Boolean.TRUE,ReflectionTestUtils.invokeMethod(
+                pilot,"validKlingElementDuration",7.507));
+        JdbcTemplate db=mock(JdbcTemplate.class);
+        pilot.setJdbcTemplate(db);
+        var store=mock(ru.hothat.common.storage.ObjectStore.class);
+        pilot.setObjectStore(store);
+        String jobId="upload-preflight-synthetic",owner="owner-1";
+        ResultSet row=mock(ResultSet.class);
+        when(row.getString(1)).thenReturn(jobId);
+        when(row.getString(2)).thenReturn("hat-fac7eduploadsynthetic");
+        when(row.getString(3)).thenReturn(owner);
+        when(row.getString(4)).thenReturn("processing");
+        when(row.getString(6)).thenReturn("{\"character-mode\":\"genapi-upload-video-10\"}");
+        when(db.query(anyString(),any(RowMapper.class),eq(jobId)))
+                .thenAnswer(call->List.of(((RowMapper)call.getArgument(1)).mapRow(row,0)));
+        // Deliberately invalid media: prove the simple-upload request reaches
+        // binary validation instead of being rejected as an unsupported mode.
+        when(store.get("neuro-replacements/"+owner+"/"+jobId+"-kling-reference.mp4"))
+                .thenReturn(new byte[1024]);
+        when(store.get("neuro-replacements/"+owner+"/"+jobId+"-kling-still.jpg"))
+                .thenReturn(new byte[3000]);
+        Map<String,Object> check=pilot.inspectCharacterProviderMedia(owner,jobId);
+        assertEquals(0,check.get("paidCalls"));
+        assertEquals("REFERENCE_MEDIA_PREFLIGHT_BLOCKED",check.get("check"));
+        assertTrue(String.valueOf(check.get("technicalReason"))
+                .contains("NEURO_KLING_ELEMENT_SAMPLE_SIZE_INVALID_NO_CHARGE"));
+    }
+
+    @Test
     void chromeLiveWebmWithoutDurationHeaderIsAcceptedFromActualPacketTimestamps() throws Exception {
         // Chrome MediaRecorder emits streaming WebM with NO format.duration.
         // Real owner example was 1280x720, ~21 fps, 30 seconds, Opus audio.
