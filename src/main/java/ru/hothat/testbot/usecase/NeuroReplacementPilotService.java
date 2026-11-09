@@ -1918,6 +1918,12 @@ public class NeuroReplacementPilotService {
                     UPLOAD_MODE.equals(job.providerRequests.get("character-mode")) ||
                     GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode"))
                     ? buildGenApiVisualPrompt(scene) : scene.videoPrompt()));
+            result.put("providerPromptChars",
+                    ((String)result.get("providerPrompt")).length());
+            if(GAME_MODE.equals(job.providerRequests.get("character-mode")) ||
+                    UPLOAD_MODE.equals(job.providerRequests.get("character-mode")) ||
+                    GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode")))
+                result.put("providerPromptLimit",MAX_GENAPI_VISUAL_PROMPT_CHARS);
         }
         // Expose provider IDs to the authenticated owner while still processing.
         // They can recover the paid work in GenAPI if Railway restarts.
@@ -2018,6 +2024,9 @@ public class NeuroReplacementPilotService {
             NeuroScenePlan scene=plannedSceneForJob(job);
             report.put("providerPrompt",job.providerRequests.getOrDefault("__diag.providerPrompt",
                     buildGenApiVisualPrompt(scene)));
+            report.put("providerPromptChars",
+                    ((String)report.get("providerPrompt")).length());
+            report.put("providerPromptLimit",MAX_GENAPI_VISUAL_PROMPT_CHARS);
             report.put("assignmentAdjusted",snapshot(job).get("assignmentAdjusted"));
             report.put("promptAdaptation",snapshot(job).get("promptAdaptation"));
             report.put("durationSeconds",scene.durationSeconds());
@@ -2326,7 +2335,16 @@ public class NeuroReplacementPilotService {
             job.state="failed";
             String message=String.valueOf(e.getMessage());
             job.error=message.substring(0,Math.min(message.length(),350));
-            job.stage="GenAPI Нейроподмена: ошибка, оплаченные ID не повторять";
+            // A local preflight refusal before paidStage is not a paid task.
+            // If any POST could have begun, preserve the non-retry warning.
+            boolean providerMayHaveBeenCharged=job.submittingModel!=null ||
+                    job.providerRequests.containsKey(VIDEO_MODEL_ID) ||
+                    job.providerRequests.containsKey("tts") ||
+                    job.providerRequests.containsKey("chatterbox-speech") ||
+                    job.providerRequests.containsKey("lipsync");
+            job.stage=providerMayHaveBeenCharged
+                    ? "GenAPI Нейроподмена: ошибка, оплаченные ID не повторять"
+                    : "GenAPI: проверка до оплаты не пройдена; генерация не запускалась";
             checkpoint(job);
             LOG.warn("GenAPI visual reference job={} failed with {}",job.id,
                     e.getClass().getSimpleName());
