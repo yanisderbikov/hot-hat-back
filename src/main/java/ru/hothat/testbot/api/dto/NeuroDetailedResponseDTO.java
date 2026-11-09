@@ -82,4 +82,22 @@ public final class NeuroDetailedResponseDTO {
             @Schema(description = "HTTP-статус скачивания стартового изображения") Integer startImagePublicGet,
             @Schema(description = "Результат проверки обоих референсов") String check,
             @Schema(description = "Техническая причина недоступности референса") String technicalReason) {}
+
+    @Schema(name = "NeuroDiagnosticReportResponse",
+            description = "Read-only archive of one AI generation: exact prompts, stage timeline, GenAPI task IDs, safe provider errors and reported costs")
+    public record DiagnosticReport(
+            @Schema(description = "Версия формата диагностики") String reportFormat,
+            @Schema(description = "Момент формирования отчёта ISO 8601") String generatedAt,
+            @Schema(description = "Проверенный владельцем статус и ID задания") NeuroJobResponseDTO job,
+            @Schema(description = "Идентификатор тестовой комнаты") String roomId,
+            @Schema(description = "Полная хронология изменения этапов") java.util.List<java.util.Map<String,Object>> timeEvents,
+            @Schema(description = "Промпт для Kling с исходными указаниями") String providerPrompt,
+            @Schema(description = "Фактически заказанные слова") String spokenText,
+            @Schema(description = "Стиль речи, переданный TTS") String speechStyle,
+            @Schema(description = "Ссылки на приватные read-only media endpoints") java.util.Map<String,String> mediaEndpoints,
+            @Schema(description = "Сохранены ли исходные видео и голос") boolean mediaInputArchived,
+            @Schema(description = "Статусы, ID, ошибки и тарифы всех этапов GenAPI") java.util.Map<String,Object> genApi,
+            @Schema(description = "Число этапов с подтверждёнными стоимостями") int confirmedStageCosts,
+            @Schema(description = "Сумма GenAPI, только если известны все четыре стоимости") Double providerReportedCostRub,
+            @Schema(description = "Ограничения отчёта и расходы") String warning) {}
 }
