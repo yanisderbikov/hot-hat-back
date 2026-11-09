@@ -2397,8 +2397,9 @@ public class NeuroReplacementPilotService {
                       "No floating, popping, duplicate keyboards or extra hands. "
                     : "")+
                 (putsKeyboardBack
-                    ? "ACTION PRIORITY 2: after the line, lower the keyboard "+
-                      "to the same offscreen desk. "
+                    ? "ACTION PRIORITY 2: after the line, move the SAME "+
+                      "keyboard continuously DOWN and OUT through the bottom "+
+                      "edge to the unseen desk; no vanishing mid-frame. "
                     : "")+
                 "Start the actions immediately and finish speech before the "+
                 "last second. Original Russian acting instructions in order: "+
