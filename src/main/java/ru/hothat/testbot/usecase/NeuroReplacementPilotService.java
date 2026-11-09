@@ -178,8 +178,39 @@ public class NeuroReplacementPilotService {
     }
 
     private void checkpoint(Job job) {
-        try { persist(job); }
+        try {
+            // Durable, owner-only event trail: the dashboard can reconstruct
+            // elapsed time after a Railway restart, with no external logging
+            // service and no paid provider requests.
+            String previous=job.providerRequests.get("__diag.lastStage");
+            if(!java.util.Objects.equals(previous,job.stage)){
+                int count;
+                try {count=Integer.parseInt(job.providerRequests.getOrDefault("__diag.count","0"));}
+                catch(NumberFormatException bad){count=0;}
+                if(count<90){
+                    String key="__diag.event."+String.format(java.util.Locale.ROOT,"%03d",count);
+                    job.providerRequests.put(key,java.time.Instant.now().toString()+
+                            "\t"+job.state+"\t"+job.stage);
+                    job.providerRequests.put("__diag.count",String.valueOf(count+1));
+                }
+                job.providerRequests.put("__diag.lastStage",job.stage);
+            }
+            persist(job);
+        }
         catch (RuntimeException e) { LOG.error("Neuro paid task checkpoint failed room={} job={}", job.roomId, job.id, e); }
+    }
+
+    private List<Map<String,Object>> timeline(Job job) {
+        List<Map<String,Object>> events=new ArrayList<>();
+        for(var entry:new java.util.TreeMap<>(job.providerRequests).entrySet()){
+            if(!entry.getKey().startsWith("__diag.event."))continue;
+            String[] parts=entry.getValue().split("\t",3);
+            if(parts.length!=3)continue;
+            Map<String,Object> event=new LinkedHashMap<>();
+            event.put("at",parts[0]);event.put("status",parts[1]);event.put("stage",parts[2]);
+            events.add(event);
+        }
+        return events;
     }
 
     private Job loadJobById(String id) {
@@ -1846,7 +1877,12 @@ public class NeuroReplacementPilotService {
         }
         // Expose provider IDs to the authenticated owner while still processing.
         // They can recover the paid work in GenAPI if Railway restarts.
-        result.put("providerRequests", new LinkedHashMap<>(job.providerRequests));
+        Map<String,String> publicIds=new LinkedHashMap<>();
+        job.providerRequests.forEach((name,id)->{
+            if(!name.startsWith("__diag."))publicIds.put(name,id);
+        });
+        result.put("providerRequests", publicIds);
+        result.put("timeline", timeline(job));
         if (job.error != null) {
             result.put("error", job.error);
         }
@@ -1872,6 +1908,53 @@ public class NeuroReplacementPilotService {
         } catch(Exception exception) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_REFERENCE_CLIP_NOT_YET_READY");
         }
+    }
+
+    /** Downloadable owner-only diagnostic: timestamps, stage IDs/costs, exact
+     * plan and media links. Read-only GET to GenAPI; never a paid POST. Raw
+     * signed URLs and bearer tokens are intentionally excluded.
+     */
+    public Map<String,Object> diagnosticReport(String ownerUid,String jobId){
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        Map<String,Object> report=new LinkedHashMap<>();
+        report.put("reportFormat","hot-hat-neuro-diagnostics-v1");
+        report.put("generatedAt",java.time.Instant.now().toString());
+        report.put("job",snapshot(job));
+        report.put("roomId",job.roomId);
+        report.put("timeEvents",timeline(job));
+        if(job.sceneAssignment!=null){
+            NeuroScenePlan scene=isCharacterWorkflow(job)
+                    ? NeuroScenePlan.planForCharacter(job.sceneAssignment)
+                    : NeuroScenePlan.plan(job.sceneAssignment);
+            report.put("providerPrompt",scene.videoPrompt().replace("@Video1","@Element1"));
+            report.put("spokenText",scene.spokenText());
+            report.put("speechStyle",scene.speechStyle());
+        }
+        String base="/api/v2/admin/neuro-replacements/"+job.id;
+        report.put("mediaEndpoints",Map.of("original",base+"/original",
+                "identityReference",base+"/reference-clip",
+                "paidKling",base+"/paid-kling","finalVideo",base+"/video"));
+        report.put("mediaInputArchived",job.sourceCameraKey!=null &&
+                job.sourceVoiceKey!=null);
+        Map<String,Object> provider=inspectProvider(ownerUid,jobId);
+        report.put("genApi",provider);
+        double total=0.0;int chargedStages=0;
+        Object stageMap=provider.get("providerRequests");
+        if(stageMap instanceof Map<?,?> stages){
+            for(Object stage:stages.values()){
+                if(stage instanceof Map<?,?> detail && detail.get("cost") instanceof Number number){
+                    total+=number.doubleValue();chargedStages++;
+                }
+            }
+        }
+        report.put("confirmedStageCosts",chargedStages);
+        report.put("providerReportedCostRub",chargedStages==4?Math.round(total*100.0)/100.0:null);
+        report.put("warning","Costs show only GenAPI GET values; null means unknown. "+
+                "Provider progress is not proof of completed video. "+
+                "No new paid generation was submitted by this report.");
+        return report;
     }
 
     /** Exact official Kling endpoints, never forward an arbitrary provider URL. */
