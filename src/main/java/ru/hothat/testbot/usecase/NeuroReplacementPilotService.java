@@ -1153,6 +1153,9 @@ public class NeuroReplacementPilotService {
     private static final String GENAPI_REFERENCE_MODE = "genapi-o3-video-identity-reference";
     private static final String GENAPI_VISUAL_REFERENCE_MODEL = "reference-to-video";
     private static final String UPLOAD_MODE = "genapi-upload-video-10";
+    // Game owner/bot route must use the same proven Kling O3 reference-to-video
+    // pipeline as the successful 09-Nov upload, never legacy video editing.
+    private static final String GAME_MODE = "genapi-game-o3-reference-10";
     private static final String UPLOAD_ASSIGNMENT =
             "Повернуться к веб-камере и смотреть прямо в камеру. "+
             "Выразительно сказать «А вы всё ещё кипятите?». "+
@@ -1238,6 +1241,7 @@ public class NeuroReplacementPilotService {
         }
         Job job = new Job(UUID.randomUUID().toString(), roomId, ownerUid);
         job.sceneAssignment = newScene == null ? null : newScene.assignment();
+        if (newScene != null) job.providerRequests.put("character-mode", GAME_MODE);
         job.cameraMime=videoMime;
         job.voiceMime=voiceMime;
         job.startSeconds=windowStartSeconds;
@@ -1825,8 +1829,10 @@ public class NeuroReplacementPilotService {
         result.put("originalMime",job.cameraMime);
 
         result.put("characterMode",isCharacterWorkflow(job));
-        result.put("characterProvider",GENAPI_REFERENCE_MODE.equals(
-                job.providerRequests.get("character-mode"))?"GenAPI O3 reference-to-video":
+        result.put("characterProvider",(GENAPI_REFERENCE_MODE.equals(
+                job.providerRequests.get("character-mode")) ||
+                GAME_MODE.equals(job.providerRequests.get("character-mode")) ||
+                UPLOAD_MODE.equals(job.providerRequests.get("character-mode")))?"GenAPI O3 reference-to-video":
                 CHARACTER_MODE.equals(job.providerRequests.get("character-mode"))?
                 "Official Kling video element":"legacy");
         result.put("sceneType",job.roomId.startsWith("hat-fac7ed") ? "studio" :
@@ -1845,6 +1851,27 @@ public class NeuroReplacementPilotService {
             result.put("error", job.error);
         }
         return result;
+    }
+
+    /** Owner-only exact 7.5-second identity video sent as Kling element.
+     * Unlike /original this is the actual prepared O3 MP4. No provider POST.
+     */
+    public byte[] identityReferenceClip(String ownerUid, String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(!(GAME_MODE.equals(job.providerRequests.get("character-mode")) ||
+             UPLOAD_MODE.equals(job.providerRequests.get("character-mode")) ||
+             GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode"))))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_VIDEO_REFERENCE_NOT_AVAILABLE");
+        String keyPath="neuro-replacements/"+ownerUid+"/"+jobId+"-kling-reference.mp4";
+        try {
+            byte[] bytes=objectStore.get(keyPath);
+            verifyKlingElementReference(bytes);
+            return bytes;
+        } catch(Exception exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_REFERENCE_CLIP_NOT_YET_READY");
+        }
     }
 
     /** Exact official Kling endpoints, never forward an arbitrary provider URL. */
@@ -1988,7 +2015,8 @@ public class NeuroReplacementPilotService {
     private void processGenApiVisualReference(Job job,byte[] camera,
                                                String cameraMime,byte[] voice,
                                                String voiceMime) {
-        boolean simpleUpload=UPLOAD_MODE.equals(job.providerRequests.get("character-mode"));
+        boolean simpleUpload=UPLOAD_MODE.equals(job.providerRequests.get("character-mode")) ||
+                GAME_MODE.equals(job.providerRequests.get("character-mode"));
         boolean ownerReviewed=simpleUpload ||
                 "Владелец одобрил видеоперсонажа и движения".equals(job.stage);
         try{
@@ -2334,7 +2362,8 @@ public class NeuroReplacementPilotService {
 
     private void process(Job job, byte[] camera, String cameraMime, byte[] voice, String voiceMime, double startSeconds) {
         if(GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode")) ||
-                UPLOAD_MODE.equals(job.providerRequests.get("character-mode"))) {
+                UPLOAD_MODE.equals(job.providerRequests.get("character-mode")) ||
+                GAME_MODE.equals(job.providerRequests.get("character-mode"))) {
             processGenApiVisualReference(job,camera,cameraMime,voice,voiceMime);
             return;
         }
