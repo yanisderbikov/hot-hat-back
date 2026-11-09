@@ -1250,7 +1250,7 @@ public class NeuroReplacementPilotService {
                                                    double windowStartSeconds, String assignment,
                                                    int maxDurationSeconds) {
         NeuroScenePlan newScene = assignment == null || assignment.isBlank()
-                ? null : NeuroScenePlan.planWithinSeconds(assignment,maxDurationSeconds);
+                ? null : previewGameScene(assignment,maxDurationSeconds);
         if (!Double.isFinite(windowStartSeconds) || windowStartSeconds < 0 || windowStartSeconds > 25) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_REFERENCE_WINDOW");
         }
@@ -1802,6 +1802,7 @@ public class NeuroReplacementPilotService {
                     "NEURO_UPLOAD_MEDIA_PREFLIGHT_FAILED_NO_CHARGE");
         }
         NeuroScenePlan scene=NeuroScenePlan.plan(UPLOAD_ASSIGNMENT);
+        requireGenApiVisualPromptWithinLimit(scene);
         if(scene.durationSeconds()>10)
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "NEURO_UPLOAD_SCENE_EXCEEDS_TEN_SECONDS");
@@ -2244,13 +2245,18 @@ public class NeuroReplacementPilotService {
             String cleanImage=cleanGenApiInputUrl(job,stillKey,"jpg");
             checkGenApiMediaDownload(cleanVideo,"video/mp4");
             checkGenApiMediaDownload(cleanImage,"image/jpeg");
-            // Save exactly what is about to be submitted, before any paid POST.
-            job.providerRequests.put("__diag.providerPrompt",buildGenApiVisualPrompt(scene));
+            // Build and validate the COMPLETE provider body BEFORE paidStage
+            // marks submittingModel. A free local validation failure must
+            // never be mistaken for an ambiguous paid POST.
+            Map<String,Object> klingFields=genApiVisualReferenceFields(
+                    scene,cleanVideo,cleanImage);
+            job.providerRequests.put("__diag.providerPrompt",
+                    (String)klingFields.get("prompt"));
             job.providerRequests.put("__diag.requestedDurationSeconds",
                     String.valueOf(scene.durationSeconds()));
             checkpoint(job);
-            String videoUrl=paidStage(job,VIDEO_MODEL_ID,()->submitJson(VIDEO_MODEL_ID,
-                    genApiVisualReferenceFields(scene,cleanVideo,cleanImage)));
+            String videoUrl=paidStage(job,VIDEO_MODEL_ID,
+                    ()->submitJson(VIDEO_MODEL_ID,klingFields));
             String paidKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
                     "-paid-kling.mp4";
             byte[] acting;
@@ -2341,14 +2347,62 @@ public class NeuroReplacementPilotService {
      * This field layout still requires real GenAPI verification before claiming
      * the final MP4 is ready; never auto-retry a previously failed provider ID.
      */
+    // This is the ACTUAL text for GenAPI O3. The generic scene.videoPrompt()
+    // is longer and must not be sent with another redundant identity suffix.
+    // Keep the full assignment and exact spoken words, not an arbitrary substring.
+    private static final int MAX_GENAPI_VISUAL_PROMPT_CHARS = 2500;
+
     private static String buildGenApiVisualPrompt(NeuroScenePlan scene) {
-        return scene.videoPrompt().replace("@Video1","@Element1")
-                .replace("@Image1","the first webcam frame")+
-                " @Element1 is the identity reference from the person's recorded "+
-                "webcam video, NOT a motion template. The starting image anchors "+
-                "the unchanged room and camera angle. Preserve identity, clothing "+
-                "and facial features. Perform NEW gestures, mouth movements and "+
-                "actions from the written instructions, not the source gestures.";
+        boolean backgroundLocked=scene.videoPrompt().contains("BACKGROUND LOCK");
+        boolean keyboard=scene.videoPrompt().contains("ACTION PRIORITY 1");
+        boolean putsKeyboardBack=scene.videoPrompt().contains("ACTION PRIORITY 2");
+        boolean rap=scene.speechStyle().contains("Russian rap");
+        return "Photorealistic single continuous webcam take, exactly "+
+                scene.durationSeconds()+" seconds. @Element1 is the same real "+
+                "person: keep face, hair, age, clothing, skin and body. "+
+                "Reference video identifies the person; never copy its motions. "+
+                "The supplied first frame anchors the room. Exactly one actor, "+
+                "stable anatomy, natural hands, eyes, blinking and expression. "+
+                (backgroundLocked
+                    ? "BACKGROUND LOCK: keep the wall, furniture, objects, "+
+                      "lighting, camera position, lens and framing unchanged. "
+                    : "Change the background only as directed in the assignment. ")+
+                "No cuts, captions, costume changes or extra people. "+
+                (keyboard
+                    ? "ACTION PRIORITY 1: take a real computer keyboard from the "+
+                      "offscreen desk with both hands, put it on top of the head, "+
+                      "hold it with both hands facing camera during the full "+
+                      "spoken line. "
+                    : "")+
+                (putsKeyboardBack
+                    ? "ACTION PRIORITY 2: after the line, lower the keyboard "+
+                      "to the same offscreen desk. "
+                    : "")+
+                "Start the actions immediately and finish speech before the "+
+                "last second. Original Russian acting instructions in order: "+
+                scene.assignment()+
+                " Only spoken Russian words: «"+scene.spokenText()+"». "+
+                (rap
+                    ? "Perform the line as expressive spoken advertising rap "+
+                      "with the specified pause. "
+                    : "Perform the line naturally, with the specified pauses. ")+
+                "Lips match speech precisely. Avoid extra speech, jerky "+
+                "movement, fake prop handling or frozen poses. If time is "+
+                "short, keep all spoken words and main physical actions, "+
+                "omit only secondary gestures.";
+    }
+
+    private static void requireGenApiVisualPromptWithinLimit(NeuroScenePlan scene) {
+        if(buildGenApiVisualPrompt(scene).length()>MAX_GENAPI_VISUAL_PROMPT_CHARS)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_GENAPI_PROVIDER_PROMPT_TOO_LONG");
+    }
+
+    /** Free bot-room preflight: validate EXACT paid O3 prompt before consent. */
+    public NeuroScenePlan previewGameScene(String assignment,int maxDurationSeconds) {
+        NeuroScenePlan scene=NeuroScenePlan.planWithinSeconds(assignment,maxDurationSeconds);
+        requireGenApiVisualPromptWithinLimit(scene);
+        return scene;
     }
 
     private Map<String,Object> genApiVisualReferenceFields(NeuroScenePlan scene,
@@ -2359,7 +2413,7 @@ public class NeuroReplacementPilotService {
                 !startImageUrl.contains("/input.jpg"))
             throw new IllegalArgumentException("NEURO_GENAPI_VIDEO_AND_START_IMAGE_REQUIRED");
         String prompt=buildGenApiVisualPrompt(scene);
-        if(prompt.length()>2500)
+        if(prompt.length()>MAX_GENAPI_VISUAL_PROMPT_CHARS)
             throw new IllegalArgumentException("NEURO_GENAPI_PROVIDER_PROMPT_TOO_LONG");
         return Map.of(
                 "model",GENAPI_VISUAL_REFERENCE_MODEL,
