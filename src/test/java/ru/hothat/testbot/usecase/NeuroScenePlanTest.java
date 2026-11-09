@@ -146,6 +146,11 @@ class NeuroScenePlanTest {
         assertEquals("мы на яхте провисели две недели ... и все это время ты жуешь коктейли",
                 capped.spokenText());
         assertTrue(capped.videoPrompt().contains("keyboard"));
+        assertTrue(capped.videoPrompt().contains("ABSENT from the reference image/video"));
+        assertTrue(capped.videoPrompt().contains("GENERATE"));
+        assertTrue(capped.videoPrompt().contains("UP from below frame"));
+        assertTrue(capped.videoPrompt().contains("SAME keyboard down below frame"));
+        assertTrue(capped.videoPrompt().length()<=2500);
         assertTrue(capped.speechStyle().contains("Russian rap"));
         assertThrows(ResponseStatusException.class,
                 ()->NeuroScenePlan.planWithinSeconds(assignment,2));
