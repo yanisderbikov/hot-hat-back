@@ -86,7 +86,7 @@ public record NeuroScenePlan(
         // heuristic. Rhythmically spoken rap can run a little faster, but
         // explicit pauses still consume timeline even when TTS inserts them.
         boolean rap = has(lc,"рэп","рэпер","зачит","в ритм","как рэп","как реп");
-        double voiceSeconds = Math.max(1.4, words / (rap ? 2.7 : 2.45));
+        double voiceSeconds = Math.max(1.8, words / 2.7);
         if (spoken.contains(" ... ")) voiceSeconds += .55;
         boolean keyboard = has(lc,"клавиатур","keyboard");
         boolean picksObject = keyboard && has(lc,"возьм","взять","подним","берет","берёт","схват");
@@ -174,13 +174,14 @@ public record NeuroScenePlan(
             speechDash = candidate.indexOf(" — ");
             if (speechDash >= 0 && speechDash < 90) candidate = candidate.substring(speechDash+3).trim();
         }
-        candidate = candidate.replaceFirst("(?iu)^(?:[:—–-]\\\\s*)+", "").trim();
+        candidate = candidate.replaceFirst("(?iu)^(?:[:—–-]\\s*)+", "").trim();
         // A new sentence that describes acting/delivery is not dialogue.
-        candidate = candidate.replaceFirst("(?iu)[.!?]\\\\s+(?:пусть|затем|потом|после\\\\s+этого)\\\\s+.*$", "");
+        int actionSentence = candidate.toLowerCase(Locale.ROOT).indexOf(". пусть ");
+        if(actionSentence>=0) candidate=candidate.substring(0,actionSentence).trim();
         Matcher action = ACTION_AFTER_SPEECH.matcher(candidate);
         if (action.find()) candidate = candidate.substring(0, action.start()).trim();
-        candidate = candidate.replaceAll("(?iuU)\\\\(?\\\\s*пауз[ауеы]\\\\s*\\\\)", " ... ");
-        candidate = candidate.replaceAll("(?iuU)\\b(?:делает\\s+)?пауз[ауеы]\\b", " ... ");
+        candidate=candidate.replace("(пауза)"," ... ").replace("(Пауза)"," ... ");
+        candidate=candidate.replace("(пауза)"," ... ").replace("(Пауза)"," ... ");
         candidate = candidate.replaceAll("\\s*\\.\\.\\.\\s*", " ... ")
                 .replaceAll("\\s+", " ").replaceAll("^[\\s:—–-]+|[\\s,;—–-]+$", "").trim();
         return candidate;
