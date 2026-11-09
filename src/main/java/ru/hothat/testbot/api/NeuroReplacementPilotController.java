@@ -57,9 +57,11 @@ public class NeuroReplacementPilotController {
             @Parameter(description = "Собственная тестовая комната владельца")
             @PathVariable @RoomId String roomId,
             @Parameter(description = "Задание для нейросцены; точные слова для речи заключаются в кавычки")
-            @RequestParam("assignment") String assignment) {
+            @RequestParam("assignment") String assignment,
+            @Parameter(description = "Добровольный предел длительности видео 3–10 секунд для бюджета теста")
+            @RequestParam(name = "maxDurationSeconds", defaultValue = "10") int maxDurationSeconds) {
         check(owner, roomId);
-        return NeuroScenePlan.plan(assignment);
+        return NeuroScenePlan.planWithinSeconds(assignment,maxDurationSeconds);
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -76,11 +78,14 @@ public class NeuroReplacementPilotController {
             @RequestParam(name = "windowStartSeconds", defaultValue = "0") double windowStartSeconds,
             @Parameter(description = "Свободное игровое задание без обязательных кавычек; максимум 10 секунд. Отсутствие сохраняет старый пилот.")
             @RequestParam(name = "assignment", required = false) String assignment,
+            @Parameter(description = "Та же верхняя граница длительности, что была подтверждена в бесплатном плане")
+            @RequestParam(name = "maxDurationSeconds", defaultValue = "10") int maxDurationSeconds,
             @RequestPart("video") MultipartFile video,
             @RequestPart("voice") MultipartFile voice) {
         check(owner, roomId);
         return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .body(pilot.start(roomId, owner.uid(), consented, video, voice, windowStartSeconds, assignment));
+                .body(pilot.start(roomId, owner.uid(), consented, video, voice,
+                        windowStartSeconds, assignment,maxDurationSeconds));
     }
 
     @GetMapping("/{jobId}")
