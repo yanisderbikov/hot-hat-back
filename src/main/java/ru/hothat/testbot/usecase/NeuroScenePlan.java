@@ -49,7 +49,7 @@ public record NeuroScenePlan(
             "Movements and speech must feel like an actual spontaneous webcam recording. ";
 
     public static NeuroScenePlan plan(String raw) {
-        return plan(raw,10,4);
+        return plan(raw,10,3);
     }
 
     /**
@@ -82,7 +82,15 @@ public record NeuroScenePlan(
         }
         if (spoken.length() > 220) throw invalid("NEURO_SPEECH_TOO_LONG");
         int words = countWords(spoken);
-        double voiceSeconds = Math.max(1.8, words / 2.7);
+        // Give real Russian speech more room than the previous 2.7 words/second
+        // heuristic. Rhythmically spoken rap can run a little faster, but
+        // explicit pauses still consume timeline even when TTS inserts them.
+        boolean rap = has(lc,"рэп","рэпер","зачит","в ритм","как рэп","как реп");
+        double voiceSeconds = Math.max(1.4, words / (rap ? 2.7 : 2.45));
+        if (spoken.contains(" ... ")) voiceSeconds += .55;
+        boolean keyboard = has(lc,"клавиатур","keyboard");
+        boolean picksObject = keyboard && has(lc,"возьм","взять","подним","берет","берёт","схват");
+        boolean putsBack = keyboard && has(lc,"полож","верн","опуст","убер");
         double movement = .5;
         // A turn or eye contact changes the staging rather than adding a
         // second person or substituting the entire source performance.
@@ -94,13 +102,22 @@ public record NeuroScenePlan(
         if (has(lc,"вста","поднимается со стула","встает","встаёт")) movement += .8;
         if (has(lc,"уход","уйти","выход","покида")) movement += 1.05;
         if (has(lc,"улыб","смеет")) movement += .25;
-        if (has(lc,"пауз","помолч","замира")) movement += .55;
+        if (has(lc,"пауз","помолч","замира") && !spoken.contains(" ... ")) movement += .55;
+        if (picksObject) movement += 1.35;
+        if (putsBack) movement += 1.15;
+        // Holding an object while delivering a line takes place concurrently
+        // with speech, rather than adding its whole duration a second time.
+        if (keyboard && has(lc,"держ","голов")) movement += .35;
         int seconds = (int)Math.ceil(voiceSeconds + movement);
-        if (seconds > maxSeconds) {
-            throw invalid(maxSeconds==10 ? "NEURO_ASSIGNMENT_EXCEEDS_TEN_SECONDS"
-                    : "NEURO_CHARACTER_ASSIGNMENT_EXCEEDS_FIFTEEN_SECONDS");
+        // Never silently truncate a user's exact words; drop or overlap
+        // secondary gestures first. If even the spoken words cannot fit at
+        // a natural pace, reject without spending on Kling.
+        if (voiceSeconds + .35 > maxSeconds) {
+            throw invalid(maxSeconds==10 ? "NEURO_SPOKEN_WORDS_EXCEED_TEN_SECONDS"
+                    : "NEURO_SPOKEN_WORDS_EXCEED_FIFTEEN_SECONDS");
         }
-        seconds = Math.max(minSeconds, seconds);
+        boolean compressed = seconds > maxSeconds;
+        seconds = Math.max(minSeconds, Math.min(maxSeconds, seconds));
         double start = turn ? .6 : .3;
         boolean changeBackground = has(lc, "смени фон", "сменить фон", "изменить фон",
                 "поменяй фон", "замени фон", "на фоне", "в другой комнате", "переместись");
@@ -109,8 +126,23 @@ public record NeuroScenePlan(
                 : "BACKGROUND LOCK: The original webcam room, wall, furniture, objects, lighting, "
                   + "camera angle, focal length, framing and background MUST remain unchanged in every frame. "
                   + "Do not move the camera, replace the room, or invent objects even if the actor stands or exits. ";
+        String choreography = keyboard && picksObject
+                ? "ACTION PRIORITY 1: take a REAL computer keyboard with both hands from the desk just outside the frame, " +
+                  "raise it onto the top of the head, hold it securely with both hands while facing the camera and " +
+                  "performing the requested spoken line. The keyboard is deliberately requested, not a new room/background. " +
+                  (putsBack ? "ACTION PRIORITY 2 AFTER the spoken line: lower the keyboard carefully onto the same offscreen desk. " : "")
+                : "";
+        String timing = "TIMING: first allow " +
+                String.format(Locale.ROOT,"%.1f",Math.min(1.7, Math.max(.3,movement*.38))) +
+                " seconds for initial action; speech MUST finish before the final 1.0 second of the clip. ";
+        String simplify = compressed
+                ? "The brief exceeds the time available: preserve the full spoken words and the main physical action; " +
+                  "perform secondary gestures only when they naturally fit alongside speech. DO NOT rush, splice, " +
+                  "speed up body movement, add extra gestures, or pretend a requested prop was handled. "
+                : "";
         String videoPrompt = BASE + sceneRule + "Total duration EXACTLY " + seconds +
-                " seconds. Directed actor instructions in Russian, in the exact requested order: " +
+                " seconds. " + choreography + timing + simplify +
+                "Directed actor instructions in Russian, in the exact requested order: " +
                 brief + ". The ONLY spoken dialogue is «" + spoken + "». " +
                 "The actor mouths the words while actually speaking them, not before or after; " +
                 "outside speech the mouth stays naturally closed. " + END;
@@ -119,6 +151,8 @@ public record NeuroScenePlan(
                 "natural, warm, conversational rhythm, full pronunciation, and appropriate " +
                 "expressive emotion. Preserve all specified pauses and punctuation. " +
                 "Do not hurry or read stage directions aloud. No extra words. " +
+                (rap ? "Read the exact words like clear, expressive spoken Russian rap with a steady beat, " +
+                  "strong rhythmic accents and audible pauses, WITHOUT music or singing. " : "") +
                 "Delivery directions: " + brief;
         return new NeuroScenePlan(brief, spoken, seconds, start, videoPrompt, speechStyle);
     }
@@ -132,8 +166,20 @@ public record NeuroScenePlan(
         Matcher cue = SPEECH_CUE.matcher(brief);
         if (!cue.find()) return "";
         String candidate = cue.group(1).trim();
+        // Everyday instructions often say "сказать выразительно как рекламу - ...".
+        // The dash marks the actual spoken phrase, not an acting instruction.
+        int speechDash = candidate.indexOf(" - ");
+        if (speechDash >= 0 && speechDash < 90) candidate = candidate.substring(speechDash+3).trim();
+        else {
+            speechDash = candidate.indexOf(" — ");
+            if (speechDash >= 0 && speechDash < 90) candidate = candidate.substring(speechDash+3).trim();
+        }
+        candidate = candidate.replaceFirst("(?iu)^(?:[:—–-]\\\\s*)+", "").trim();
+        // A new sentence that describes acting/delivery is not dialogue.
+        candidate = candidate.replaceFirst("(?iu)[.!?]\\\\s+(?:пусть|затем|потом|после\\\\s+этого)\\\\s+.*$", "");
         Matcher action = ACTION_AFTER_SPEECH.matcher(candidate);
         if (action.find()) candidate = candidate.substring(0, action.start()).trim();
+        candidate = candidate.replaceAll("(?iuU)\\\\(?\\\\s*пауз[ауеы]\\\\s*\\\\)", " ... ");
         candidate = candidate.replaceAll("(?iuU)\\b(?:делает\\s+)?пауз[ауеы]\\b", " ... ");
         candidate = candidate.replaceAll("\\s*\\.\\.\\.\\s*", " ... ")
                 .replaceAll("\\s+", " ").replaceAll("^[\\s:—–-]+|[\\s,;—–-]+$", "").trim();
