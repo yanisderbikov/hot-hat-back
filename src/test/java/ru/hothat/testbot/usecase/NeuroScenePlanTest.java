@@ -116,4 +116,27 @@ class NeuroScenePlanTest {
         assertTrue(plan.videoPrompt().contains("уйти из кадра"));
     }
 
+
+    @Test
+    void acceptsPlayersKeyboardRapInOrdinaryUnquotedRussianAndPreservesAllWords() {
+        String input="Пусть игрок возьмет клавиатуру в руки и поставит себе на голову и будет держать ее руками на голове, " +
+                "повернется лицом в камеру и скажет выразительно четко как рекламу - " +
+                "мы на яхте провисели две недели (пауза) и все это время ты жуешь коктейли. " +
+                "пусть эту рекламу он говорит как рэп читает, потом положит клавиатуру обратно в невидимую зону на стол.";
+        var scene=NeuroScenePlan.plan(input);
+        assertEquals("мы на яхте провисели две недели ... и все это время ты жуешь коктейли",scene.spokenText());
+        assertTrue(scene.durationSeconds()>=3 && scene.durationSeconds()<=10);
+        assertTrue(scene.videoPrompt().contains("ACTION PRIORITY 1"));
+        assertTrue(scene.videoPrompt().contains("keyboard"));
+        assertTrue(scene.videoPrompt().contains("ACTION PRIORITY 2"));
+        assertTrue(scene.speechStyle().contains("Russian rap"));
+        assertTrue(scene.videoPrompt().length()<=2500);
+    }
+
+    @Test
+    void shortHumanBriefUsesThreeSecondsWithNoUnnecessaryKlingVideoCharge() {
+        var scene=NeuroScenePlan.plan("Сказать «Да» и улыбнуться.");
+        assertEquals(3,scene.durationSeconds());
+        assertEquals("Да",scene.spokenText());
+    }
 }
