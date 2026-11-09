@@ -253,6 +253,21 @@ public class NeuroReplacementHistoryController {
                 .body(bytes);
     }
 
+    @GetMapping("/{jobId}/starting-frame")
+    @ApiResponse(responseCode = "200", description = "Точный стартовый JPEG, приложенный к запросу GenAPI; только владелец",
+            content = @Content(mediaType = "image/jpeg",
+                    schema = @Schema(type = "string", format = "binary")))
+    public ResponseEntity<byte[]> startingFrame(
+            @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description = "ID сохранённой попытки") @PathVariable String jobId) {
+        byte[] bytes=pilot.identityStartFrame(owner.uid(),jobId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+                .header(HttpHeaders.CONTENT_DISPOSITION,"inline; filename=hot-hat-neuro-start-frame.jpg")
+                .contentType(MediaType.IMAGE_JPEG)
+                .body(bytes);
+    }
+
     @GetMapping("/{jobId}/diagnostics/report")
     @ApiResponse(responseCode = "200", description = "Полный бесплатный отчёт о попытке: этапы, ID и цены GenAPI, промпт, ошибки; без платного POST",
             content = @Content(mediaType = "application/json",
