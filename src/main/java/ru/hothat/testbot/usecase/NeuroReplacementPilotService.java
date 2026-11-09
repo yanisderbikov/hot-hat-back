@@ -2080,6 +2080,8 @@ public class NeuroReplacementPilotService {
                             "target_voice_audio_url","reference.wav","audio/wav",refVoice));
             double tempo=verifyExpressiveSpeechDuration(transferred,scene);
             String aligned=alignSpeechToActingTimeline(job,transferred,scene,tempo);
+            // GenAPI must be able to GET and HEAD the full WAV before paid Lip Sync.
+            checkGenApiMediaDownload(aligned,"audio/wav");
             job.stage="GenAPI Lip Sync: синхронизирую губы с новой речью";checkpoint(job);
             String finished=paidStage(job,"lipsync",()->submitJson("lipsync",Map.of(
                     "video_url",videoUrl,"audio_url",aligned,
@@ -2239,6 +2241,7 @@ public class NeuroReplacementPilotService {
                             "target_voice_audio_url","reference.wav","audio/wav",refVoice));
             double tempo=verifyExpressiveSpeechDuration(transferred,scene);
             String aligned=alignSpeechToActingTimeline(job,transferred,scene,tempo);
+            checkGenApiMediaDownload(aligned,"audio/wav");
             job.stage="Lip Sync";checkpoint(job);
             String finalVideo=paidStage(job,"lipsync",()->submitJson("lipsync",Map.of(
                     "video_url",videoUrl,"audio_url",aligned,
@@ -2855,7 +2858,8 @@ public class NeuroReplacementPilotService {
     private void checkGenApiMediaDownload(String publicUrl,String expectedType)
             throws Exception {
         if(publicUrl==null ||
-                !("video/mp4".equals(expectedType)||"image/jpeg".equals(expectedType)))
+                !("video/mp4".equals(expectedType)||"image/jpeg".equals(expectedType)||
+                  "audio/wav".equals(expectedType)))
             throw new IOException("NEURO_MEDIA_PREFLIGHT_INVALID_TYPE");
         URI url=URI.create(publicUrl);
         String baseHost=URI.create(referencePublicOrigin.trim()).getHost();
@@ -2864,7 +2868,7 @@ public class NeuroReplacementPilotService {
                 url.getPort()!=-1 || url.getRawUserInfo()!=null ||
                 url.getRawQuery()!=null || url.getRawFragment()!=null ||
                 !url.getPath().matches(
-                    "/api/v2/public/neuro-references/[a-f0-9]{64}/input\\.(mp4|jpg)"))
+                    "/api/v2/public/neuro-references/[a-f0-9]{64}/input\\.(mp4|jpg|wav)"))
             throw new IOException("NEURO_MEDIA_PREFLIGHT_URL_INVALID");
         HttpRequest request=HttpRequest.newBuilder(url)
                 .timeout(Duration.ofSeconds(35))
@@ -2880,7 +2884,7 @@ public class NeuroReplacementPilotService {
             int count;
             while((count=stream.read(buffer))!=-1){
                 total+=count;
-                if(total>MAX_VIDEO_BYTES)
+                if(total>("audio/wav".equals(expectedType)?MAX_VOICE_BYTES:MAX_VIDEO_BYTES))
                     throw new IOException("NEURO_MEDIA_PREFLIGHT_TOO_LARGE");
             }
         }
@@ -2895,9 +2899,15 @@ public class NeuroReplacementPilotService {
         boolean valid="image/jpeg".equals(expectedType)
                 ? first.length>=3 && (first[0]&0xff)==0xff &&
                   (first[1]&0xff)==0xd8 && (first[2]&0xff)==0xff
+                : "audio/wav".equals(expectedType)
+                ? first.length>=12 && first[0]=='R' && first[1]=='I' &&
+                  first[2]=='F' && first[3]=='F' &&
+                  first[8]=='W' && first[9]=='A' &&
+                  first[10]=='V' && first[11]=='E'
                 : first.length>=8 && first[4]=='f' && first[5]=='t' &&
                   first[6]=='y' && first[7]=='p';
-        if(!valid || total < ("image/jpeg".equals(expectedType)?2048:25000))
+        if(!valid || total < ("audio/wav".equals(expectedType)?10000:
+                "image/jpeg".equals(expectedType)?2048:25000))
             throw new IOException("NEURO_MEDIA_PREFLIGHT_INVALID_OR_SHORT_FILE");
         // GenAPI may probe a reference using HEAD, even though fetching
         // the actual MP4/JPEG via GET succeeded. On 02-Nov paid task
