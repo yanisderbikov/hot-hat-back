@@ -1120,7 +1120,7 @@ public class NeuroReplacementPilotService {
             result.put("publicGetStatus",response.statusCode());
             result.put("mp4Signature",mp4Signature);
             result.put("model",VIDEO_INPUT_REFERENCE_MODE);
-            result.put("durationSeconds",NeuroScenePlan.plan(job.sceneAssignment).durationSeconds());
+            result.put("durationSeconds",plannedSceneForJob(job).durationSeconds());
             result.put("check",publicAccess && mp4Signature
                     ? "REFERENCE_READY_PROVIDER_SCHEMA_NOT_PROVEN"
                     : "SIGNED_REFERENCE_REJECTED");
@@ -1197,6 +1197,20 @@ public class NeuroReplacementPilotService {
         String mode=job.providerRequests.get("character-mode");
         return CHARACTER_MODE.equals(mode) || GENAPI_REFERENCE_MODE.equals(mode);
     }
+
+    private static NeuroScenePlan plannedSceneForJob(Job job) {
+        if(job.sceneAssignment==null || job.sceneAssignment.isBlank())return null;
+        if(isCharacterWorkflow(job))
+            return NeuroScenePlan.planForCharacter(job.sceneAssignment);
+        int maxSeconds=10;
+        if(GAME_MODE.equals(job.providerRequests.get("character-mode"))) {
+            try {
+                maxSeconds=Integer.parseInt(job.providerRequests.getOrDefault(
+                        "__diag.maxDurationSeconds","10"));
+            }catch(NumberFormatException ignored){maxSeconds=10;}
+        }
+        return NeuroScenePlan.planWithinSeconds(job.sceneAssignment,maxSeconds);
+    }
     private static final String CHARACTER_TASK = "kling-character";
     private static final String ACTING_TASK = "kling-omni";
 
@@ -1228,8 +1242,15 @@ public class NeuroReplacementPilotService {
     public synchronized Map<String, Object> start(String roomId, String ownerUid, boolean consented,
                                                    MultipartFile video, MultipartFile voice,
                                                    double windowStartSeconds, String assignment) {
+        return start(roomId,ownerUid,consented,video,voice,windowStartSeconds,assignment,10);
+    }
+
+    public synchronized Map<String, Object> start(String roomId, String ownerUid, boolean consented,
+                                                   MultipartFile video, MultipartFile voice,
+                                                   double windowStartSeconds, String assignment,
+                                                   int maxDurationSeconds) {
         NeuroScenePlan newScene = assignment == null || assignment.isBlank()
-                ? null : NeuroScenePlan.plan(assignment);
+                ? null : NeuroScenePlan.planWithinSeconds(assignment,maxDurationSeconds);
         if (!Double.isFinite(windowStartSeconds) || windowStartSeconds < 0 || windowStartSeconds > 25) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "INVALID_REFERENCE_WINDOW");
         }
@@ -1276,6 +1297,8 @@ public class NeuroReplacementPilotService {
             job.providerRequests.put("character-mode", GAME_MODE);
             // Keep the player's exact entered text, before whitespace normalization.
             job.providerRequests.put("__diag.originalAssignment", assignment);
+            job.providerRequests.put("__diag.maxDurationSeconds",
+                    String.valueOf(maxDurationSeconds));
         }
         job.cameraMime=videoMime;
         job.voiceMime=voiceMime;
@@ -1850,9 +1873,7 @@ public class NeuroReplacementPilotService {
         result.put("stage", job.stage);
         result.put("ready", "ready".equals(job.state));
         result.put("durationSeconds", job.sceneAssignment == null ? VIDEO_DURATION_SECONDS
-                : isCharacterWorkflow(job)
-                ? NeuroScenePlan.planForCharacter(job.sceneAssignment).durationSeconds()
-                : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds());
+                : plannedSceneForJob(job).durationSeconds());
         // Owner-only metadata for the history/video archive: an exact account of
         // what was ordered. Older paid 15s jobs remain identifiable, not rewritten.
         result.put("sceneAssignment", job.sceneAssignment);
@@ -1878,9 +1899,7 @@ public class NeuroReplacementPilotService {
         result.put("sceneType",job.roomId.startsWith("hat-fac7ed") ? "studio" :
                 job.sceneAssignment == null ? "legacy-pilot" : "custom");
         if (job.sceneAssignment != null) {
-            NeuroScenePlan scene = isCharacterWorkflow(job)
-                    ? NeuroScenePlan.planForCharacter(job.sceneAssignment)
-                    : NeuroScenePlan.plan(job.sceneAssignment);
+            NeuroScenePlan scene = plannedSceneForJob(job);
             result.put("spokenText", scene.spokenText());
             result.put("backgroundLocked", scene.videoPrompt().contains("BACKGROUND LOCK"));
             result.put("speechStyle",scene.speechStyle());
@@ -1995,9 +2014,7 @@ public class NeuroReplacementPilotService {
         });
         report.put("providerLifecycle",submissionTrace);
         if(job.sceneAssignment!=null){
-            NeuroScenePlan scene=isCharacterWorkflow(job)
-                    ? NeuroScenePlan.planForCharacter(job.sceneAssignment)
-                    : NeuroScenePlan.plan(job.sceneAssignment);
+            NeuroScenePlan scene=plannedSceneForJob(job);
             report.put("providerPrompt",job.providerRequests.getOrDefault("__diag.providerPrompt",
                     buildGenApiVisualPrompt(scene)));
             report.put("assignmentAdjusted",snapshot(job).get("assignmentAdjusted"));
@@ -2188,8 +2205,7 @@ public class NeuroReplacementPilotService {
         boolean ownerReviewed=simpleUpload ||
                 "Владелец одобрил видеоперсонажа и движения".equals(job.stage);
         try{
-            NeuroScenePlan scene=simpleUpload?NeuroScenePlan.plan(job.sceneAssignment):
-                    NeuroScenePlan.planForCharacter(job.sceneAssignment);
+            NeuroScenePlan scene=plannedSceneForJob(job);
             if(key==null||key.isBlank())
                 throw new IOException("NEURO_GENAPI_KEY_MISSING");
             String referenceKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
@@ -2551,7 +2567,7 @@ public class NeuroReplacementPilotService {
         // Owner review is persisted as a stage before this run is queued.
         boolean actingReviewApproved="Владелец подтвердил движения Kling".equals(job.stage);
         try {
-            NeuroScenePlan scene = job.sceneAssignment == null ? null : NeuroScenePlan.plan(job.sceneAssignment);
+            NeuroScenePlan scene = plannedSceneForJob(job);
             int expectedSeconds = scene == null ? VIDEO_DURATION_SECONDS : scene.durationSeconds();
             job.state = "processing";
             checkpoint(job);
@@ -3246,9 +3262,7 @@ public class NeuroReplacementPilotService {
             byte[] kling=paidKlingPreview(ownerUid,jobId); // paid GenAPI GET or cached direct Kling
             MediaProbe video=probeMp4(kling);
             int expected=job.sceneAssignment==null?VIDEO_DURATION_SECONDS:
-                    isCharacterWorkflow(job)
-                    ? NeuroScenePlan.planForCharacter(job.sceneAssignment).durationSeconds()
-                    : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds();
+                    plannedSceneForJob(job).durationSeconds();
             boolean durationValid=video.video && Double.isFinite(video.seconds) &&
                     video.seconds>=expected-0.7 && video.seconds<=expected+0.7;
             if(!durationValid) {
@@ -3508,9 +3522,7 @@ public class NeuroReplacementPilotService {
         byte[] result = download(lipSyncUrl, MAX_RESULT_BYTES);
         MediaProbe media = probeMp4(result);
         int sceneSeconds = job.sceneAssignment == null ? 10
-                : isCharacterWorkflow(job)
-                ? NeuroScenePlan.planForCharacter(job.sceneAssignment).durationSeconds()
-                : NeuroScenePlan.plan(job.sceneAssignment).durationSeconds();
+                : plannedSceneForJob(job).durationSeconds();
         boolean acceptedLength = job.sceneAssignment == null
                 ? media.seconds >= 8.0 && media.seconds <= 15.0
                 : media.seconds >= sceneSeconds - 0.7 && media.seconds <= sceneSeconds + 0.7;
