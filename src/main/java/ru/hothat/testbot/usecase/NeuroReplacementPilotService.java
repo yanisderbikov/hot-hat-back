@@ -2378,7 +2378,7 @@ public class NeuroReplacementPilotService {
         return "Photorealistic single continuous webcam take, exactly "+
                 scene.durationSeconds()+" seconds. @Element1 is the same real "+
                 "person: keep face, hair, age, clothing, skin and body. "+
-                "Reference video identifies the person; never copy its motions. "+
+                "Identity reference only; perform NEW actions, not the source gestures. "+
                 "The supplied first frame anchors the room. Exactly one actor, "+
                 "stable anatomy, natural hands, eyes, blinking and expression. "+
                 (backgroundLocked
