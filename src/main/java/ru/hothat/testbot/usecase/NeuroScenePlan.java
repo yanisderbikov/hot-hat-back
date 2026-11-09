@@ -139,10 +139,11 @@ public record NeuroScenePlan(
                   + "Do not move the camera or replace the room. Do not invent NEW background objects, " +
                   "but a handheld physical prop EXPLICITLY required by the user's assignment is allowed. ";
         String choreography = keyboard && picksObject
-                ? "ACTION PRIORITY 1: take a REAL computer keyboard with both hands from the desk just outside the frame, " +
-                  "raise it onto the top of the head, hold it securely with both hands while facing the camera and " +
-                  "performing the requested spoken line. The keyboard is deliberately requested, not a new room/background. " +
-                  (putsBack ? "ACTION PRIORITY 2 AFTER the spoken line: lower the keyboard carefully onto the same offscreen desk. " : "")
+                ? "ACTION PRIORITY 1: even if keyboard is ABSENT from the reference image/video, GENERATE " +
+                  "one solid realistic keyboard as a MOVING foreground prop, not a background change. " +
+                  "Hands carry it continuously UP from below frame, place it on the head and hold " +
+                  "with both hands during the spoken line facing camera. No teleporting or duplicate props. " +
+                  (putsBack ? "ACTION PRIORITY 2 AFTER speech: lower the SAME keyboard down below frame to the unseen desk. " : "")
                 : "";
         String timing = "TIMING: first allow " +
                 String.format(Locale.ROOT,"%.1f",Math.min(1.7, Math.max(.3,movement*.38))) +
