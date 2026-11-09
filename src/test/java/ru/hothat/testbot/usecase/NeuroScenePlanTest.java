@@ -134,6 +134,24 @@ class NeuroScenePlanTest {
     }
 
     @Test
+    void ownersKeyboardRapUsesEightSecondBudgetCeilingWithoutCuttingTheExactDialogue() {
+        String assignment="Пусть игрок возьмет клавиатуру в руки и поставит себе на голову "+
+                "и будет держать ее руками на голове, повернется лицом в камеру "+
+                "и скажет выразительно четко как рекламу - "+
+                "мы на яхте провисели две недели (пауза) и все это время ты жуешь коктейли. "+
+                "пусть эту рекламу он говорит как рэп читает, потом положит клавиатуру обратно на стол.";
+        var capped=NeuroScenePlan.planWithinSeconds(assignment,8);
+        assertTrue(capped.durationSeconds()<=8);
+        assertTrue(capped.durationSeconds()>=3);
+        assertEquals("мы на яхте провисели две недели ... и все это время ты жуешь коктейли",
+                capped.spokenText());
+        assertTrue(capped.videoPrompt().contains("keyboard"));
+        assertTrue(capped.speechStyle().contains("Russian rap"));
+        assertThrows(ResponseStatusException.class,
+                ()->NeuroScenePlan.planWithinSeconds(assignment,2));
+    }
+
+    @Test
     void shortHumanBriefUsesThreeSecondsWithNoUnnecessaryKlingVideoCharge() {
         var scene=NeuroScenePlan.plan("Сказать «Да» и улыбнуться.");
         assertEquals(3,scene.durationSeconds());
