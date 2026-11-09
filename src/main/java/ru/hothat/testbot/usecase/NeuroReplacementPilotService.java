@@ -2924,7 +2924,8 @@ public class NeuroReplacementPilotService {
         Job job=loadJobById(jobId);
         if(job==null||!ownerUid.equals(job.ownerUid))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
-        if(!GENAPI_REFERENCE_MODE.equals(job.providerRequests.get("character-mode")))
+        String characterMode=job.providerRequests.get("character-mode");
+        if(!GENAPI_REFERENCE_MODE.equals(characterMode) && !UPLOAD_MODE.equals(characterMode))
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "NEURO_MEDIA_PREFLIGHT_NOT_REFERENCE_MODE");
         Map<String,Object> result=new LinkedHashMap<>();
@@ -2934,9 +2935,11 @@ public class NeuroReplacementPilotService {
         try{
             byte[] video=objectStore.get(prefix+"-kling-reference.mp4");
             byte[] jpeg=objectStore.get(prefix+"-kling-still.jpg");
-            MediaProbe probe=probeMp4(video);
-            if(!probe.video || probe.seconds<7.7 || probe.seconds>8.3 ||
-                    jpeg==null||jpeg.length<2048||
+            // Use the exact strict 7.25s <= duration < 8s validation
+            // that guards the paid Kling POST. The former 7.7-8.3s
+            // diagnostic rejected our corrected 7.5s input as invalid.
+            verifyKlingElementReference(video);
+            if(jpeg==null||jpeg.length<2048||
                     (jpeg[0]&255)!=0xff||(jpeg[1]&255)!=0xd8)
                 throw new IOException("NEURO_MEDIA_PREFLIGHT_STORED_FILES_INVALID");
             String videoLink=cleanGenApiInputUrl(job,prefix+"-kling-reference.mp4","mp4");
