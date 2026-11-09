@@ -181,7 +181,7 @@ public record NeuroScenePlan(
         Matcher action = ACTION_AFTER_SPEECH.matcher(candidate);
         if (action.find()) candidate = candidate.substring(0, action.start()).trim();
         candidate=candidate.replace("(пауза)"," ... ").replace("(Пауза)"," ... ");
-        candidate=candidate.replace("(пауза)"," ... ").replace("(Пауза)"," ... ");
+        candidate = candidate.replaceAll("(?iuU)\\b(?:делает\\s+)?пауз[ауеы]\\b", " ... ");
         candidate = candidate.replaceAll("\\s*\\.\\.\\.\\s*", " ... ")
                 .replaceAll("\\s+", " ").replaceAll("^[\\s:—–-]+|[\\s,;—–-]+$", "").trim();
         return candidate;
