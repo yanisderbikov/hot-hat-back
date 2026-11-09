@@ -53,6 +53,17 @@ public record NeuroScenePlan(
     }
 
     /**
+     * A payer-specified duration ceiling for a single bot-room test.
+     * The same bound must be used in the free preview and the paid job;
+     * overlong dialogue is rejected before any paid provider submission.
+     */
+    public static NeuroScenePlan planWithinSeconds(String raw,int maxSeconds) {
+        if(maxSeconds<3 || maxSeconds>10)
+            throw invalid("NEURO_DURATION_CAP_INVALID");
+        return plan(raw,maxSeconds,3);
+    }
+
+    /**
      * Video character has 12-15 seconds for distinct spoken phrases,
      * gestures and walking out. Never squeeze the full brief into nine sec.
      * Legacy jobs retain the original 4-10-second contract unchanged.
