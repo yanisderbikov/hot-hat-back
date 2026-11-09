@@ -61,7 +61,7 @@ public class NeuroReplacementPilotController {
             @Parameter(description = "Добровольный предел длительности видео 3–10 секунд для бюджета теста")
             @RequestParam(name = "maxDurationSeconds", defaultValue = "10") int maxDurationSeconds) {
         check(owner, roomId);
-        return NeuroScenePlan.planWithinSeconds(assignment,maxDurationSeconds);
+        return pilot.previewGameScene(assignment,maxDurationSeconds);
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
