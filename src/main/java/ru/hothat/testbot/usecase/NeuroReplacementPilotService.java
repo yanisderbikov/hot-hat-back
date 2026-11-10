@@ -2207,6 +2207,41 @@ public class NeuroReplacementPilotService {
      * visual review the existing saved TTS, voice transfer and Lip Sync
      * pipeline completes the result. Explicit approval is mandatory.
      */
+    private record NeuroVoiceReady(String audioUrl,double tempo) {}
+
+    /**
+     * Order cheap TTS/voice FIRST and verify both audio durations BEFORE
+     * submitting paid Kling for game/upload. Paid IDs are reused via GET;
+     * this helper cannot resubmit a stage whose ID is already persisted.
+     *
+     * A 42s Chatterbox result for 8s video must never burn the video budget.
+     */
+    private NeuroVoiceReady prepareVerifiedNeuroVoice(Job job,NeuroScenePlan scene,
+                                                       byte[] referenceVoice,String voiceMime)
+            throws Exception {
+        job.state="processing";
+        job.stage="GenAPI Gemini TTS: проверяю точную короткую речь";checkpoint(job);
+        String tts=paidStage(job,"tts",()->submitJson(TTS_MODEL_ID,Map.of(
+                "prompt",scene.spokenText(),"voice","Puck",
+                "style_instructions",scene.speechStyle(),
+                "language_code","Russian (Russia)",
+                "model","gemini-2.5-flash-tts","output_format","mp3")));
+        job.stage="Проверка длины TTS до Chatterbox и Kling";checkpoint(job);
+        verifyExpressiveSpeechDuration(tts,scene);
+        byte[] refVoice=transcodeMedia(referenceVoice,
+                voiceMime.contains("wav")?"wav":
+                        voiceMime.equals("audio/mp4")?"m4a":"webm",
+                "wav",false,0);
+        job.stage="GenAPI Chatterbox: переношу индивидуальный голос";checkpoint(job);
+        String transferred=paidStage(job,"chatterbox-speech",
+                ()->submitMultipart("chatterbox-speech",
+                        Map.of("source_audio_url",tts),
+                        "target_voice_audio_url","reference.wav","audio/wav",refVoice));
+        job.stage="Проверка полного голоса и темпа до Kling";checkpoint(job);
+        double tempo=verifyExpressiveSpeechDuration(transferred,scene);
+        return new NeuroVoiceReady(transferred,tempo);
+    }
+
     private void processGenApiVisualReference(Job job,byte[] camera,
                                                String cameraMime,byte[] voice,
                                                String voiceMime) {
@@ -2218,6 +2253,13 @@ public class NeuroReplacementPilotService {
             NeuroScenePlan scene=plannedSceneForJob(job);
             if(key==null||key.isBlank())
                 throw new IOException("NEURO_GENAPI_KEY_MISSING");
+            // Bot-room and simple upload have no separate visual-review gate.
+            // Before spending ~448 RUB on 8s Kling, first generate/verify
+            // small-cost speech, including its actual duration and tempo.
+            // If TTS/voice is 42s as in c1aec325, reject without Kling POST.
+            NeuroVoiceReady preparedVoice=simpleUpload
+                    ? prepareVerifiedNeuroVoice(job,scene,voice,voiceMime)
+                    : null;
             String referenceKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
                     "-kling-reference.mp4";
             if(!job.providerRequests.containsKey(VIDEO_MODEL_ID)){
@@ -2295,23 +2337,10 @@ public class NeuroReplacementPilotService {
                 }
             }
             job.state="processing";
-            job.stage="GenAPI Gemini TTS: новая русская речь";checkpoint(job);
-            String tts=paidStage(job,"tts",()->submitJson(TTS_MODEL_ID,Map.of(
-                    "prompt",scene.spokenText(),"voice","Puck",
-                    "style_instructions",scene.speechStyle(),
-                    "language_code","Russian (Russia)",
-                    "model","gemini-2.5-flash-tts","output_format","mp3")));
-            byte[] refVoice=transcodeMedia(voice,
-                    voiceMime.contains("wav")?"wav":
-                            voiceMime.equals("audio/mp4")?"m4a":"webm",
-                    "wav",false,0);
-            job.stage="GenAPI Chatterbox: переношу индивидуальный голос";checkpoint(job);
-            String transferred=paidStage(job,"chatterbox-speech",
-                    ()->submitMultipart("chatterbox-speech",
-                            Map.of("source_audio_url",tts),
-                            "target_voice_audio_url","reference.wav","audio/wav",refVoice));
-            double tempo=verifyExpressiveSpeechDuration(transferred,scene);
-            String aligned=alignSpeechToActingTimeline(job,transferred,scene,tempo);
+            if(preparedVoice==null)
+                preparedVoice=prepareVerifiedNeuroVoice(job,scene,voice,voiceMime);
+            String aligned=alignSpeechToActingTimeline(job,
+                    preparedVoice.audioUrl(),scene,preparedVoice.tempo());
             // GenAPI must be able to GET and HEAD the full WAV before paid Lip Sync.
             checkGenApiMediaDownload(aligned,"audio/wav");
             job.stage="GenAPI Lip Sync: синхронизирую губы с новой речью";checkpoint(job);
