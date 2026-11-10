@@ -292,18 +292,25 @@ public class NeuroReplacementHistoryController {
 
     /** SCRUM-38: one historical paid Kling, new paid voice only by consent. */
     @GetMapping("/{jobId}/voice-rescue/quote")
-    @ApiResponse(responseCode="200", description="Бесплатный расчёт завершения уже оплаченного Kling без новых видеозаказов")
+    @ApiResponse(responseCode="200", description="Бесплатный расчёт завершения уже оплаченного Kling без новых видеозаказов",
+            content=@Content(mediaType="application/json",
+                    schema=@Schema(implementation=NeuroDetailedResponseDTO.VoiceRescueQuote.class)))
     public Map<String,Object> voiceRescueQuote(
             @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description="Сохранённый ID оплаченной попытки, доступный только владельцу")
             @PathVariable String jobId) {
         return pilot.voiceRescueQuote(owner.uid(),jobId);
     }
 
     @PostMapping("/{jobId}/voice-rescue/voice")
-    @ApiResponse(responseCode="200", description="Явно оплатить только новый короткий TTS и перенос голоса, затем прослушать WAV; Kling/LipSync не заказывать")
+    @ApiResponse(responseCode="200", description="Явно оплатить только новый короткий TTS и перенос голоса, затем прослушать WAV; Kling/LipSync не заказывать",
+            content=@Content(mediaType="application/json",
+                    schema=@Schema(implementation=NeuroJobResponseDTO.class)))
     public Map<String,Object> startVoiceRescue(
             @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description="Сохранённый ID оплаченной попытки, доступный только владельцу")
             @PathVariable String jobId,
+            @Parameter(description="Явное отдельное согласие владельца на оплату только выбранного этапа")
             @RequestParam(name="consented",defaultValue="false") boolean consented) {
         return pilot.startVoiceRescue(owner.uid(),jobId,consented);
     }
@@ -314,6 +321,7 @@ public class NeuroReplacementHistoryController {
                     schema=@Schema(type="string",format="binary")))
     public ResponseEntity<byte[]> voiceRescuePreview(
             @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description="Сохранённый ID оплаченной попытки, доступный только владельцу")
             @PathVariable String jobId) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
@@ -324,18 +332,25 @@ public class NeuroReplacementHistoryController {
 
     /** Free repair of a proven 404 BEFORE any paid Lip Sync POST. */
     @PostMapping("/{jobId}/voice-rescue/reset-media-404")
-    @ApiResponse(responseCode="200", description="Бесплатно снять блокировку после исправленной ошибки 404 временной ссылки оплаченного Kling, без нового запроса GenAPI")
+    @ApiResponse(responseCode="200", description="Бесплатно снять блокировку после исправленной ошибки 404 временной ссылки оплаченного Kling, без нового запроса GenAPI",
+            content=@Content(mediaType="application/json",
+                    schema=@Schema(implementation=NeuroJobResponseDTO.class)))
     public Map<String,Object> resetVoiceRescueMedia404(
             @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description="Сохранённый ID оплаченной попытки, доступный только владельцу")
             @PathVariable String jobId) {
         return pilot.resetVoiceRescueMedia404(owner.uid(),jobId);
     }
 
     @PostMapping("/{jobId}/voice-rescue/lipsync")
-    @ApiResponse(responseCode="200", description="После прослушивания отдельно оплатить только Lip Sync для старого Kling ID, без нового Kling/TTS/Chatterbox")
+    @ApiResponse(responseCode="200", description="После прослушивания отдельно оплатить только Lip Sync для старого Kling ID, без нового Kling/TTS/Chatterbox",
+            content=@Content(mediaType="application/json",
+                    schema=@Schema(implementation=NeuroJobResponseDTO.class)))
     public Map<String,Object> startLipSyncRescue(
             @AuthenticationPrincipal HotHatUser owner,
+            @Parameter(description="Сохранённый ID оплаченной попытки, доступный только владельцу")
             @PathVariable String jobId,
+            @Parameter(description="Явное отдельное согласие владельца на оплату только выбранного этапа")
             @RequestParam(name="consented",defaultValue="false") boolean consented) {
         return pilot.startLipSyncRescue(owner.uid(),jobId,consented);
     }
