@@ -322,6 +322,15 @@ public class NeuroReplacementHistoryController {
                 .body(pilot.voiceRescuePreview(owner.uid(),jobId));
     }
 
+    /** Free repair of a proven 404 BEFORE any paid Lip Sync POST. */
+    @PostMapping("/{jobId}/voice-rescue/reset-media-404")
+    @ApiResponse(responseCode="200", description="Бесплатно снять блокировку после исправленной ошибки 404 временной ссылки оплаченного Kling, без нового запроса GenAPI")
+    public Map<String,Object> resetVoiceRescueMedia404(
+            @AuthenticationPrincipal HotHatUser owner,
+            @PathVariable String jobId) {
+        return pilot.resetVoiceRescueMedia404(owner.uid(),jobId);
+    }
+
     @PostMapping("/{jobId}/voice-rescue/lipsync")
     @ApiResponse(responseCode="200", description="После прослушивания отдельно оплатить только Lip Sync для старого Kling ID, без нового Kling/TTS/Chatterbox")
     public Map<String,Object> startLipSyncRescue(
