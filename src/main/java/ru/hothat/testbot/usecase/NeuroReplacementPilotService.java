@@ -3101,6 +3101,18 @@ public class NeuroReplacementPilotService {
         }
     }
 
+    /**
+     * Preserve the player's true body/face proportions. The 2026-11-10 bot
+     * test stretched a 4:3 webcam JPEG directly to 1280x720 while the 7.5s
+     * identity clip used aspect-safe 16:9 letterboxing. GenAPI received two
+     * incompatible reference geometries. Produce a 16:9 JPEG using the SAME
+     * scale-to-fit + center padding geometry, never stretch the camera.
+     */
+    private static String roomStillAspectSafeFilter() {
+        return "scale=1280:720:force_original_aspect_ratio=decrease:flags=bilinear,"+
+                "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1";
+    }
+
     /** A still room reference directly from WebM; never transcode 10s HD MP4 just for a JPEG. */
     private byte[] extractRoomStillFromCamera(byte[] camera,String mime,double second) throws Exception {
         Path input=Files.createTempFile("neuro-character-room-",
@@ -3111,7 +3123,7 @@ public class NeuroReplacementPilotService {
             Process ffmpeg=new ProcessBuilder("ffmpeg","-hide_banner",
                     "-loglevel","error","-nostdin","-y","-threads","1",
                     "-ss",String.valueOf(second),"-i",input.toString(),
-                    "-frames:v","1","-vf","scale=1280:720:flags=bilinear",
+                    "-frames:v","1","-vf",roomStillAspectSafeFilter(),
                     "-q:v","3",output.toString()).redirectErrorStream(true).start();
             if(!ffmpeg.waitFor(30,TimeUnit.SECONDS)){
                 ffmpeg.destroyForcibly();
