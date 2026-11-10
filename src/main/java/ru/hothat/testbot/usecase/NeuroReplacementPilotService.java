@@ -293,6 +293,17 @@ public class NeuroReplacementPilotService {
                     checkpoint(job);
                     continue;
                 }
+                // A consented voice rescue is a DIFFERENT paid pipeline.
+                // Never let the generic startup worker replay the old 42s speech
+                // or reach Kling. Existing IDs remain saved for manual recovery.
+                if(job.providerRequests.containsKey(VOICE_RESCUE_PHASE)) {
+                    job.state="interrupted";
+                    job.stage="Восстановление речи прервано перезапуском; "+
+                            "проверь сохранённые платные ID";
+                    job.error="NEURO_VOICE_RESCUE_INTERRUPTED_NO_AUTOMATIC_PAID_RETRY";
+                    checkpoint(job);
+                    continue;
+                }
                 // Replace any pre-startup cached snapshot with the authoritative
                 // job that the recovery worker will update. Otherwise a GET
                 // racing ApplicationReadyEvent can cache an orphaned object.
@@ -395,6 +406,8 @@ public class NeuroReplacementPilotService {
             if (!(VIDEO_MODEL_ID.equals(entry.getKey()) ||
                     "tts".equals(entry.getKey()) ||
                     "chatterbox-speech".equals(entry.getKey()) ||
+                    VOICE_RESCUE_TTS.equals(entry.getKey()) ||
+                    VOICE_RESCUE_CHATTERBOX.equals(entry.getKey()) ||
                     "lipsync".equals(entry.getKey()))) continue;
             try {
                 String id = entry.getValue();
@@ -762,6 +775,287 @@ public class NeuroReplacementPilotService {
             }
         });
         return snapshot(job);
+    }
+
+
+    // SCRUM-38: ONE historical user-approved rescue. The original Kling MP4
+    // was paid for on 2026-11-10; never call a new Kling POST for this job.
+    private static final String VOICE_RESCUE_JOB_ID =
+            "c1aec325-5dc2-4b38-b395-01d9dedc8a19";
+    private static final String VOICE_RESCUE_PHASE = "__diag.voiceRescuePhase";
+    private static final String VOICE_RESCUE_TTS = "tts-rescue-v1";
+    private static final String VOICE_RESCUE_CHATTERBOX = "chatterbox-rescue-v1";
+    private static final String VOICE_RESCUE_STYLE =
+            "Read ONLY the given Russian line exactly once in a clear, rhythmic "+
+            "spoken advertising rap. Keep the natural brief pause. NO stage "+
+            "directions, repeated lines, introductions, singing or other words. "+
+            "Speech should fit naturally within seven seconds.";
+
+    private boolean voiceRescueOwnerJob(Job job, String ownerUid) {
+        return job != null && ownerUid.equals(job.ownerUid) &&
+                VOICE_RESCUE_JOB_ID.equals(job.id) &&
+                GAME_MODE.equals(job.providerRequests.get("character-mode")) &&
+                job.sceneAssignment != null && !job.sceneAssignment.isBlank() &&
+                job.providerRequests.containsKey(VIDEO_MODEL_ID) &&
+                job.providerRequests.containsKey("tts") &&
+                job.providerRequests.containsKey("chatterbox-speech") &&
+                job.sourceVoiceKey != null && job.voiceMime != null &&
+                job.finalVideoKey == null;
+    }
+
+    /** Read-only quote and recovery readiness. NEVER triggers a paid POST. */
+    public Map<String,Object> voiceRescueQuote(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        boolean correctJob=voiceRescueOwnerJob(job,ownerUid);
+        String phase=job.providerRequests.getOrDefault(VOICE_RESCUE_PHASE,"");
+        Map<String,Object> result=new LinkedHashMap<>();
+        result.put("jobId",jobId);
+        result.put("paidKlingReused",correctJob);
+        result.put("paidKlingId",correctJob?job.providerRequests.get(VIDEO_MODEL_ID):null);
+        result.put("newKlingCharge",false);
+        result.put("phase",phase);
+        result.put("voiceCanStart",correctJob && phase.isBlank() &&
+                "failed".equals(job.state) && job.error!=null &&
+                job.error.startsWith("NEURO_SPEECH_TOO_FAST_OR_SILENT") &&
+                !job.providerRequests.containsKey("lipsync") &&
+                job.submittingModel==null);
+        result.put("lipSyncCanStart",correctJob &&
+                "review".equals(job.state) && "voice-review".equals(phase) &&
+                !job.providerRequests.containsKey("lipsync") &&
+                job.submittingModel==null);
+        result.put("voiceRoublesEstimate",5);
+        result.put("lipSyncRoublesEstimate",(int)Math.ceil(
+                plannedSceneForJob(job)==null?27:
+                plannedSceneForJob(job).durationSeconds()*200.0/60.0));
+        result.put("estimateOnly",true);
+        result.put("note","Kling 57716859 is already paid. Only explicitly approved "+
+                "new TTS/Chatterbox and then Lip Sync may charge. "+
+                "Provider prices are not hard-capped. No automatic retries.");
+        return result;
+    }
+
+    /**
+     * Explicit payment #1: replace the 42s speech, preserving the original
+     * three paid request IDs. Never call paid Kling or Lip Sync here.
+     * PostgreSQL CAS makes the same owner click idempotent across instances.
+     */
+    public synchronized Map<String,Object> startVoiceRescue(String ownerUid,String jobId,
+                                                              boolean consented) {
+        if(!consented)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "EXPLICIT_NEW_TTS_CHATTERBOX_PAYMENT_CONSENT_REQUIRED");
+        if(!enabled || key==null || key.isBlank())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "GENAPI_API_KEY_NOT_CONFIGURED");
+        if(jdbc==null || objectStore==null || !objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_ARCHIVE_NOT_READY");
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(!voiceRescueOwnerJob(job,ownerUid) ||
+                !"failed".equals(job.state) || job.error==null ||
+                !job.error.startsWith("NEURO_SPEECH_TOO_FAST_OR_SILENT") ||
+                job.providerRequests.containsKey(VOICE_RESCUE_PHASE) ||
+                job.providerRequests.containsKey("lipsync") ||
+                job.submittingModel!=null)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_VOICE_RESCUE_NOT_ELIGIBLE_OR_ALREADY_CLAIMED");
+        int claimed=jdbc.update("""
+            UPDATE neuro_replacement_job
+               SET state='processing', stage='Восстановление: готовлю новую короткую речь',
+                   error_message=NULL,
+                   provider_requests=jsonb_set(provider_requests,
+                     '{__diag.voiceRescuePhase}', '"voice-running"'::jsonb, true)
+             WHERE job_id=? AND owner_uid=? AND state='failed'
+               AND error_message LIKE 'NEURO_SPEECH_TOO_FAST_OR_SILENT%'
+               AND final_video_key IS NULL AND submitting_model IS NULL
+               AND jsonb_exists(provider_requests,'kling-video-o3')
+               AND jsonb_exists(provider_requests,'tts')
+               AND jsonb_exists(provider_requests,'chatterbox-speech')
+               AND NOT jsonb_exists(provider_requests,'lipsync')
+               AND NOT jsonb_exists(provider_requests,'__diag.voiceRescuePhase')
+            """,jobId,ownerUid);
+        if(claimed!=1)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_VOICE_RESCUE_ALREADY_CLAIMED");
+        job.state="processing";
+        job.stage="Восстановление: готовлю новую короткую речь";
+        job.error=null;
+        job.providerRequests.put(VOICE_RESCUE_PHASE,"voice-running");
+        byRoom.put(job.roomId,job);
+        checkpoint(job);
+        executor.execute(()->runVoiceRescue(job));
+        return snapshot(job);
+    }
+
+    private void runVoiceRescue(Job job) {
+        try {
+            // Free safety gate: the original paid MP4 must already be playable.
+            byte[] existingVideo=paidKlingPreview(job.ownerUid,job.id);
+            MediaProbe media=probeMp4(existingVideo);
+            NeuroScenePlan scene=plannedSceneForJob(job);
+            if(!media.video || !Double.isFinite(media.seconds) ||
+                    Math.abs(media.seconds-scene.durationSeconds())>0.8)
+                throw new IOException("NEURO_RESCUE_PAID_VIDEO_UNUSABLE_NO_NEW_CHARGE");
+            byte[] voice=objectStore.get(job.sourceVoiceKey);
+            byte[] refVoice=transcodeMedia(voice,
+                    job.voiceMime.contains("wav")?"wav":
+                    job.voiceMime.equals("audio/mp4")?"m4a":"webm",
+                    "wav",false,0);
+            job.stage="Восстановление: новая короткая речь Gemini TTS";checkpoint(job);
+            String tts=paidStage(job,VOICE_RESCUE_TTS,
+                    ()->submitJson(TTS_MODEL_ID,Map.of(
+                    "prompt",scene.spokenText(),"voice","Puck",
+                    "style_instructions",VOICE_RESCUE_STYLE,
+                    "language_code","Russian (Russia)",
+                    "model","gemini-2.5-flash-tts","output_format","mp3")));
+            job.stage="Восстановление: проверяю TTS до оплаты переноса голоса";
+            checkpoint(job);
+            verifyExpressiveSpeechDuration(tts,scene);
+            job.stage="Восстановление: перенос твоего голоса";checkpoint(job);
+            String transferred=paidStage(job,VOICE_RESCUE_CHATTERBOX,
+                    ()->submitMultipart("chatterbox-speech",
+                            Map.of("source_audio_url",tts),
+                            "target_voice_audio_url","reference.wav","audio/wav",refVoice));
+            job.stage="Восстановление: проверяю длительность и темп голоса";
+            checkpoint(job);
+            double tempo=verifyExpressiveSpeechDuration(transferred,scene);
+            String aligned=alignSpeechToActingTimeline(job,transferred,scene,tempo);
+            checkGenApiMediaDownload(aligned,"audio/wav");
+            job.providerRequests.put(VOICE_RESCUE_PHASE,"voice-review");
+            job.stage="Новая речь готова. Прослушай её перед оплатой Lip Sync";
+            job.state="review";
+            job.error=null;
+            checkpoint(job);
+        }catch(Exception ex){
+            if(ex instanceof InterruptedException || Thread.currentThread().isInterrupted())
+                return;
+            job.state="failed";
+            job.stage="Восстановление голоса остановлено; платные ID не повторять";
+            String detail=String.valueOf(ex.getMessage());
+            job.error=detail.substring(0,Math.min(350,detail.length()));
+            job.providerRequests.put(VOICE_RESCUE_PHASE,"voice-failed");
+            checkpoint(job);
+            LOG.warn("One-time paid voice rescue failed job={} reason={}",
+                    job.id,ex.getClass().getSimpleName());
+        }
+    }
+
+    /** Free GET from the same S3 WAV that would be sent to Lip Sync. */
+    public byte[] voiceRescuePreview(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(!voiceRescueOwnerJob(job,ownerUid) ||
+                !"voice-review".equals(job.providerRequests.get(VOICE_RESCUE_PHASE)))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "NEURO_RESCUE_VOICE_NOT_READY");
+        try {
+            byte[] wav=objectStore.get("neuro-replacements/"+ownerUid+"/"+jobId+
+                    "-lipsync-voice.wav");
+            if(wav==null || wav.length<10000)
+                throw new IOException("NEURO_RESCUE_VOICE_MISSING");
+            return wav;
+        }catch(Exception ex){
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_RESCUE_VOICE_NOT_READY");
+        }
+    }
+
+    /**
+     * Explicit payment #2 AFTER listening: reuse Kling from S3, submit ONLY
+     * Lip Sync. Never resubmit Kling, TTS or Chatterbox in this worker.
+     */
+    public synchronized Map<String,Object> startLipSyncRescue(String ownerUid,String jobId,
+                                                                boolean consented) {
+        if(!consented)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "EXPLICIT_ONLY_LIPSYNC_PAYMENT_CONSENT_REQUIRED");
+        if(!enabled || key==null || key.isBlank())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "GENAPI_API_KEY_NOT_CONFIGURED");
+        if(jdbc==null || objectStore==null || !objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_ARCHIVE_NOT_READY");
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(!voiceRescueOwnerJob(job,ownerUid) ||
+                !"review".equals(job.state) ||
+                !"voice-review".equals(job.providerRequests.get(VOICE_RESCUE_PHASE)) ||
+                job.providerRequests.containsKey("lipsync") ||
+                !job.providerRequests.containsKey(VOICE_RESCUE_TTS) ||
+                !job.providerRequests.containsKey(VOICE_RESCUE_CHATTERBOX) ||
+                job.submittingModel!=null)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_RESCUE_LIPSYNC_NOT_ELIGIBLE_OR_ALREADY_CLAIMED");
+        int claimed=jdbc.update("""
+            UPDATE neuro_replacement_job
+               SET state='processing', stage='Восстановление: только Lip Sync на оплаченном Kling',
+                   error_message=NULL,
+                   provider_requests=jsonb_set(provider_requests,
+                     '{__diag.voiceRescuePhase}', '"lip-running"'::jsonb, true)
+             WHERE job_id=? AND owner_uid=? AND state='review'
+               AND final_video_key IS NULL AND submitting_model IS NULL
+               AND provider_requests->>'__diag.voiceRescuePhase'='voice-review'
+               AND jsonb_exists(provider_requests,'kling-video-o3')
+               AND jsonb_exists(provider_requests,'tts-rescue-v1')
+               AND jsonb_exists(provider_requests,'chatterbox-rescue-v1')
+               AND NOT jsonb_exists(provider_requests,'lipsync')
+            """,jobId,ownerUid);
+        if(claimed!=1)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_RESCUE_LIPSYNC_ALREADY_CLAIMED");
+        job.state="processing";
+        job.stage="Восстановление: только Lip Sync на оплаченном Kling";
+        job.error=null;
+        job.providerRequests.put(VOICE_RESCUE_PHASE,"lip-running");
+        byRoom.put(job.roomId,job);
+        checkpoint(job);
+        executor.execute(()->runLipSyncRescue(job));
+        return snapshot(job);
+    }
+
+    private void runLipSyncRescue(Job job) {
+        try {
+            NeuroScenePlan scene=plannedSceneForJob(job);
+            byte[] existingVideo=paidKlingPreview(job.ownerUid,job.id);
+            MediaProbe media=probeMp4(existingVideo);
+            if(!media.video || Math.abs(media.seconds-scene.durationSeconds())>0.8)
+                throw new IOException("NEURO_RESCUE_OLD_KLING_INVALID_NO_NEW_CHARGE");
+            String prefix="neuro-replacements/"+job.ownerUid+"/"+job.id;
+            String video=cleanGenApiInputUrl(job,prefix+"-paid-kling.mp4","mp4");
+            String audio=cleanGenApiInputUrl(job,prefix+"-lipsync-voice.wav","wav");
+            checkGenApiMediaDownload(video,"video/mp4");
+            checkGenApiMediaDownload(audio,"audio/wav");
+            job.stage="Восстановление: оплачивается только Lip Sync";checkpoint(job);
+            String finished=paidStage(job,"lipsync",()->submitJson("lipsync",Map.of(
+                    "video_url",video,"audio_url",audio,
+                    "model","lipsync-1.9.0-beta","sync_mode",LIPSYNC_SYNC_MODE)));
+            byte[] result=recoverPaidLipSyncVideo(job,finished);
+            verifyPlayableMp4(result,scene.durationSeconds());
+            String archiveKey=prefix+".mp4";
+            objectStore.put(archiveKey,result,"video/mp4");
+            job.finalVideo=finished;
+            job.finalVideoKey=archiveKey;
+            job.state="ready";
+            job.stage="Готово: восстановлено на прежнем оплаченном Kling";
+            job.error=null;
+            job.providerRequests.put(VOICE_RESCUE_PHASE,"ready");
+            checkpoint(job);
+        }catch(Exception ex){
+            if(ex instanceof InterruptedException || Thread.currentThread().isInterrupted())
+                return;
+            job.state="failed";
+            job.stage="Восстановление Lip Sync остановлено; платные ID не повторять";
+            String detail=String.valueOf(ex.getMessage());
+            job.error=detail.substring(0,Math.min(350,detail.length()));
+            job.providerRequests.put(VOICE_RESCUE_PHASE,"lip-failed");
+            checkpoint(job);
+            LOG.warn("One-time lip rescue failed job={} reason={}",
+                    job.id,ex.getClass().getSimpleName());
+        }
     }
 
     /**
@@ -1932,6 +2226,7 @@ public class NeuroReplacementPilotService {
             if(!name.startsWith("__diag."))publicIds.put(name,id);
         });
         result.put("providerRequests", publicIds);
+        result.put("voiceRescuePhase",job.providerRequests.getOrDefault(VOICE_RESCUE_PHASE,""));
         result.put("timeline", timeline(job));
         if (job.error != null) {
             result.put("error", job.error);
