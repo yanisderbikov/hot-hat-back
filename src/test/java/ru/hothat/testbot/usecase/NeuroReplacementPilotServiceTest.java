@@ -1343,8 +1343,10 @@ class NeuroReplacementPilotServiceTest {
         when(row.getString(11)).thenReturn("archived-voice");
         when(row.getString(13)).thenReturn("audio/wav");
         when(row.getString(16)).thenReturn(
-                "Пусть игрок возьмет клавиатуру и читает рэп: "+
-                "мы на яхте провисели две недели (пауза) и все это время ты жуешь коктейли.");
+                "Пусть игрок возьмет клавиатуру в руки и поставит себе на голову и будет держать ее руками на голове, "+
+                "повернется лицом в камеру и скажет выразительно четко как рекламу - "+
+                "мы на яхте провисели две недели (пауза) и все это время ты жуешь коктейли. "+
+                "пусть эту рекламу он говорит как рэп читает, потом положит клавиатуру обратно в невидимую зону на стол.");
         when(db.query(anyString(),any(RowMapper.class),eq(id)))
                 .thenAnswer(c->List.of(((RowMapper)c.getArgument(1)).mapRow(row,0)));
         assertEquals(true,pilot.voiceRescueQuote(owner,id).get("lipSyncCanStart"));
