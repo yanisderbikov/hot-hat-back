@@ -1002,6 +1002,14 @@ public class NeuroReplacementPilotService {
             if(voice==null || voice.length<10000 || voice.length>MAX_VOICE_BYTES ||
                     voice[0]!='R' || voice[1]!='I' || voice[2]!='F' || voice[3]!='F')
                 throw new IOException("BAD_RESCUE_VOICE");
+            // FREE preflight: prove that GenAPI will be able to download
+            // BOTH exact archived media with fresh temporary capability URLs.
+            // This caught the original 404 before any billable Lip Sync POST.
+            String prefix="neuro-replacements/"+ownerUid+"/"+jobId;
+            String videoUrl=cleanGenApiInputUrl(job,prefix+"-paid-kling.mp4","mp4");
+            String audioUrl=cleanGenApiInputUrl(job,prefix+"-lipsync-voice.wav","wav");
+            checkGenApiMediaDownload(videoUrl,"video/mp4");
+            checkGenApiMediaDownload(audioUrl,"audio/wav");
         }catch(Exception notReady){
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "NEURO_RESCUE_ARCHIVED_MEDIA_NOT_READY");
@@ -3591,7 +3599,7 @@ public class NeuroReplacementPilotService {
             int count;
             while((count=stream.read(buffer))!=-1){
                 total+=count;
-                if(total>("audio/wav".equals(expectedType)?MAX_VOICE_BYTES:MAX_VIDEO_BYTES))
+                if(total>("audio/wav".equals(expectedType)?MAX_VOICE_BYTES:MAX_RESULT_BYTES))
                     throw new IOException("NEURO_MEDIA_PREFLIGHT_TOO_LARGE");
             }
         }
@@ -3710,7 +3718,9 @@ public class NeuroReplacementPilotService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_INVALID");
         }
         byte[] mp4=objectStore.get(keyPath);
-        if(mp4==null || mp4.length<256 || mp4.length>(extension.equals("wav") ? MAX_VOICE_BYTES : MAX_VIDEO_BYTES)) {
+        int maxBytes=extension.equals("wav") ? MAX_VOICE_BYTES :
+                keyPath.endsWith("-paid-kling.mp4") ? MAX_RESULT_BYTES : MAX_VIDEO_BYTES;
+        if(mp4==null || mp4.length<256 || mp4.length>maxBytes) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_MEDIA_INVALID");
         }
         return mp4;
