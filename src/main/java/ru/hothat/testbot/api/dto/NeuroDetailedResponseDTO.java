@@ -83,6 +83,21 @@ public final class NeuroDetailedResponseDTO {
             @Schema(description = "Результат проверки обоих референсов") String check,
             @Schema(description = "Техническая причина недоступности референса") String technicalReason) {}
 
+    @Schema(name = "NeuroVoiceRescueQuoteResponse",
+            description = "Бесплатная проверка восстановления только речи и губ на ранее оплаченном Kling")
+    public record VoiceRescueQuote(
+            @Schema(description = "ID исходного оплаченного задания") String jobId,
+            @Schema(description = "Будет ли использован ранее оплаченный ролик") boolean paidKlingReused,
+            @Schema(description = "Сохранённый ID ранее оплаченного Kling") String paidKlingId,
+            @Schema(description = "Будет ли новая оплата Kling, всегда false") boolean newKlingCharge,
+            @Schema(description = "Текущий этап восстановления речи") String phase,
+            @Schema(description = "Можно ли отдельно оплатить подготовку новой речи") boolean voiceCanStart,
+            @Schema(description = "Можно ли после прослушивания отдельно оплатить Lip Sync") boolean lipSyncCanStart,
+            @Schema(description = "Ориентировочная стоимость TTS и Chatterbox, рубли") int voiceRoublesEstimate,
+            @Schema(description = "Ориентировочная стоимость Lip Sync, рубли") int lipSyncRoublesEstimate,
+            @Schema(description = "Стоимость является оценкой, а не лимитом") boolean estimateOnly,
+            @Schema(description = "Защита от повторной оплаты") String note) {}
+
     @Schema(name = "NeuroDiagnosticReportResponse",
             description = "Read-only archive of one AI generation: exact prompts, stage timeline, GenAPI task IDs, safe provider errors and reported costs")
     public record DiagnosticReport(
