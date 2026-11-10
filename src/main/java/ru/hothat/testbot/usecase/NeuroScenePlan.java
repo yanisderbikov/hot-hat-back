@@ -160,13 +160,18 @@ public record NeuroScenePlan(
                 "The actor mouths the words while actually speaking them, not before or after; " +
                 "outside speech the mouth stays naturally closed. " + END;
         if (videoPrompt.length() > 2500) throw invalid("NEURO_PROVIDER_PROMPT_TOO_LONG");
-        String speechStyle = "Speak the EXACT Russian quotation clearly with the target player's " +
-                "natural, warm, conversational rhythm, full pronunciation, and appropriate " +
-                "expressive emotion. Preserve all specified pauses and punctuation. " +
-                "Do not hurry or read stage directions aloud. No extra words. " +
-                (rap ? "Read the exact words like clear, expressive spoken Russian rap with a steady beat, " +
-                  "strong rhythmic accents and audible pauses, WITHOUT music or singing. " : "") +
-                "Delivery directions: " + brief;
+        // TTS instructions MUST NOT repeat the full scene assignment.
+        // The 2026-11-10 paid bot test produced 42.12s of speech for an 8s
+        // video. Long "Delivery directions: <full brief>" risk Gemini
+        // speaking those stage directions as if they were dialogue.
+        // The provider's separate "prompt" contains ONLY spokenText.
+        String speechStyle = "Read only the provided Russian spoken text exactly ONCE. " +
+                "No stage directions, commentary, introductions, repetitions or added words. " +
+                "Clear, natural pronunciation. Observe the written pause. " +
+                (rap ? "Expressive spoken advertising Russian rap with steady rhythmic " +
+                        "accents, NOT singing; no background music. " :
+                        "Natural conversational delivery with expressive emphasis. ") +
+                "Do not speak the instruction text.";
         return new NeuroScenePlan(brief, spoken, seconds, start, videoPrompt, speechStyle);
     }
 
