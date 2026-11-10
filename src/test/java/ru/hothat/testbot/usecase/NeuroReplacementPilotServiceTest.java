@@ -1260,4 +1260,99 @@ class NeuroReplacementPilotServiceTest {
                 ()->pilot.publicVoiceReference("not-a-token")).getStatusCode());
     }
 
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void paidKlingRescueRequiresNewVoiceConsentAndDbClaimWithoutAnyKlingPost() throws Exception {
+        assertEquals(HttpStatus.BAD_REQUEST,assertThrows(ResponseStatusException.class,
+                ()->pilot.startVoiceRescue("owner-1",
+                        "c1aec325-5dc2-4b38-b395-01d9dedc8a19",false)).getStatusCode());
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","simulation-only");
+        ru.hothat.common.storage.ObjectStore archive=mock(
+                ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        JdbcTemplate db=mock(JdbcTemplate.class); pilot.setJdbcTemplate(db);
+        ResultSet row=mock(ResultSet.class);
+        String id="c1aec325-5dc2-4b38-b395-01d9dedc8a19",owner="owner-1";
+        when(row.getString(1)).thenReturn(id);
+        when(row.getString(2)).thenReturn("hat-d45707f760dd8002");
+        when(row.getString(3)).thenReturn(owner);
+        when(row.getString(4)).thenReturn("failed");
+        when(row.getString(5)).thenReturn("GenAPI: speech gate");
+        when(row.getString(6)).thenReturn(
+                "{\"character-mode\":\"genapi-game-o3-reference-10\","+
+                "\"kling-video-o3\":\"57716859\",\"tts\":\"57716951\","+
+                "\"chatterbox-speech\":\"57716960\","+
+                "\"__diag.maxDurationSeconds\":\"8\"}");
+        when(row.getString(8)).thenReturn(
+                "NEURO_SPEECH_TOO_FAST_OR_SILENT voiced=34.5s lastSpeech=41.9s "+
+                "fullFile=42.12s available=7.4s requiredTempo=5.675");
+        when(row.getString(10)).thenReturn("archived-camera");
+        when(row.getString(11)).thenReturn("archived-voice");
+        when(row.getString(12)).thenReturn("video/webm");
+        when(row.getString(13)).thenReturn("audio/wav");
+        when(row.getString(16)).thenReturn(
+                "Пусть игрок возьмет клавиатуру в руки и поставит себе на голову, "+
+                "повернется лицом в камеру и скажет как рэп - "+
+                "мы на яхте провисели две недели (пауза) и все это время ты жуешь коктейли. "+
+                "потом положит клавиатуру обратно на стол.");
+        when(db.query(anyString(),any(RowMapper.class),eq(id)))
+                .thenAnswer(c->List.of(((RowMapper)c.getArgument(1)).mapRow(row,0)));
+        Map<String,Object> quote=pilot.voiceRescueQuote(owner,id);
+        assertEquals(true,quote.get("voiceCanStart"));
+        assertEquals(false,quote.get("newKlingCharge"));
+        assertEquals("57716859",quote.get("paidKlingId"));
+        // Concurrent owner click already claimed the same row: no worker is
+        // queued and therefore no provider may receive a POST.
+        when(db.update(anyString(),eq(id),eq(owner))).thenReturn(0);
+        ResponseStatusException conflict=assertThrows(ResponseStatusException.class,
+                ()->pilot.startVoiceRescue(owner,id,true));
+        assertEquals(HttpStatus.CONFLICT,conflict.getStatusCode());
+        assertTrue(conflict.getReason().contains("ALREADY_CLAIMED"));
+        verify(db,times(1)).update(anyString(),eq(id),eq(owner));
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked","rawtypes"})
+    void lipSyncRescueCannotDoubleChargeOrUseUnreviewedVoice() throws Exception {
+        assertEquals(HttpStatus.BAD_REQUEST,assertThrows(ResponseStatusException.class,
+                ()->pilot.startLipSyncRescue("owner-1",
+                        "c1aec325-5dc2-4b38-b395-01d9dedc8a19",false)).getStatusCode());
+        ReflectionTestUtils.setField(pilot,"enabled",true);
+        ReflectionTestUtils.setField(pilot,"key","simulation-only");
+        ru.hothat.common.storage.ObjectStore archive=mock(
+                ru.hothat.common.storage.ObjectStore.class);
+        when(archive.configured()).thenReturn(true);
+        pilot.setObjectStore(archive);
+        JdbcTemplate db=mock(JdbcTemplate.class);pilot.setJdbcTemplate(db);
+        ResultSet row=mock(ResultSet.class);
+        String id="c1aec325-5dc2-4b38-b395-01d9dedc8a19",owner="owner-1";
+        when(row.getString(1)).thenReturn(id);
+        when(row.getString(2)).thenReturn("hat-d45707f760dd8002");
+        when(row.getString(3)).thenReturn(owner);
+        when(row.getString(4)).thenReturn("review");
+        when(row.getString(6)).thenReturn(
+                "{\"character-mode\":\"genapi-game-o3-reference-10\","+
+                "\"kling-video-o3\":\"57716859\",\"tts\":\"57716951\","+
+                "\"chatterbox-speech\":\"57716960\","+
+                "\"tts-rescue-v1\":\"new-tts\","+
+                "\"chatterbox-rescue-v1\":\"new-voice\","+
+                "\"__diag.voiceRescuePhase\":\"voice-review\","+
+                "\"__diag.maxDurationSeconds\":\"8\"}");
+        when(row.getString(11)).thenReturn("archived-voice");
+        when(row.getString(13)).thenReturn("audio/wav");
+        when(row.getString(16)).thenReturn(
+                "Пусть игрок возьмет клавиатуру и читает рэп: "+
+                "мы на яхте провисели две недели (пауза) и все это время ты жуешь коктейли.");
+        when(db.query(anyString(),any(RowMapper.class),eq(id)))
+                .thenAnswer(c->List.of(((RowMapper)c.getArgument(1)).mapRow(row,0)));
+        assertEquals(true,pilot.voiceRescueQuote(owner,id).get("lipSyncCanStart"));
+        when(db.update(anyString(),eq(id),eq(owner))).thenReturn(0);
+        ResponseStatusException conflict=assertThrows(ResponseStatusException.class,
+                ()->pilot.startLipSyncRescue(owner,id,true));
+        assertEquals(HttpStatus.CONFLICT,conflict.getStatusCode());
+        assertTrue(conflict.getReason().contains("ALREADY_CLAIMED"));
+    }
+
 }
