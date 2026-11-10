@@ -290,6 +290,47 @@ public class NeuroReplacementHistoryController {
         return pilot.inspectProvider(owner.uid(),jobId);
     }
 
+    /** SCRUM-38: one historical paid Kling, new paid voice only by consent. */
+    @GetMapping("/{jobId}/voice-rescue/quote")
+    @ApiResponse(responseCode="200", description="Бесплатный расчёт завершения уже оплаченного Kling без новых видеозаказов")
+    public Map<String,Object> voiceRescueQuote(
+            @AuthenticationPrincipal HotHatUser owner,
+            @PathVariable String jobId) {
+        return pilot.voiceRescueQuote(owner.uid(),jobId);
+    }
+
+    @PostMapping("/{jobId}/voice-rescue/voice")
+    @ApiResponse(responseCode="200", description="Явно оплатить только новый короткий TTS и перенос голоса, затем прослушать WAV; Kling/LipSync не заказывать")
+    public Map<String,Object> startVoiceRescue(
+            @AuthenticationPrincipal HotHatUser owner,
+            @PathVariable String jobId,
+            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+        return pilot.startVoiceRescue(owner.uid(),jobId,consented);
+    }
+
+    @GetMapping("/{jobId}/rescue-voice-preview")
+    @ApiResponse(responseCode="200", description="Прослушать готовый короткий WAV после переноса голоса без платных запросов",
+            content=@Content(mediaType="audio/wav",
+                    schema=@Schema(type="string",format="binary")))
+    public ResponseEntity<byte[]> voiceRescuePreview(
+            @AuthenticationPrincipal HotHatUser owner,
+            @PathVariable String jobId) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL,"private, no-store")
+                .header(HttpHeaders.CONTENT_DISPOSITION,"inline; filename=hot-hat-rescue-voice.wav")
+                .contentType(MediaType.parseMediaType("audio/wav"))
+                .body(pilot.voiceRescuePreview(owner.uid(),jobId));
+    }
+
+    @PostMapping("/{jobId}/voice-rescue/lipsync")
+    @ApiResponse(responseCode="200", description="После прослушивания отдельно оплатить только Lip Sync для старого Kling ID, без нового Kling/TTS/Chatterbox")
+    public Map<String,Object> startLipSyncRescue(
+            @AuthenticationPrincipal HotHatUser owner,
+            @PathVariable String jobId,
+            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+        return pilot.startLipSyncRescue(owner.uid(),jobId,consented);
+    }
+
     @PostMapping("/{jobId}/recover")
     @ApiResponse(responseCode = "200", description = "Бесплатно восстановить уже оплаченный Lip Sync MP4 по сохранённым ID, без новых запросов генерации",
             content = @Content(mediaType = "application/json",
