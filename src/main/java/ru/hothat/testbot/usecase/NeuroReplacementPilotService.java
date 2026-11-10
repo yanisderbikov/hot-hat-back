@@ -964,6 +964,78 @@ public class NeuroReplacementPilotService {
     }
 
     /**
+     * Reset precisely the 2026-11-10 FREE HTTP 404 media preflight that
+     * failed before ANY Lip Sync network POST. This is NOT a paid retry.
+     * A PostgreSQL compare-and-swap proves the old failure is unchanged,
+     * no Lip Sync task ID exists, and no provider submission is in flight.
+     * The owner must explicitly consent again to the paid Lip Sync.
+     */
+    public synchronized Map<String,Object> resetVoiceRescueMedia404(
+            String ownerUid,String jobId) {
+        if(jdbc==null || objectStore==null || !objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_ARCHIVE_NOT_READY");
+        Job job=loadJobById(jobId);
+        if(job==null || !ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        final String preflightCode="NEURO_MEDIA_PREFLIGHT_UNREACHABLE_video_mp4_HTTP_404";
+        if(!voiceRescueOwnerJob(job,ownerUid) ||
+                !"failed".equals(job.state) ||
+                !preflightCode.equals(job.error) ||
+                !"lip-failed".equals(job.providerRequests.get(VOICE_RESCUE_PHASE)) ||
+                !job.providerRequests.containsKey(VOICE_RESCUE_TTS) ||
+                !job.providerRequests.containsKey(VOICE_RESCUE_CHATTERBOX) ||
+                job.providerRequests.containsKey("lipsync") ||
+                job.submittingModel!=null)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_MEDIA_PREFLIGHT_RESET_NOT_ELIGIBLE");
+        // Confirm the original paid video and prepared WAV still exist BEFORE
+        // making the reset available. Both reads are private and non-billable.
+        try {
+            byte[] kling=paidKlingPreview(ownerUid,jobId);
+            MediaProbe info=probeMp4(kling);
+            NeuroScenePlan scene=plannedSceneForJob(job);
+            if(!info.video || Math.abs(info.seconds-scene.durationSeconds())>0.8)
+                throw new IOException("BAD_PAID_KLING");
+            byte[] voice=objectStore.get("neuro-replacements/"+ownerUid+"/"+jobId+
+                    "-lipsync-voice.wav");
+            if(voice==null || voice.length<10000 || voice.length>MAX_VOICE_BYTES ||
+                    voice[0]!='R' || voice[1]!='I' || voice[2]!='F' || voice[3]!='F')
+                throw new IOException("BAD_RESCUE_VOICE");
+        }catch(Exception notReady){
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_RESCUE_ARCHIVED_MEDIA_NOT_READY");
+        }
+        int claimed=jdbc.update("""
+            UPDATE neuro_replacement_job
+               SET state='review',
+                   stage='Короткий голос одобрен. Повторно подтверди только Lip Sync',
+                   error_message=NULL,
+                   provider_requests=jsonb_set(provider_requests,
+                       '{__diag.voiceRescuePhase}', '"voice-review"'::jsonb,true)
+             WHERE job_id=? AND owner_uid=?
+               AND state='failed'
+               AND error_message='NEURO_MEDIA_PREFLIGHT_UNREACHABLE_video_mp4_HTTP_404'
+               AND final_video_key IS NULL AND submitting_model IS NULL
+               AND provider_requests->>'__diag.voiceRescuePhase'='lip-failed'
+               AND jsonb_exists(provider_requests,'kling-video-o3')
+               AND jsonb_exists(provider_requests,'tts-rescue-v1')
+               AND jsonb_exists(provider_requests,'chatterbox-rescue-v1')
+               AND NOT jsonb_exists(provider_requests,'lipsync')
+            """,jobId,ownerUid);
+        if(claimed!=1)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_MEDIA_PREFLIGHT_RESET_ALREADY_CLAIMED");
+        job.state="review";
+        job.stage="Короткий голос одобрен. Повторно подтверди только Lip Sync";
+        job.error=null;
+        job.providerRequests.put(VOICE_RESCUE_PHASE,"voice-review");
+        byRoom.put(job.roomId,job);
+        checkpoint(job);
+        return snapshot(job);
+    }
+
+    /**
      * Explicit payment #2 AFTER listening: reuse Kling from S3, submit ONLY
      * Lip Sync. Never resubmit Kling, TTS or Chatterbox in this worker.
      */
@@ -3631,7 +3703,9 @@ public class NeuroReplacementPilotService {
         boolean authorizedType=extension.equals("wav")
                 ? keyPath.endsWith("-lipsync-voice.wav")
                 : extension.equals("jpg") ? keyPath.endsWith("-kling-still.jpg")
-                : extension.equals("mp4") && keyPath.endsWith("-kling-reference.mp4");
+                : extension.equals("mp4") &&
+                  (keyPath.endsWith("-kling-reference.mp4") ||
+                   keyPath.endsWith("-paid-kling.mp4"));
         if (!keyPath.startsWith("neuro-replacements/") || !authorizedType) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_REFERENCE_INVALID");
         }
