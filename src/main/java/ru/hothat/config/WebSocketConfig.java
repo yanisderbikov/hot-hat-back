@@ -11,6 +11,7 @@ import ru.hothat.realtime.ws.ChannelHandshakeAuthenticator;
 import ru.hothat.realtime.ws.ConferenceSocketHandler;
 import ru.hothat.realtime.ws.DirectChatSocketHandler;
 import ru.hothat.realtime.ws.LobbySocketHandler;
+import ru.hothat.realtime.ws.LiveAvatarSocketHandler;
 import ru.hothat.realtime.ws.MemeLibrarySocketHandler;
 import ru.hothat.realtime.ws.PreflightSocketHandler;
 import ru.hothat.realtime.ws.RecorderSocketHandler;
@@ -55,6 +56,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     private final MemeLibrarySocketHandler memeLibrarySocketHandler;
     private final RecorderSocketHandler recorderSocketHandler;
     private final ConferenceSocketHandler conferenceSocketHandler;
+    private final LiveAvatarSocketHandler liveAvatarSocketHandler;
     private final ChannelHandshakeAuthenticator handshakeAuthenticator;
 
     /** Тот же список, что у CORS в {@link WebSecurityConfig}: одно окружение — одни источники. */
@@ -81,6 +83,8 @@ public class WebSocketConfig implements WebSocketConfigurer {
         // Восьмой канал — видео-чат: состав, лента и заведённая из него комната
         // одним кадром, вместо двух опросов, которыми жила страница в dev.
         register(registry, conferenceSocketHandler, "/ws/v2/conference/*");
+        // Universal ephemeral alpha avatars for authenticated friends/chats/game UIs.
+        register(registry, liveAvatarSocketHandler, "/ws/v2/avatars");
     }
 
     private void register(WebSocketHandlerRegistry registry,
