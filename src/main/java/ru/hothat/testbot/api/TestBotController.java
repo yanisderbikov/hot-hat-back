@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -27,12 +28,14 @@ import ru.hothat.testbot.api.dto.IssueTestBotVideoTokenRequestDTO;
 import ru.hothat.testbot.api.dto.SynthesizeSpeechRequestDTO;
 import ru.hothat.testbot.api.dto.SynthesizedSpeechResponseDTO;
 import ru.hothat.testbot.api.dto.TestBotSquadResponseDTO;
+import ru.hothat.testbot.api.dto.ReleasedTestBotResponseDTO;
 import ru.hothat.testbot.api.dto.TestBotTurnResponseDTO;
 import ru.hothat.testbot.api.dto.TestBotVideoTokenResponseDTO;
 import ru.hothat.testbot.usecase.AdvanceTestBotTurnUseCase;
 import ru.hothat.testbot.usecase.FireOwnerFartUseCase;
 import ru.hothat.testbot.usecase.IssueTestBotVideoTokenUseCase;
 import ru.hothat.testbot.usecase.SetUpTestBotsUseCase;
+import ru.hothat.testbot.usecase.ReleaseTestBotSeatUseCase;
 import ru.hothat.testbot.usecase.StopTestBotsUseCase;
 import ru.hothat.testbot.usecase.SynthesizeSpeechUseCase;
 
@@ -64,6 +67,7 @@ import ru.hothat.testbot.usecase.SynthesizeSpeechUseCase;
 public class TestBotController {
 
     private final SetUpTestBotsUseCase setUpTestBots;
+    private final ReleaseTestBotSeatUseCase releaseTestBotSeat;
     private final StopTestBotsUseCase stopTestBots;
     private final AdvanceTestBotTurnUseCase advanceTurn;
     private final FireOwnerFartUseCase fireOwnerFart;
@@ -83,6 +87,23 @@ public class TestBotController {
             @Parameter(description = "Тестовая комната, где живёт отряд", example = "hat-0f3a9c1d7b2e5480")
             @PathVariable @RoomId String roomId) {
         return ResponseEntity.status(HttpStatus.CREATED).body(setUpTestBots.run(admin, roomId));
+    }
+
+    @Operation(summary = "Вручную убрать выбранного тест-бота и освободить его место для приглашённого",
+            description = "Только создатель-администратор, только до старта партии. "
+                    + "Другие боты остаются на местах. Игрок приходит по ссылке "
+                    + "с replaceBot и занимает конкретный освобождённый слот.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Место освобождено"),
+            @ApiResponse(responseCode = "403", description = "TEST_ROOM_ONLY или HOST_ONLY", content = @Content),
+            @ApiResponse(responseCode = "409", description = "TEST_BOT_SLOT_UNAVAILABLE или GAME_ALREADY_STARTED", content = @Content)})
+    @DeleteMapping("/{botUid}")
+    public ResponseEntity<ReleasedTestBotResponseDTO> releaseBotSeat(
+            @AuthenticationPrincipal HotHatUser admin,
+            @PathVariable @RoomId String roomId,
+            @PathVariable @Pattern(regexp = "^testbot-[a-f0-9]{6}-[1-9]$")
+                    String botUid) {
+        return ResponseEntity.ok(releaseTestBotSeat.run(admin, roomId, botUid));
     }
 
     @Operation(summary = "Распустить отряд и закрыть комнату")
