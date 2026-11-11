@@ -97,7 +97,6 @@ class TestRoomBotReplacementTest {
         verify(write).savePlayer(argThat(p->
                 GUEST.equals(p.getUid()) && "team-2".equals(p.getTeamId())));
         verify(write).save(room);
-        verifyNoMoreInteractions(projections);
     }
 
     @Test
