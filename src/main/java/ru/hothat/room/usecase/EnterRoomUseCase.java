@@ -28,7 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.HashSet;
+import ru.hothat.testbot.usecase.ReleaseTestBotSeatUseCase;
 
 /**
  * Занять место игрока в комнате.
@@ -75,54 +75,66 @@ public class EnterRoomUseCase {
         boolean seatExists = players.stream().anyMatch(player -> player.getUid().equals(user.uid()));
         String frozenTeamId = RoomSeats.frozenTeamOf(room, user.uid());
 
-        // SCRUM-44: a shared test-room link can swap ONE server-side bot for
-        // ONE real player. The room row is already locked by requireRoomForWrite:
-        // concurrent invitees cannot both claim the same bot seat.
-        // Neither an arbitrary client-supplied UID nor a live-game request
-        // is allowed to evict anyone, and ordinary rooms use old rules.
+        // SCRUM-45: the host MUST manually release a bot first. The only
+        // claimable slots are server-side reservations created by the admin
+        // action; knowing a bot UID or an invite URL never evicts a live bot.
+        // Both release and claim hold the same room-row write lock.
         boolean testRoom = Boolean.TRUE.equals(room.getIsTestRoom());
-        boolean canSwapBot = testRoom && phase.isSetup() && !seatExists;
+        boolean canClaimSeat = testRoom && phase.isSetup() && !seatExists;
         String targetBot = request == null || request.replaceTestBotUid() == null
                 ? "" : request.replaceTestBotUid().trim();
-        Set<String> currentBotIds = new HashSet<>(
-                room.getTestBotIds() == null ? List.of() : room.getTestBotIds());
-        List<RoomPlayer> availableBots = canSwapBot
-                ? players.stream().filter(p -> Boolean.TRUE.equals(p.getIsTestBot()))
-                    .filter(p -> currentBotIds.contains(p.getUid())).toList()
-                : List.of();
-        RoomPlayer replacedBot = null;
-        if (canSwapBot) {
-            if (!targetBot.isEmpty()) {
-                replacedBot = availableBots.stream()
-                        .filter(p -> targetBot.equals(p.getUid())).findFirst()
-                        .orElseThrow(() -> ApiException.of("TEST_BOT_SLOT_UNAVAILABLE", 409));
-            } else if (!availableBots.isEmpty()) {
-                // Default room link uses the last bot seat, leaving the host's
-                // pair untouched when possible.
-                replacedBot = availableBots.get(availableBots.size() - 1);
+        Map<String,Object> savedRuntime = Json.map(room.getTestBotRuntime());
+        Map<String,Object> openSlots = Json.map(savedRuntime.get(ReleaseTestBotSeatUseCase.RESERVED_SLOTS));
+        String claimedBotUid = "";
+        RoomTeam freedTeam = null;
+        Map<String,Object> claimData = Map.of();
+        if (canClaimSeat) {
+            String prefix = "testbot-" + roomId.substring(roomId.length() - 6) + "-";
+            List<RoomTeam> teams = getterRoom.getTeams(roomId);
+            for (Map.Entry<String,Object> entry : openSlots.entrySet()) {
+                String botUid = entry.getKey();
+                if (!targetBot.isEmpty() && !targetBot.equals(botUid)) continue;
+                if (!botUid.startsWith(prefix)
+                        || !botUid.substring(prefix.length()).matches("[1-9]")
+                        || players.stream().anyMatch(p -> botUid.equals(p.getUid())))
+                    continue;
+                Map<String,Object> data = Json.map(entry.getValue());
+                String teamId = Json.str(data.get("teamId"));
+                RoomTeam team = teams.stream()
+                        .filter(t -> teamId.equals(t.getTeamId())
+                                && room.getTeamOrder().contains(teamId)
+                                && t.getMemberUids() != null
+                                && t.getMemberUids().contains(botUid))
+                        .findFirst().orElse(null);
+                if (team == null) continue;
+                claimedBotUid = botUid;
+                freedTeam = team;
+                claimData = data;
+                break;
             }
+            if (freedTeam == null)
+                throw ApiException.of("TEST_BOT_SLOT_UNAVAILABLE", 409);
         }
-        // A direct URL cannot bypass ranked/division checks on normal rooms.
-        // An already-seated test invitee may restore without being forced
-        // to configure a five-meme account loadout just to reconnect.
+        // Temporary test-only loadout comes from the manually released bot
+        // reservation. The invitee's own account and inventory stay unchanged.
         List<String> loadout = testRoom ? armory.loadout(user.uid()) : armory.requireLoadout(user.uid());
         if (testRoom && !armory.loadoutCharged(loadout)) {
             RoomPlayer currentSeat = players.stream()
                     .filter(p -> user.uid().equals(p.getUid())).findFirst().orElse(null);
             if (currentSeat != null && armory.loadoutCharged(currentSeat.getMemeLoadout())) {
                 loadout = currentSeat.getMemeLoadout();
-            } else if (replacedBot != null && armory.loadoutCharged(replacedBot.getMemeLoadout())) {
-                // Temporary test-room loadout, copied ONLY into this room seat.
-                // Does not change the invitee's account or inventory.
-                loadout = replacedBot.getMemeLoadout();
             } else {
-                loadout = armory.requireLoadout(user.uid());
+                List<String> releasedLoadout = Json.list(claimData.get("memeLoadout"))
+                        .stream().map(String::valueOf).toList();
+                if (freedTeam != null && armory.loadoutCharged(releasedLoadout)) {
+                    loadout = releasedLoadout;
+                } else {
+                    loadout = armory.requireLoadout(user.uid());
+                }
             }
         }
-        String swappedBotUid = replacedBot == null ? "" : replacedBot.getUid();
         int othersAlive = (int) players.stream()
                 .filter(player -> !player.getUid().equals(user.uid()))
-                .filter(player -> !swappedBotUid.equals(player.getUid()))
                 .filter(player -> RoomPresence.playerAlive(
                         Boolean.TRUE.equals(player.getIsTestBot()),
                         player.getLastSeenAt() == null ? 0L : player.getLastSeenAt(), now))
@@ -146,39 +158,26 @@ public class EnterRoomUseCase {
             throw RoomRefusals.of(refusal);
         });
 
-        // Atomically retire the chosen bot, update its exact team seat,
-        // and remove its automation runtime. Only then add the new real player.
-        // On rollback all changes (including team membership) roll back.
-        RoomTeam retiredBotTeam = null;
-        if (replacedBot != null) {
-            retiredBotTeam = getterRoom.getTeam(roomId, replacedBot.getTeamId()).orElse(null);
-            if (retiredBotTeam == null) {
-                throw ApiException.of("TEST_BOT_SLOT_UNAVAILABLE", 409);
-            }
-            saverRoom.deletePlayer(roomId, swappedBotUid);
-            List<String> remainingBotIds = new ArrayList<>(room.getTestBotIds());
-            remainingBotIds.remove(swappedBotUid);
-            room.setTestBotIds(remainingBotIds);
-            Map<String, Object> botRuntime = new LinkedHashMap<>(
-                    room.getTestBotRuntime() == null ? Map.of() : room.getTestBotRuntime());
-            botRuntime.remove(swappedBotUid);
-            room.setTestBotRuntime(botRuntime);
-        }
         RoomSeats.Seated seated = roomSeats.seatPlayer(room, user.uid(), card, loadout,
                 RoomSeats.Origin.self());
-        if (retiredBotTeam != null) {
-            List<String> members = new ArrayList<>(retiredBotTeam.getMemberUids() == null
-                    ? List.of() : retiredBotTeam.getMemberUids());
-            int at = members.indexOf(swappedBotUid);
+        if (freedTeam != null) {
+            List<String> members = new ArrayList<>(freedTeam.getMemberUids());
+            int at = members.indexOf(claimedBotUid);
             if (at < 0) throw ApiException.of("TEST_BOT_SLOT_UNAVAILABLE", 409);
             members.set(at, user.uid());
-            retiredBotTeam.setMemberUids(members);
-            saverRoom.saveTeam(retiredBotTeam);
-            seated.player().setTeamId(retiredBotTeam.getTeamId());
+            freedTeam.setMemberUids(members);
+            saverRoom.saveTeam(freedTeam);
+            seated.player().setTeamId(freedTeam.getTeamId());
             saverRoom.savePlayer(seated.player());
-        }
-        if (phase.isSetup() && retiredBotTeam == null) {
-            // Тела может не быть вовсе: у входа по ссылке просить нечего.
+
+            // Claim consumes its server-side reservation exactly once.
+            Map<String,Object> runtime = new LinkedHashMap<>(savedRuntime);
+            Map<String,Object> pending = new LinkedHashMap<>(openSlots);
+            pending.remove(claimedBotUid);
+            if (pending.isEmpty()) runtime.remove(ReleaseTestBotSeatUseCase.RESERVED_SLOTS);
+            else runtime.put(ReleaseTestBotSeatUseCase.RESERVED_SLOTS, pending);
+            room.setTestBotRuntime(runtime);
+        } else if (phase.isSetup()) {
             boolean autoAssign = request != null && request.autoAssignTeamOrDefault();
             assignTeamIfNeeded(room, seated.player(), autoAssign, players, now);
         }
