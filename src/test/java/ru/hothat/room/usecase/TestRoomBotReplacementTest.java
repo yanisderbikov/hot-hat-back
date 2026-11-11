@@ -10,6 +10,7 @@ import ru.hothat.repository.GetterRoom;
 import ru.hothat.repository.SaverRoom;
 import ru.hothat.room.api.dto.EnterRoomRequestDTO;
 import ru.hothat.sabotage.spi.SabotageArmoryPort;
+import ru.hothat.testbot.usecase.ReleaseTestBotSeatUseCase;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -23,19 +24,14 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * SCRUM-44: the test bot seat is atomically transferred to the incoming human.
- * No admin privileges, ranking/division bypass for ordinary games, or paid
- * GenAPI calls. These tests exercise the actual production use-case.
+ * SCRUM-45: invited people may claim ONLY a manually released bot slot.
+ * Opening a link never deletes another occupied seat or adds an eleventh one.
  */
 class TestRoomBotReplacementTest {
     private static final String ID="hat-0123456789abcdef";
-    private static final String HOST="host-1";
-    private static final String GUEST="guest-1";
-    private static final String BOT1="testbot-abcdef-1";
-    private static final String BOT2="testbot-abcdef-2";
-    private static final String BOT3="testbot-abcdef-3";
+    private static final String HOST="host-1",GUEST="guest-1";
+    private static final String BOT1="testbot-abcdef-1",BOT2="testbot-abcdef-2",BOT3="testbot-abcdef-3";
     private static final List<String> MEMES=List.of("m1","m2","m3","m4","m5");
-
     private final RoomAccessGuard auth=mock(RoomAccessGuard.class);
     private final GetterRoom read=mock(GetterRoom.class);
     private final SaverRoom write=mock(SaverRoom.class);
@@ -51,47 +47,55 @@ class TestRoomBotReplacementTest {
                 .isTestBot(true).teamId(team).memeLoadout(MEMES)
                 .lastSeenAt(System.currentTimeMillis()).build();
     }
-
-    private void setup(Room room){
+    private RoomTeam secondTeam(){
+        return RoomTeam.builder().roomId(ID).teamId("team-2").name("Вторая")
+                .memberUids(new ArrayList<>(List.of(BOT2,BOT3))).build();
+    }
+    private void setup(Room room,boolean botWasReleased){
         when(auth.requireRoomForWrite(ID)).thenReturn(room);
         when(cards.card(GUEST)).thenReturn(Optional.empty());
         when(armory.loadout(GUEST)).thenReturn(List.of());
         when(armory.loadoutCharged(any())).thenAnswer(inv->
                 inv.getArgument(0) instanceof List<?> ids && ids.size()==5);
-        when(read.getPlayers(ID)).thenReturn(List.of(
-                RoomPlayer.builder().roomId(ID).uid(HOST).teamId("team-1")
-                        .lastSeenAt(System.currentTimeMillis()).build(),
-                bot(BOT1,"team-1"),bot(BOT2,"team-2"),bot(BOT3,"team-2")));
-        when(read.getTeam(ID,"team-2")).thenReturn(Optional.of(
-                RoomTeam.builder().roomId(ID).teamId("team-2")
-                        .name("Вторая").memberUids(new ArrayList<>(List.of(BOT2,BOT3))).build()));
-        RoomPlayer player=RoomPlayer.builder().roomId(ID).uid(GUEST).name("Настоящий")
+        var players=new ArrayList<RoomPlayer>();
+        players.add(RoomPlayer.builder().roomId(ID).uid(HOST).teamId("team-1")
+                .lastSeenAt(System.currentTimeMillis()).build());
+        players.add(bot(BOT1,"team-1"));
+        if(!botWasReleased)players.add(bot(BOT2,"team-2"));
+        players.add(bot(BOT3,"team-2"));
+        when(read.getPlayers(ID)).thenReturn(players);
+        when(read.getTeams(ID)).thenReturn(List.of(secondTeam()));
+        var person=RoomPlayer.builder().roomId(ID).uid(GUEST).name("Настоящий")
                 .isTestBot(false).build();
         when(seats.seatPlayer(eq(room),eq(GUEST),isNull(),eq(MEMES),any(RoomSeats.Origin.class)))
-                .thenReturn(new RoomSeats.Seated(player,true));
+                .thenReturn(new RoomSeats.Seated(person,true));
     }
-
-    private Room room(boolean test){
+    private Room room(boolean test,boolean released){
+        var runtime=new LinkedHashMap<String,Object>(Map.of(
+                BOT1,Map.of("name","Bot1"),BOT3,Map.of("name","Bot3")));
+        var bots=new ArrayList<>(List.of(BOT1,BOT3));
+        if(released)runtime.put(ReleaseTestBotSeatUseCase.RESERVED_SLOTS,
+                new LinkedHashMap<>(Map.of(BOT2,Map.of("teamId","team-2","memeLoadout",MEMES))));
+        else{bots.add(BOT2);runtime.put(BOT2,Map.of("name","Bot2"));}
         return Room.builder().id(ID).createdBy(HOST).phase("setup")
                 .isTestRoom(test).isPrivate(false).ranked(false).maxPlayers(4)
-                .testBotIds(new ArrayList<>(List.of(BOT1,BOT2,BOT3)))
-                .testBotRuntime(new LinkedHashMap<>(Map.of(
-                        BOT1,Map.of("name","Bot1"),BOT2,Map.of("name","Bot2"),
-                        BOT3,Map.of("name","Bot3")))).build();
+                .teamOrder(new ArrayList<>(List.of("team-1","team-2")))
+                .testBotIds(bots).testBotRuntime(runtime).build();
+    }
+    private static HotHatUser guest(){
+        HotHatUser user=mock(HotHatUser.class);
+        when(user.uid()).thenReturn(GUEST);
+        return user;
     }
 
     @Test
-    void specificBotIsReplacedWithoutChangingOtherSeatsOrPayingForGeneration(){
-        Room room=room(true);setup(room);
-        HotHatUser guest=mock(HotHatUser.class);
-        when(guest.uid()).thenReturn(GUEST);
-        var result=useCase.run(guest,ID,new EnterRoomRequestDTO(false,BOT2));
-
+    void manualVacancyIsClaimedInItsOriginalTeamWithoutEvictingAnybody(){
+        Room room=room(true,true);setup(room,true);
+        var result=useCase.run(guest(),ID,new EnterRoomRequestDTO(false,BOT2));
         assertThat(result.created()).isTrue();
         assertThat(room.getTestBotIds()).containsExactly(BOT1,BOT3);
-        assertThat(room.getTestBotRuntime()).doesNotContainKey(BOT2);
-        verify(write).deletePlayer(ID,BOT2);
-        verify(read).getTeam(ID,"team-2");
+        assertThat(room.getTestBotRuntime()).doesNotContainKey(ReleaseTestBotSeatUseCase.RESERVED_SLOTS);
+        verify(write,never()).deletePlayer(anyString(),anyString());
         verify(write).saveTeam(argThat(t->
                 t.getMemberUids().equals(List.of(GUEST,BOT3))));
         verify(write).savePlayer(argThat(p->
@@ -100,23 +104,38 @@ class TestRoomBotReplacementTest {
     }
 
     @Test
-    void claimedOrForgedBotUidCannotRemoveAnyRealPlayer(){
-        Room room=room(true);setup(room);
-        HotHatUser guest=mock(HotHatUser.class);
-        when(guest.uid()).thenReturn(GUEST);
-        assertThatThrownBy(()->useCase.run(guest,ID,
-                new EnterRoomRequestDTO(false,"someone-else"))).isInstanceOf(RuntimeException.class);
+    void occupiedBotIsNeverEvictedByOpeningInviteLink(){
+        Room room=room(true,false);setup(room,false);
+        assertThatThrownBy(()->useCase.run(guest(),ID,new EnterRoomRequestDTO(false,BOT2)))
+                .isInstanceOf(RuntimeException.class);
         verify(write,never()).deletePlayer(anyString(),anyString());
         verify(seats,never()).seatPlayer(any(),anyString(),any(),anyList(),any());
     }
 
     @Test
-    void normalRoomCannotClaimBotSeatOrSkipPersonalLoadout(){
-        Room room=room(false);setup(room);
-        HotHatUser guest=mock(HotHatUser.class);
-        when(guest.uid()).thenReturn(GUEST);
+    void unknownOrAlreadyClaimedReservationCannotBeUsedTwice(){
+        Room room=room(true,true);setup(room,true);
+        assertThatThrownBy(()->useCase.run(guest(),ID,
+                new EnterRoomRequestDTO(false,"testbot-abcdef-9")))
+                .isInstanceOf(RuntimeException.class);
+        verify(write,never()).saveTeam(any());
+        verify(seats,never()).seatPlayer(any(),anyString(),any(),anyList(),any());
+    }
+
+    @Test
+    void defaultInviteUsesOpenSlotAndKeepsOtherBots(){
+        Room room=room(true,true);setup(room,true);
+        useCase.run(guest(),ID,new EnterRoomRequestDTO(false,null));
+        assertThat(room.getTestBotIds()).containsExactly(BOT1,BOT3);
+        verify(write,never()).deletePlayer(anyString(),anyString());
+        verify(write).saveTeam(argThat(team->team.getMemberUids().contains(GUEST)));
+    }
+
+    @Test
+    void normalRoomCannotSkipPersonalLoadout(){
+        Room room=room(false,false);setup(room,false);
         when(armory.requireLoadout(GUEST)).thenThrow(new IllegalStateException("loadout required"));
-        assertThatThrownBy(()->useCase.run(guest,ID,
+        assertThatThrownBy(()->useCase.run(guest(),ID,
                 new EnterRoomRequestDTO(false,BOT2))).isInstanceOf(IllegalStateException.class);
         verify(write,never()).deletePlayer(anyString(),anyString());
     }
