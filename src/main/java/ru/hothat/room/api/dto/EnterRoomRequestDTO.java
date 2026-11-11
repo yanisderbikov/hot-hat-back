@@ -10,8 +10,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
  * местом ({@code joinRoom()}, {@code app-core.js:12277}), то есть под своим
  * именем в комнату мог сесть кто угодно.
  *
- * <p>Единственное поле — намерение, которого сервер знать не может: пришёл ли
- * игрок из подбора. Оно и переносит сюда {@code autoAssignMatchmadeTeam()}
+ * <p>Поля задают намерение, которого сервер знать не может: пришёл ли
+ * игрок из подбора и какой бот уступает слот в тестовой комнате. Это переносит {@code autoAssignMatchmadeTeam()}
  * ({@code :12232}), где браузер сам выбирал себе команду посвободнее.
  */
 @Schema(description = "Заявка на вход в комнату")
@@ -21,7 +21,13 @@ public record EnterRoomRequestDTO(
                 + "выбирать команду руками негде. Свободного места нет — игрок остаётся "
                 + "в комнате без команды, и это не ошибка",
                 example = "false", type = "boolean", nullable = true)
-        Boolean autoAssignTeam) {
+        Boolean autoAssignTeam,
+
+        @Schema(description = "В тестовой комнате перед стартом занять место конкретного бота. "
+                + "Сервер проверяет, что бот существует именно в этой комнате. "
+                + "В обычных комнатах параметр не действует.",
+                example = "testbot-abcdef-2", nullable = true)
+        String replaceTestBotUid) {
 
     public boolean autoAssignTeamOrDefault() {
         return Boolean.TRUE.equals(autoAssignTeam);
