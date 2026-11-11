@@ -151,9 +151,13 @@ public class TestBotsServiceImpl implements TestBotsService {
             throw ApiException.of("GAME_ALREADY_STARTED", 409);
         }
         int maxPlayers = Set.of(4, 6, 8, 10).contains(room.getMaxPlayers()) ? room.getMaxPlayers() : 4;
-        // SCRUM-44: reloading the owner's test browser must never recreate
-        // bots whose seats have already been taken by invited real people.
-        if (Boolean.TRUE.equals(room.getIsTestRoom())) {
+        // SCRUM-45: a newly CREATED test room already has isTestRoom=true
+        // but has NO bots or teams yet. An earlier guard incorrectly treated
+        // the flag as "setup complete", leaving all teams EMPTY. Treat a
+        // populated teamOrder as the actual setup marker: it remains present
+        // even after the host explicitly releases every bot seat.
+        if (Boolean.TRUE.equals(room.getIsTestRoom())
+                && room.getTeamOrder() != null && !room.getTeamOrder().isEmpty()) {
             return Map.of("roomId", roomId,
                     "botIds", List.copyOf(room.getTestBotIds()),
                     "teamOrder", List.copyOf(room.getTeamOrder()),
