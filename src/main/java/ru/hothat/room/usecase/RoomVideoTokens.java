@@ -165,7 +165,9 @@ public class RoomVideoTokens {
         RoomAccessPolicy.RoomFacts facts = new RoomAccessPolicy.RoomFacts(
                 RoomPhase.fromWire(room.getPhase()),
                 room.isClosed(),
-                Boolean.TRUE.equals(room.getIsPrivate()),
+                // A mixed-language admin test room accepts invited people
+                // by link, but ordinary ranked/public rooms stay unchanged.
+                Boolean.TRUE.equals(room.getIsPrivate()) || Boolean.TRUE.equals(room.getIsTestRoom()),
                 Boolean.TRUE.equals(room.getRanked()),
                 Boolean.TRUE.equals(room.getManagedMatchmaking()),
                 Divisions.normalize(room.getDivisionLanguage()),
