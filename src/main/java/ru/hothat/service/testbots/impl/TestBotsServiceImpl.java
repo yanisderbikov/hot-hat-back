@@ -151,6 +151,14 @@ public class TestBotsServiceImpl implements TestBotsService {
             throw ApiException.of("GAME_ALREADY_STARTED", 409);
         }
         int maxPlayers = Set.of(4, 6, 8, 10).contains(room.getMaxPlayers()) ? room.getMaxPlayers() : 4;
+        // SCRUM-44: reloading the owner's test browser must never recreate
+        // bots whose seats have already been taken by invited real people.
+        if (Boolean.TRUE.equals(room.getIsTestRoom())) {
+            return Map.of("roomId", roomId,
+                    "botIds", List.copyOf(room.getTestBotIds()),
+                    "teamOrder", List.copyOf(room.getTeamOrder()),
+                    "maxPlayers", maxPlayers);
+        }
         String suffix = roomId.substring(Math.max(0, roomId.length() - 6));
         List<String> botIds = new ArrayList<>();
         for (int i = 1; i < maxPlayers; i++) {
@@ -293,9 +301,10 @@ public class TestBotsServiceImpl implements TestBotsService {
         if (!Boolean.TRUE.equals(room.getIsTestRoom()) || !user.uid().equals(owner)) {
             throw ApiException.of("TEST_ROOM_ONLY", 403);
         }
-        saverRoom.deletePlayer(roomId, user.uid());
-        for (String botId : room.getTestBotIds()) {
-            saverRoom.deletePlayer(roomId, botId);
+        // Test room can now contain invited humans in place of retired bots.
+        // Closing the room must clear ALL remaining seats, not only the host.
+        for (RoomPlayer occupant : getterRoom.getPlayers(roomId)) {
+            saverRoom.deletePlayer(roomId, occupant.getUid());
         }
         for (String teamId : room.getTeamOrder()) {
             saverRoom.deleteTeam(roomId, teamId);
@@ -388,7 +397,11 @@ public class TestBotsServiceImpl implements TestBotsService {
         List<String> roster = GameRules.rosterForTeam(room, room.getCurrentTeamId());
         Set<String> botSet = new HashSet<>(room.getTestBotIds());
         String ownerInRoster = roster.contains(user.uid()) ? user.uid() : null;
-        String explainerUid = ownerInRoster != null ? ownerInRoster
+        String humanInRoster = ownerInRoster != null ? ownerInRoster
+                : roster.stream().filter(uid -> !botSet.contains(uid)).findFirst().orElse(null);
+        // Invited real players must get human turns, never an automated
+        // bot explanation just because they are not the room owner.
+        String explainerUid = humanInRoster != null ? humanInRoster
                 : roster.stream().filter(botSet::contains).findFirst()
                 .orElse(roster.isEmpty() ? null : roster.get(0));
         String guesserUid = roster.stream().filter(uid -> !uid.equals(explainerUid)).findFirst()
@@ -423,7 +436,7 @@ public class TestBotsServiceImpl implements TestBotsService {
         room.setTurnStartedAt(Instant.ofEpochMilli(now));
         // Bot turns last the full requested minute even after one solved word.
         // Human turns keep the configured duration.
-        room.setTurnDurationSeconds(ownerInRoster == null ? 60.0
+        room.setTurnDurationSeconds(humanInRoster == null ? 60.0
                 : (double) (room.getTurnDuration() == null ? 60 : room.getTurnDuration()));
         room.setTurnEndsAt(0L);
         // Формат тот же, что у MatchEngine (TurnIds): «Угадали»/«Пропустить» живого
@@ -446,9 +459,10 @@ public class TestBotsServiceImpl implements TestBotsService {
             saverRoom.save(room);
             return step(room, "turn_ended", 10000);
         }
-        // The owner controls every word in their own two-person team.
-        if (GameRules.rosterForTeam(room, room.getCurrentTeamId()).contains(user.uid())) {
-            return step(room, "owner_controls_words", 3000);
+        // ALL real explainers control their own words. The bot runner must
+        // never auto-guess during an invited person's live turn.
+        if (!room.getTestBotIds().contains(Json.str(room.getExplainerUid()))) {
+            return step(room, "human_controls_words", 3000);
         }
 
         // A bot is allowed to guess at most one word, but MUST NOT shorten
