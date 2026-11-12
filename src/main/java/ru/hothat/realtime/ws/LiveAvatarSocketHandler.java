@@ -160,9 +160,9 @@ public class LiveAvatarSocketHandler extends TextWebSocketHandler {
             // the camera or closes the page. The sender's explicit "off"
             // command already removes the frame above, and a NORMAL socket
             // closure remains a true sign-out/exit.
-            String status = status.getCode() == CloseStatus.NORMAL.getCode()
+            String signalType = status.getCode() == CloseStatus.NORMAL.getCode()
                     ? "off" : "paused";
-            publish(client.uid, Map.of("type", status, "uid", client.uid));
+            publish(client.uid, Map.of("type", signalType, "uid", client.uid));
         }
     }
 
