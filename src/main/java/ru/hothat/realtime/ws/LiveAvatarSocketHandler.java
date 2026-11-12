@@ -153,7 +153,16 @@ public class LiveAvatarSocketHandler extends TextWebSocketHandler {
         Frame frame = latest.get(client.uid);
         if (frame != null && frame.sessionId().equals(session.getId())) {
             latest.remove(client.uid, frame);
-            publish(client.uid, Map.of("type", "off", "uid", client.uid));
+            // SCRUM-48: A background tab can lose its WebSocket while the
+            // physical webcam remains open. Do not broadcast "off" on an
+            // unexpected transport/peer disconnect: receivers must keep the
+            // most recent matted portrait until the owner actually disables
+            // the camera or closes the page. The sender's explicit "off"
+            // command already removes the frame above, and a NORMAL socket
+            // closure remains a true sign-out/exit.
+            String status = status.getCode() == CloseStatus.NORMAL.getCode()
+                    ? "off" : "paused";
+            publish(client.uid, Map.of("type", status, "uid", client.uid));
         }
     }
 
