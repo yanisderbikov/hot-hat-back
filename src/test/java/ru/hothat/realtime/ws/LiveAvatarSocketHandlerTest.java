@@ -88,6 +88,24 @@ class LiveAvatarSocketHandlerTest {
     }
 
     @Test
+    void abnormalDisconnectPausesAvatarInsteadOfFalselyTurningCameraOff() throws Exception {
+        var owner=connect("src","sender-uid",false);
+        var watcher=connect("viewer","viewer-uid",false);
+        handler.handleTextMessage(watcher,new TextMessage(
+                "{\"type\":\"watch\",\"uids\":[\"sender-uid\"]}"));
+        handler.handleTextMessage(owner,new TextMessage(
+                "{\"type\":\"frame\",\"data\":\""+alpha()+"\"}"));
+        // Browser tab suspension/network loss is not camera-off.
+        handler.afterConnectionClosed(owner,CloseStatus.SERVER_ERROR);
+        var capture=org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        verify(watcher,atLeast(3)).sendMessage(capture.capture());
+        assertThat(capture.getAllValues().stream()
+                .anyMatch(msg->msg.getPayload().contains("\"type\":\"paused\""))).isTrue();
+        assertThat(capture.getAllValues().stream()
+                .noneMatch(msg->msg.getPayload().contains("\"type\":\"off\""))).isTrue();
+    }
+
+    @Test
     void disconnectClearsPreviousAvatarAndNotifiesOtherViewers() throws Exception {
         var owner=connect("src","sender-uid",false);
         var watcher=connect("viewer","viewer-uid",false);
