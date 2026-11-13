@@ -107,6 +107,32 @@ public class AiVoiceUsageService {
     }
 
     @Transactional
+    public void beginStopping(String id) {
+        sessions.findById(id).ifPresent(s -> {
+            if (List.of("running","pending").contains(s.getStatus())) {
+                s.setStatus("stopping");
+                sessions.save(s);
+            }
+        });
+    }
+
+    @Transactional
+    public void failDispatch(String id, String reason) {
+        sessions.findById(id).ifPresent(s -> {
+            if ("pending".equals(s.getStatus())) {
+                s.setStatus("failed");
+                s.setFinishedAt(Instant.now());
+                s.setErrorCode(reason.length()>120?reason.substring(0,120):reason);
+                sessions.save(s);
+            }
+        });
+    }
+
+    public List<AiVoiceSession> activeSessions() {
+        return sessions.findByStatusIn(List.of("pending","running","stopping"));
+    }
+
+    @Transactional
     public Map<String,Object> report(String id,double seconds,long input,long output,boolean finished,String errorCode){
         AiVoiceSession s=sessions.findById(id)
                 .orElseThrow(()->ApiException.of("AI_SESSION_NOT_FOUND",404));
