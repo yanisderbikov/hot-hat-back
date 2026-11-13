@@ -227,6 +227,22 @@ public class LiveKitClient {
         twirp("livekit.RoomService", "SendData", body, roomId, false);
     }
 
+    /** Named explicit dispatch; never use LiveKit's automatic room agents.
+     * A running and authenticated worker must have registered this name.
+     */
+    public Map<String,Object> createAiDispatch(String roomId,String metadata) {
+        return twirp("livekit.AgentDispatchService","CreateDispatch",
+                Map.of("agent_name","hot-hat-gpt-live",
+                        "room",roomName(roomId),"metadata",metadata,
+                        "restart_policy","JRP_NEVER"),roomId,false);
+    }
+
+    public void deleteAiDispatch(String roomId,String dispatchId) {
+        if(dispatchId==null || dispatchId.isBlank())return;
+        twirp("livekit.AgentDispatchService","DeleteDispatch",
+                Map.of("dispatch_id",dispatchId,"room",roomName(roomId)),roomId,false);
+    }
+
     /** twirp-вызов livekit.Egress; им пользуется запись партий. */
     public Map<String, Object> egress(String method, Map<String, Object> body) {
         return twirp("livekit.Egress", method, body, null, true);
