@@ -31,6 +31,15 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('mode == "smalltalk"', source)
         self.assertIn("Не здоровайся повторно", source)
 
+    def test_confirmed_word_memory_and_acknowledgements(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        self.assertIn("_history_prompt(recent_words)", source)
+        self.assertIn('state.get("recentWords")', source)
+        self.assertIn('row.get("outcome") == "guessed"', source)
+        self.assertIn("Сервер уже ЗАСЧИТАЛ", source)
+        self.assertIn("давай след слово", source)
+        self.assertIn("set_attributes", source)
+
     def test_correct_model_and_named_dispatch(self):
         self.assertEqual(MODEL_ID, "openai/gpt-live-1")
         self.assertEqual(AGENT_NAME, "hot-hat-gpt-live")

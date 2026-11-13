@@ -162,9 +162,7 @@ public class AiVoiceGameService {
             throw ApiException.of("AI_SMALLTALK_GAME_ACTION_FORBIDDEN",403);
         if (!valid.humanUid().equals(speakerUid))
             throw ApiException.of("AI_ONLY_HUMAN_TEAMMATE_CAN_SKIP",403);
-        String spoken=wordsOnly(transcript);
-        if(!Pattern.compile("(?:^| )(?:пропусти|пропускай|пропускаем|следующее слово|след слово|давай след слово|давай следующее слово|давай следующее|следующую карточку|давай другое|давай новое слово|переходи к следующему|перейдем к следующему слову)(?: |$)")
-                .matcher(spoken).find())
+        if(!explicitSkipRequested(transcript))
             throw ApiException.of("AI_SKIP_REQUEST_NOT_CONFIRMED",409);
         if (!wordActionId.matches("^[A-Za-z0-9_-]{6,80}$"))
             throw ApiException.of("AI_WORD_ACTION_ID_INVALID",400);
@@ -180,5 +178,11 @@ public class AiVoiceGameService {
                 game.getTurnId(),wordActionId,resolved.word(),"skipped",
                 resolved.outcome()==WordResolved.Outcome.SKIPPED);
         return Map.of("skipped",true,"turnClosed",resolved.turnClosed());
+    }
+
+    static boolean explicitSkipRequested(String transcript) {
+        String spoken=wordsOnly(transcript);
+        return Pattern.compile("(?:^| )(?:пропусти|пропускай|пропускаем|следующее слово|след слово|давай след слово|давай следующее слово|давай следующее|следующую карточку|давай другое|давай новое слово|переходи к следующему|перейдем к следующему слову)(?: |$)")
+                .matcher(spoken).find();
     }
 }
