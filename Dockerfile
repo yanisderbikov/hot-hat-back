@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -r
 COPY pom.xml .
 RUN mvn dependency:go-offline -B
 COPY src ./src
-RUN mvn -B -Dtest=NeuroScenePlanTest,NeuroReplacementPilotServiceTest,NeuroReplacementPipelineSimulationTest,NeuroPaidKlingReadTest,NeuroUploadResumeTest,GlobalExceptionHandlerTest,TestRoomBotReplacementTest,ReleaseTestBotSeatUseCaseTest,TestBotInitialRoomSetupTest,LiveAvatarSocketHandlerTest,AiVoiceSeatPolicyTest,AiVoiceSeatServiceTest,MatchPresenceExpectedRosterTest,AiVoiceDispatchSchedulerTest test
+RUN mvn -B -Dtest=NeuroScenePlanTest,NeuroReplacementPilotServiceTest,NeuroReplacementPipelineSimulationTest,NeuroPaidKlingReadTest,NeuroUploadResumeTest,GlobalExceptionHandlerTest,TestRoomBotReplacementTest,ReleaseTestBotSeatUseCaseTest,TestBotInitialRoomSetupTest,LiveAvatarSocketHandlerTest,AiVoiceSeatPolicyTest,AiVoiceSeatServiceTest,MatchPresenceExpectedRosterTest,AiVoiceDispatchSchedulerTest,AiVoiceSmallTalkServiceTest,AiVoiceGreetingTest test
 RUN mvn clean package -DskipTests
 
 FROM eclipse-temurin:21-jre
