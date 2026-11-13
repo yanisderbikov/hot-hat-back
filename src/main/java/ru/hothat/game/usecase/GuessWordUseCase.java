@@ -30,6 +30,7 @@ public class GuessWordUseCase {
     private final MatchStore matchStore;
     private final MatchEngine engine;
     private final MatchViewAssembler views;
+    private final ru.hothat.ai.AiVoiceWordMemoryService wordMemory;
 
     @PreAuthorize("@gameAuthz.isExplainer(#roomId)")
     @Transactional
@@ -39,6 +40,9 @@ public class GuessWordUseCase {
         WordResolved resolved = engine.guess(session.state(), request.turnId(), wordId);
         session.addTeamScore(teamId, resolved.teamScoreDelta());
         session.commit();
+        wordMemory.record(roomId,session.state().getGameNumber(),teamId,
+                request.turnId(),wordId,resolved.word(),"guessed",
+                resolved.outcome()==WordResolved.Outcome.COUNTED);
         return new GuessedWordResponseDTO(WordActions.outcome(resolved.outcome()), resolved.word(),
                 resolved.nextWord(), resolved.turnScore(), resolved.wordsLeft(), resolved.turnClosed(),
                 resolved.appealEndsAt(),

@@ -27,6 +27,7 @@ public class AiVoiceGameService {
     private final AiVoiceUsageService usage;
     private final MatchEngine engine;
     private final GetterRoom rooms;
+    private final AiVoiceWordMemoryService wordMemory;
 
     private record Verified(AiVoiceSession usage,MatchState game,String humanUid) {}
     private Verified verify(String sessionId) {
@@ -79,7 +80,9 @@ public class AiVoiceGameService {
         view.put("deadlineMs",g.getPhase()==MatchPhase.ACTIVE?TurnRules.deadline(g):0);
         view.put("currentWord",aiExplaining?g.getCurrentWord():null);
         view.put("wordsLeft",g.getWordsLeft());
-        view.put("teamActive",true);
+        view.put("teamActive",!smalltalk);
+        // Only previously resolved (never upcoming/secret) words from this AI team.
+        view.put("recentWords",wordMemory.recent(u.getRoomId(),g.getGameNumber(),u.getTeamId()));
         return view;
     }
 
@@ -144,6 +147,9 @@ public class AiVoiceGameService {
         WordResolved resolved=engine.guess(game,game.getTurnId(),wordActionId);
         txn.addTeamScore(teamId,resolved.teamScoreDelta());
         txn.commit();
+        wordMemory.record(valid.usage().getRoomId(),game.getGameNumber(),teamId,
+                game.getTurnId(),wordActionId,resolved.word(),"guessed",
+                resolved.outcome()==WordResolved.Outcome.COUNTED);
         return Map.of("matched",true,"action","guessed","word",resolved.word()==null?"":resolved.word(),
                 "turnClosed",resolved.turnClosed());
     }
@@ -157,7 +163,7 @@ public class AiVoiceGameService {
         if (!valid.humanUid().equals(speakerUid))
             throw ApiException.of("AI_ONLY_HUMAN_TEAMMATE_CAN_SKIP",403);
         String spoken=wordsOnly(transcript);
-        if(!Pattern.compile("(?:^| )(?:пропусти|пропускай|пропускаем|следующее слово|давай другое|переходи к следующему)(?: |$)")
+        if(!Pattern.compile("(?:^| )(?:пропусти|пропускай|пропускаем|следующее слово|след слово|давай след слово|давай следующее слово|давай следующее|следующую карточку|давай другое|давай новое слово|переходи к следующему|перейдем к следующему слову)(?: |$)")
                 .matcher(spoken).find())
             throw ApiException.of("AI_SKIP_REQUEST_NOT_CONFIRMED",409);
         if (!wordActionId.matches("^[A-Za-z0-9_-]{6,80}$"))
@@ -167,8 +173,12 @@ public class AiVoiceGameService {
         if(game.getPhase()!=MatchPhase.ACTIVE || game.isPaused() ||
                 !valid.usage().getBotUid().equals(game.getExplainerUid()))
             throw ApiException.of("AI_NOT_EXPLAINING",409);
+        String teamId=game.getCurrentTeamId();
         WordResolved resolved=engine.skip(game,game.getTurnId(),wordActionId);
         txn.commit();
+        wordMemory.record(valid.usage().getRoomId(),game.getGameNumber(),teamId,
+                game.getTurnId(),wordActionId,resolved.word(),"skipped",
+                resolved.outcome()==WordResolved.Outcome.SKIPPED);
         return Map.of("skipped",true,"turnClosed",resolved.turnClosed());
     }
 }

@@ -25,13 +25,18 @@ public class SkipWordUseCase {
 
     private final MatchStore matchStore;
     private final MatchEngine engine;
+    private final ru.hothat.ai.AiVoiceWordMemoryService wordMemory;
 
     @PreAuthorize("@gameAuthz.isExplainer(#roomId)")
     @Transactional
     public SkippedWordResponseDTO run(HotHatUser user, String roomId, String wordId, SkipWordRequestDTO request) {
         MatchSession session = matchStore.open(roomId);
+        String teamId = session.state().getCurrentTeamId();
         WordResolved resolved = engine.skip(session.state(), request.turnId(), wordId);
         session.commit();
+        wordMemory.record(roomId,session.state().getGameNumber(),teamId,
+                request.turnId(),wordId,resolved.word(),"skipped",
+                resolved.outcome()==WordResolved.Outcome.SKIPPED);
         return new SkippedWordResponseDTO(WordActions.outcome(resolved.outcome()), resolved.word(),
                 resolved.nextWord(), resolved.turnScore(), resolved.wordsLeft(), resolved.turnClosed(),
                 resolved.appealEndsAt(),
