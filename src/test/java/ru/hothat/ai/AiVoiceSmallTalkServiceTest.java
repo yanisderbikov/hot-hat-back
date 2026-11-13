@@ -85,6 +85,22 @@ class AiVoiceSmallTalkServiceTest {
     }
 
     @Test
+    void noOwnerSmallTalkWhenRublishaIsAlreadyActiveTeam() {
+        when(rooms.getById(ROOM)).thenReturn(Optional.of(
+            Room.builder().id(ROOM).phase("active").gameNumber(1)
+                .currentTeamId("team-a").build()));
+        when(rooms.getPlayer(ROOM,AI)).thenReturn(Optional.of(
+            RoomPlayer.builder().roomId(ROOM).uid(AI)
+                .teamId("team-a").isTestBot(true).build()));
+        when(rooms.getPlayer(ROOM,OWNER_UID)).thenReturn(Optional.of(
+            RoomPlayer.builder().roomId(ROOM).uid(OWNER_UID)
+                .teamId("team-a").isTestBot(false).build()));
+        enabled();
+        assertThrows(ApiException.class,()->service.start(owner,ROOM,AI));
+        verifyNoInteractions(usage,livekit);
+    }
+
+    @Test
     void ownerCanStopOnlyTheirManualVoiceSession(){
         eligible();
         AiVoiceSession s=AiVoiceSession.builder().sessionId("ai_test_session")

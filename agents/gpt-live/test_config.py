@@ -39,6 +39,12 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("Сервер уже ЗАСЧИТАЛ", source)
         self.assertIn("давай след слово", source)
         self.assertIn("set_attributes", source)
+        self.assertIn("last_skipped_input_version", source)
+        self.assertIn("skip_once", source)
+        self.assertIn('if result.get("matched"):', source)
+        self.assertIn("Сервер только что ЗАСЧИТАЛ", source)
+        client = Path(__file__).with_name("game_client.py").read_text(encoding="utf-8")
+        self.assertIn('return {**result, "actionId": action_id}', client)
 
     def test_correct_model_and_named_dispatch(self):
         self.assertEqual(MODEL_ID, "openai/gpt-live-1")
