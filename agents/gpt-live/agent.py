@@ -14,7 +14,7 @@ import os
 import time
 
 from livekit.agents import (
-    Agent, AgentServer, AgentSession, JobContext, RoomOptions,
+    Agent, AgentServer, AgentSession, JobContext, room_io,
     RunContext, cli, inference,
 )
 from livekit.agents.llm import function_tool
@@ -244,7 +244,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             await session.start(
                 agent=agent,
                 room=ctx.room,
-                room_options=RoomOptions(
+                room_options=room_io.RoomOptions(
                     participant_identity=human_uid,
                     close_on_disconnect=True,
                     delete_room_on_close=False,
