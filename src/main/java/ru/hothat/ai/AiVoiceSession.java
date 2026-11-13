@@ -22,6 +22,10 @@ public class AiVoiceSession {
     private String botUid;
     @Column(name="turn_key",length=160,nullable=false)
     private String turnKey;
+    @Builder.Default @Column(name="mode",length=16,nullable=false)
+    private String mode="game";
+    @Column(name="speaker_uid",length=160)
+    private String speakerUid;
     @Column(name="livekit_dispatch_id",length=160)
     private String livekitDispatchId;
     @Column(nullable=false,length=32)

@@ -88,7 +88,7 @@ public class AiVoiceSeatService {
         String aiUid = AiVoiceSeatPolicy.PREFIX + UUID.randomUUID().toString().replace("-","").substring(0,18);
         long now = System.currentTimeMillis();
         RoomPlayer bot = RoomPlayer.builder()
-                .roomId(roomId).uid(aiUid).name("GPT-Live · ИИ")
+                .roomId(roomId).uid(aiUid).name("Рублиша")
                 .teamId(teamId).isTestBot(true).testBotIndex(null)
                 .joinedAt(Instant.now()).lastSeenAt(now)
                 .mediaReadyAt(now).mediaRevision(now)

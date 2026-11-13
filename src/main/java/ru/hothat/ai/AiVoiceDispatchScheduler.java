@@ -118,6 +118,7 @@ public class AiVoiceDispatchScheduler {
                 "botUid",ai,
                 "teamId",room.getCurrentTeamId(),
                 "gameNumber",room.getGameNumber(),
+                "shouldGreet",usage.shouldGreet(room.getId(),room.getGameNumber(),allocated.getSessionId()),
                 "maxSessionSeconds",180));
             Map<String,Object> dispatch=livekit.createAiDispatch(room.getId(),metadata);
             String dispatchId=Json.str(dispatch.get("id"));
@@ -140,11 +141,19 @@ public class AiVoiceDispatchScheduler {
     private void stopInactive() {
         for(AiVoiceSession session:usage.activeSessions()){
             Room room=rooms.getById(session.getRoomId()).orElse(null);
-            boolean keep=eligible(room) && aiUidForActiveTeam(room)!=null
-                    && Objects.equals(session.getBotUid(),aiUidForActiveTeam(room))
-                    && Objects.equals(session.getTeamId(),room.getCurrentTeamId())
-                    && Objects.equals(session.getGameNumber(),room.getGameNumber());
-            if(keep)continue;
+            boolean smalltalk="smalltalk".equals(session.getMode());
+            boolean keep=smalltalk
+                    ? room!=null && !room.isClosed()
+                        && Objects.equals(session.getGameNumber(),room.getGameNumber())
+                        && rooms.getPlayer(room.getId(),session.getBotUid()).isPresent()
+                        && rooms.getPlayer(room.getId(),session.getSpeakerUid()).isPresent()
+                    : eligible(room) && aiUidForActiveTeam(room)!=null
+                        && Objects.equals(session.getBotUid(),aiUidForActiveTeam(room))
+                        && Objects.equals(session.getTeamId(),room.getCurrentTeamId())
+                        && Objects.equals(session.getGameNumber(),room.getGameNumber());
+            boolean expired=session.getStartedAt()!=null
+                    && session.getStartedAt().isBefore(Instant.now().minusSeconds(205));
+            if(keep && !expired && !"stopping".equals(session.getStatus()))continue;
             if(!"stopping".equals(session.getStatus())){
                 try {livekit.deleteAiDispatch(session.getRoomId(),session.getLivekitDispatchId());}
                 catch(RuntimeException e){log.warn("GPT-Live dispatch stop failed: {}",e.getMessage());}
@@ -153,8 +162,10 @@ public class AiVoiceDispatchScheduler {
             // Worker normally finishes and reports actual usage. Avoid a
             // permanent lock if the worker crashed before reporting.
             if("stopping".equals(session.getStatus()) &&
-                session.getLastUsageAt()!=null &&
-                session.getLastUsageAt().isBefore(Instant.now().minusSeconds(45))) {
+                ((session.getLastUsageAt()!=null &&
+                   session.getLastUsageAt().isBefore(Instant.now().minusSeconds(45)))
+                 || (session.getStartedAt()!=null &&
+                     session.getStartedAt().isBefore(Instant.now().minusSeconds(240)))) {
                 usage.report(session.getSessionId(),
                     session.getVoiceSeconds().doubleValue(),
                     session.getBackendInputTokens(),

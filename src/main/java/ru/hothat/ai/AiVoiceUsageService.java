@@ -79,6 +79,11 @@ public class AiVoiceUsageService {
 
     @Transactional
     public AiVoiceSession reserve(String roomId,int gameNumber,String teamId,String botUid,String turnKey) {
+        return reserve(roomId,gameNumber,teamId,botUid,turnKey,null);
+    }
+
+    @Transactional
+    public AiVoiceSession reserve(String roomId,int gameNumber,String teamId,String botUid,String turnKey,String ownerSpeakerUid) {
         Optional<AiVoiceSession> existing=sessions.findByRoomIdAndGameNumberAndTurnKey(roomId,gameNumber,turnKey);
         if(existing.isPresent())return existing.get();
         List<AiVoiceSession> rows=monthRows();
@@ -92,6 +97,7 @@ public class AiVoiceUsageService {
                 .sessionId("ai_"+UUID.randomUUID().toString().replace("-",""))
                 .roomId(roomId).gameNumber(gameNumber).teamId(teamId)
                 .botUid(botUid).turnKey(turnKey)
+                .mode(ownerSpeakerUid==null?"game":"smalltalk").speakerUid(ownerSpeakerUid)
                 .status("pending").createdAt(Instant.now()).build();
         return sessions.save(session);
     }
@@ -133,6 +139,16 @@ public class AiVoiceUsageService {
         return sessions.findByStatusIn(List.of("pending","running","stopping"));
     }
 
+    /** A new model process is created on every turn; this durable game-scoped
+     * check ensures Rublisha greets at most once across the whole match.
+     * Failed dispatches did not reach the voice provider and do not count.
+     */
+    public boolean shouldGreet(String roomId,int gameNumber,String currentSessionId) {
+        return sessions.findByRoomIdAndGameNumberOrderByCreatedAtDesc(roomId,gameNumber).stream()
+                .noneMatch(s -> !Objects.equals(currentSessionId,s.getSessionId())
+                        && !"failed".equals(s.getStatus()));
+    }
+
     @Transactional
     public Map<String,Object> report(String id,double seconds,long input,long output,boolean finished,String errorCode){
         AiVoiceSession s=sessions.findById(id)
@@ -161,6 +177,7 @@ public class AiVoiceUsageService {
         m.put("sessionId",s.getSessionId());m.put("roomId",s.getRoomId());
         m.put("gameNumber",s.getGameNumber());m.put("teamId",s.getTeamId());
         m.put("botUid",s.getBotUid());m.put("status",s.getStatus());
+        m.put("mode",s.getMode());
         m.put("voiceSeconds",s.getVoiceSeconds());
         m.put("backendInputTokens",s.getBackendInputTokens());
         m.put("backendOutputTokens",s.getBackendOutputTokens());

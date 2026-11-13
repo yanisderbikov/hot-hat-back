@@ -12,6 +12,7 @@ import ru.hothat.game.domain.WordResolved;
 import ru.hothat.game.domain.TurnRules;
 import ru.hothat.game.store.MatchSession;
 import ru.hothat.game.store.MatchStore;
+import ru.hothat.repository.GetterRoom;
 
 import java.util.*;
 import java.util.regex.Pattern;
@@ -25,6 +26,7 @@ public class AiVoiceGameService {
     private final MatchStore matches;
     private final AiVoiceUsageService usage;
     private final MatchEngine engine;
+    private final GetterRoom rooms;
 
     private record Verified(AiVoiceSession usage,MatchState game,String humanUid) {}
     private Verified verify(String sessionId) {
@@ -33,6 +35,14 @@ public class AiVoiceGameService {
         if (!List.of("running","pending").contains(u.getStatus()))
             throw ApiException.of("AI_VOICE_SESSION_INACTIVE",409);
         MatchState state=matches.read(u.getRoomId());
+        if ("smalltalk".equals(u.getMode())) {
+            if(u.getSpeakerUid()==null || u.getSpeakerUid().isBlank() ||
+                    rooms.getPlayer(u.getRoomId(),u.getSpeakerUid()).isEmpty() ||
+                    rooms.getPlayer(u.getRoomId(),u.getBotUid()).isEmpty() ||
+                    !Objects.equals(state.getGameNumber(),u.getGameNumber()))
+                throw ApiException.of("AI_SMALLTALK_NOT_IN_ROOM",403);
+            return new Verified(u,state,u.getSpeakerUid());
+        }
         if (state.isRanked() || state.getGameNumber()!=u.getGameNumber()
                 || !Objects.equals(state.getCurrentTeamId(),u.getTeamId())
                 || !List.of(MatchPhase.TURN_INTRO,MatchPhase.ACTIVE).contains(state.getPhase()))
@@ -51,9 +61,10 @@ public class AiVoiceGameService {
         Verified valid=verify(sessionId);
         MatchState g=valid.game();
         AiVoiceSession u=valid.usage();
-        boolean aiExplaining=g.getPhase()==MatchPhase.ACTIVE
+        boolean smalltalk="smalltalk".equals(u.getMode());
+        boolean aiExplaining=!smalltalk && g.getPhase()==MatchPhase.ACTIVE
                 && Objects.equals(g.getExplainerUid(),u.getBotUid());
-        boolean aiGuessing=g.getPhase()==MatchPhase.ACTIVE
+        boolean aiGuessing=!smalltalk && g.getPhase()==MatchPhase.ACTIVE
                 && Objects.equals(g.getGuesserUid(),u.getBotUid());
         Map<String,Object> view=new LinkedHashMap<>();
         view.put("roomId",u.getRoomId());
@@ -62,7 +73,8 @@ public class AiVoiceGameService {
         view.put("botUid",u.getBotUid());
         view.put("humanUid",valid.humanUid());
         view.put("isPaused",g.isPaused());
-        view.put("role",aiExplaining?"explainer":aiGuessing?"guesser":"unselected");
+        view.put("mode",smalltalk?"smalltalk":"game");
+        view.put("role",smalltalk?"smalltalk":aiExplaining?"explainer":aiGuessing?"guesser":"unselected");
         view.put("turnId",g.getTurnId());
         view.put("deadlineMs",g.getPhase()==MatchPhase.ACTIVE?TurnRules.deadline(g):0);
         view.put("currentWord",aiExplaining?g.getCurrentWord():null);
@@ -74,6 +86,8 @@ public class AiVoiceGameService {
     @Transactional
     public Map<String,Object> aiChoosesToExplain(String sessionId) {
         Verified valid=verify(sessionId);
+        if("smalltalk".equals(valid.usage().getMode()))
+            throw ApiException.of("AI_SMALLTALK_GAME_ACTION_FORBIDDEN",403);
         if (valid.game().isPaused())throw ApiException.of("AI_GAME_PAUSED",409);
         MatchSession session=matches.open(valid.usage().getRoomId());
         MatchState game=session.state();
@@ -110,6 +124,8 @@ public class AiVoiceGameService {
     public Map<String,Object> observedSpeech(String sessionId,String speakerUid,
                                              String transcript,String wordActionId) {
         Verified valid=verify(sessionId);
+        if("smalltalk".equals(valid.usage().getMode()))
+            throw ApiException.of("AI_SMALLTALK_GAME_ACTION_FORBIDDEN",403);
         if (!valid.humanUid().equals(speakerUid))return Map.of("matched",false,"reason","OTHER_SPEAKER");
         MatchState snapshot=valid.game();
         if(snapshot.getPhase()!=MatchPhase.ACTIVE ||
@@ -136,6 +152,8 @@ public class AiVoiceGameService {
     public Map<String,Object> skipOnHumanRequest(String sessionId,String speakerUid,
                                          String transcript,String wordActionId) {
         Verified valid=verify(sessionId);
+        if("smalltalk".equals(valid.usage().getMode()))
+            throw ApiException.of("AI_SMALLTALK_GAME_ACTION_FORBIDDEN",403);
         if (!valid.humanUid().equals(speakerUid))
             throw ApiException.of("AI_ONLY_HUMAN_TEAMMATE_CAN_SKIP",403);
         String spoken=wordsOnly(transcript);
