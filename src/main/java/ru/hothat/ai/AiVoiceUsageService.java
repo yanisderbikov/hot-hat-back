@@ -146,7 +146,7 @@ public class AiVoiceUsageService {
     public boolean shouldGreet(String roomId,int gameNumber,String currentSessionId) {
         return sessions.findByRoomIdAndGameNumberOrderByCreatedAtDesc(roomId,gameNumber).stream()
                 .noneMatch(s -> !Objects.equals(currentSessionId,s.getSessionId())
-                        && !"failed".equals(s.getStatus()));
+                        && s.getStartedAt()!=null);
     }
 
     @Transactional

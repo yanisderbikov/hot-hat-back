@@ -165,7 +165,7 @@ public class AiVoiceDispatchScheduler {
                 ((session.getLastUsageAt()!=null &&
                    session.getLastUsageAt().isBefore(Instant.now().minusSeconds(45)))
                  || (session.getStartedAt()!=null &&
-                     session.getStartedAt().isBefore(Instant.now().minusSeconds(240)))) {
+                     session.getStartedAt().isBefore(Instant.now().minusSeconds(240))))) {
                 usage.report(session.getSessionId(),
                     session.getVoiceSeconds().doubleValue(),
                     session.getBackendInputTokens(),
