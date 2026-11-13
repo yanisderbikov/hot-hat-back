@@ -50,7 +50,8 @@ public class AiVoiceUsageService {
     }
 
     private boolean pending(AiVoiceSession s){
-        return "pending".equals(s.getStatus()) || "running".equals(s.getStatus());
+        return "pending".equals(s.getStatus()) || "running".equals(s.getStatus())
+                || "stopping".equals(s.getStatus());
     }
 
     private List<AiVoiceSession> monthRows(){
@@ -173,7 +174,7 @@ public class AiVoiceUsageService {
     @Transactional(readOnly=true)
     public Map<String,Object> ownerHistory(HotHatUser user){
         if(user==null || !user.owner())throw ApiException.of("AI_OWNER_ONLY",403);
-        List<AiVoiceSession> all=monthRows();
+        List<AiVoiceSession> all=sessions.findTop500ByOrderByCreatedAtDesc();
         Map<String,List<AiVoiceSession>> games=all.stream().collect(Collectors.groupingBy(
             s->s.getRoomId()+":"+s.getGameNumber(),LinkedHashMap::new,Collectors.toList()));
         List<Map<String,Object>> history=new ArrayList<>();
