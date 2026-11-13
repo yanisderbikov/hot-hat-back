@@ -16,6 +16,7 @@ import ru.hothat.util.Json;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Start the paid agent from turnIntro (role choice), stop as soon as this
@@ -29,6 +30,7 @@ public class AiVoiceDispatchScheduler {
     private final LiveKitClient livekit;
     private final ObjectMapper mapper;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicLong lastBlockedWarningMs = new AtomicLong(0L);
 
     @Value("${hot-hat.gpt-live.enabled:false}")
     private boolean featureEnabled;
@@ -38,6 +40,18 @@ public class AiVoiceDispatchScheduler {
 
     @Value("${hot-hat.gpt-live.worker-secret:}")
     private String workerSecret;
+
+    /** Report configuration issues once at startup, not silently every 3 seconds.
+     * No credentials, token values, or model prompts are logged.
+     */
+    @jakarta.annotation.PostConstruct
+    void logConfiguration() {
+        boolean ready=featureEnabled && dispatchEnabled
+                && workerSecret!=null && workerSecret.length()>=32;
+        if(ready) log.info("GPT-Live dispatcher READY: enabled=true, named dispatch, 180s cap");
+        else log.warn("GPT-Live dispatcher DISABLED: featureEnabled={}, dispatchEnabled={}, workerSecretReady={}",
+                featureEnabled,dispatchEnabled,workerSecret!=null && workerSecret.length()>=32);
+    }
 
     @Scheduled(fixedDelay=3000,initialDelay=10000)
     public void reconcile() {
@@ -84,7 +98,12 @@ public class AiVoiceDispatchScheduler {
         if(ai==null)return;
         List<AiVoiceSession> sessionRows=usage.activeSessions();
         // Never overlap paid voice sessions, including during STOP.
-        if(!sessionRows.isEmpty())return;
+        if(!sessionRows.isEmpty()){
+            warnBlocked("GPT-Live dispatch blocked room="+room.getId()
+                    +" by existing voice session status="+sessionRows.get(0).getStatus()
+                    +", session="+sessionRows.get(0).getSessionId());
+            return;
+        }
         Map<String,Object> prior=Json.map(room.getLastTurn());
         String previousId=Json.str(prior.get("turnId"));
         String roundKey=room.getCurrentTeamId()+":"+
@@ -109,6 +128,13 @@ public class AiVoiceDispatchScheduler {
             usage.failDispatch(allocated.getSessionId(),"DISPATCH_FAILED");
             log.warn("GPT-Live explicit dispatch failed for room {}: {}",room.getId(),e.getMessage());
         }
+    }
+
+    private void warnBlocked(String message) {
+        long now=System.currentTimeMillis();
+        long previous=lastBlockedWarningMs.get();
+        if(now-previous>30_000 && lastBlockedWarningMs.compareAndSet(previous,now))
+            log.warn("{}",message);
     }
 
     private void stopInactive() {
