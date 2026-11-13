@@ -119,6 +119,11 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/monitor").permitAll()
                         // Рукопожатие сокета проверяет токен само, в AuthHandshakeInterceptor:
                         // заголовок Authorization браузер туда передать не может.
+                        // GPT-Live worker authenticates with its own 32+ byte
+                        // machine secret, never a human JWT. The explicit
+                        // narrow path is deliberately NOT a wildcard for
+                        // other machine, owner or game endpoints.
+                        .requestMatchers("/api/v2/machine/gpt-live/*/**").permitAll()
                         .requestMatchers("/ws/**").permitAll()
                         .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/api/actuator/**").permitAll()
