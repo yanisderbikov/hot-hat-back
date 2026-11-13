@@ -101,10 +101,19 @@ public class AiVoiceSeatService {
                 .arsenal(new LinkedHashMap<>())
                 .build();
 
-        List<String> ids = new ArrayList<>(team.getMemberUids()==null?List.of():team.getMemberUids());
-        if (scripted!=null) ids.remove(scripted.getUid());
-        ids.removeIf(AiVoiceSeatPolicy::isAi);
-        if (!ids.contains(aiUid)) ids.add(aiUid);
+        // A manually removed scripted test bot leaves its UID in memberUids
+        // as an invitation reservation. The visible team can contain one
+        // human while that persisted reservation still occupies the second
+        // slot. Build the new pair from actual room_player rows, which have
+        // already passed requireEligible(), rather than copying stale IDs.
+        // This also repairs a missing human UID in the team projection.
+        List<String> ids = members.stream()
+                .filter(AiVoiceSeatPolicy::isHuman)
+                .map(RoomPlayer::getUid)
+                .filter(uid -> uid != null && !uid.isBlank())
+                .distinct()
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        ids.add(aiUid);
         if (ids.size()!=2) throw ApiException.of("AI_TEAM_SIZE_INVALID",409);
         team.setMemberUids(ids);
         saverRoom.savePlayer(bot);
