@@ -52,6 +52,9 @@ class HotHatPlayer(Agent):
         self.human_uid = human_uid
         self.smalltalk = smalltalk
         self.last_human_phrase = ""
+        self.human_input_version = 0
+        self.last_skipped_input_version = -1
+        self.skip_lock = asyncio.Lock()
         self.recent_word_keys = {
             str(row.get("actionId")) for row in (recent_words or [])
             if isinstance(row, dict) and row.get("actionId")
@@ -96,15 +99,31 @@ class HotHatPlayer(Agent):
         except Exception:
             return "Не получилось запустить ход. Возможно, напарник уже начал объяснять."
 
+    async def skip_once(self, phrase: str, input_version: int) -> dict:
+        # Final ASR and the LLM tool may react to the very same phrase.
+        # Keep one skip per spoken utterance, without blocking later commands.
+        async with self.skip_lock:
+            if input_version == self.last_skipped_input_version:
+                return {"skipped": False, "alreadyHandled": True}
+            result = await self.game.skip(self.human_uid, phrase)
+            if result.get("skipped"):
+                self.last_skipped_input_version = input_version
+                self.recent_word_keys.add(str(result.get("actionId") or ""))
+            return result
+
     @function_tool
     async def skip_after_teammate_request(self, context: RunContext) -> str:
-        """Пропустить текущую карточку, ТОЛЬКО если настоящий напарник
-        явно сказал 'пропусти', 'пропускаем' или 'давай другое'."""
+        """Пропустить карточку по просьбе напарника: 'пропусти',
+        'давай след слово', 'следующее слово', 'давай другое'."""
         if not self.last_human_phrase:
             return "Сначала нужно услышать просьбу напарника."
         try:
-            await self.game.skip(self.human_uid, self.last_human_phrase)
-            return "Сервер пропустил слово, переключаюсь на следующее."
+            result = await self.skip_once(self.last_human_phrase, self.human_input_version)
+            if result.get("alreadyHandled"):
+                return "Сервер уже пропустил это слово по данной просьбе."
+            return ("Сервер подтвердил пропуск. Перехожу к следующему слову."
+                    if result.get("skipped") else
+                    "Пропуск не подтверждён.")
         except Exception:
             return "Сервер не подтвердил просьбу пропустить слово."
 
