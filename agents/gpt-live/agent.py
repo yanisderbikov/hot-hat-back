@@ -250,6 +250,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             # RoomOptions.participant_identity binds audio to the ONE human
             # teammate. Nobody from another team can trigger guess/skip.
             agent.last_human_phrase = phrase
+            agent.human_input_version += 1
+            input_version = agent.human_input_version
             if latest != "explainer":
                 return
             try:
@@ -260,9 +262,29 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     "давай следующее", "давай новое слово", "давай дальше",
                     "след карточку", "давай другое",
                 )):
-                    await game.skip(human_uid, phrase)
+                    result = await agent.skip_once(phrase, input_version)
+                    if result.get("skipped"):
+                        session.generate_reply(instructions=(
+                            "Сервер подтвердил пропуск. Скажи коротко: "
+                            "'Пропустили, следующее!' и продолжай объяснение."))
                 else:
-                    await game.heard(human_uid, phrase)
+                    result = await game.heard(human_uid, phrase)
+                    if result.get("matched"):
+                        agent.recent_word_keys.add(str(result.get("actionId") or ""))
+                        replies = (
+                            "Верно! Поехали дальше!", "Точно! Засчитано!",
+                            "Угадали! Молодцы!", "Да, всё правильно!",
+                            "Есть! Класс!", "Это оно, супер!",
+                        )
+                        confirmed = replies[len(agent.recent_word_keys) % len(replies)]
+                        # Immediate feedback even when this final word
+                        # closes the round before the 700ms watcher wakes.
+                        session.generate_reply(instructions=(
+                            "Сервер только что ЗАСЧИТАЛ слово "
+                            + str(result.get("word") or "это слово")[:80] +
+                            ". Обязательно скажи напарнику: " + confirmed +
+                            " Без нового приветствия и без раскрытия "
+                            "следующей секретной карточки."))
             except Exception as exc:
                 logger.debug("No game action for transcribed utterance: %s", exc)
 
