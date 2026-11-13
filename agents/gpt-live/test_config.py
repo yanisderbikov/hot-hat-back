@@ -23,6 +23,14 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(read_settings({name: "-5"}).max_session_seconds, 30)
         self.assertEqual(read_settings({name: "bad"}).max_session_seconds, 600)
 
+    def test_character_name_and_once_per_game_greeting(self):
+        from config import VOICE_INSTRUCTIONS
+        self.assertIn("Рублиша", VOICE_INSTRUCTIONS)
+        source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        self.assertIn('should_greet = metadata.get("shouldGreet") is True', source)
+        self.assertIn('mode == "smalltalk"', source)
+        self.assertIn("Не здоровайся повторно", source)
+
     def test_correct_model_and_named_dispatch(self):
         self.assertEqual(MODEL_ID, "openai/gpt-live-1")
         self.assertEqual(AGENT_NAME, "hot-hat-gpt-live")

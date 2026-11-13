@@ -72,3 +72,18 @@ Keep credentials in server variables, never the browser or repository.
 The agent's current voice instructions forbid fabricated game results; **there
 are no live game-action tools yet**. Do not advertise it as playable until a
 real end-to-end voice/game validation succeeds on two computers.
+
+## SCRUM-50 — Рублиша / smol talk
+
+Рублиша — женский голосовой ИИ-участник. Game-сессия запускается только
+на ходе своей команды. Кнопка владельца вызывает
+`POST /api/v2/room/{roomId}/ai-players/{botUid}/smalltalk` и завершает
+`DELETE` по тому же адресу. Только JWT с ролью OWNER и собственным
+реальным местом игрока в этой комнате допускается к разговорам вне хода.
+В smalltalk-сессиях игровые инструменты отвергаются бэкендом с 403,
+секретные слова не выдаются. У каждого подключения потолок 180 секунд,
+сохраняется единственная оплачиваемая сессия и месячный бюджет.
+
+Флаг `shouldGreet` вычисляется сервером по уже начатым сессиям в
+`ai_voice_session` для (roomId, gameNumber). Повторные задания того же
+матча НЕ приветствуют заново. Новый номер партии сбрасывает правило.

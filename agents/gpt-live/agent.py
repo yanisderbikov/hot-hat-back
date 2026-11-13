@@ -30,12 +30,25 @@ server = AgentServer()
 
 
 class HotHatPlayer(Agent):
-    def __init__(self, game: GameClient, human_uid: str):
+    def __init__(self, game: GameClient, human_uid: str, *, smalltalk: bool = False,
+                 should_greet: bool = False):
         self.game = game
         self.human_uid = human_uid
+        self.smalltalk = smalltalk
         self.last_human_phrase = ""
-        super().__init__(
-            instructions=VOICE_INSTRUCTIONS + (
+        etiquette = (
+            " В этой партии ты ещё не приветствовала собеседника: можешь "
+            "поздороваться один короткий раз. "
+            if should_greet else
+            " В этой партии уже было приветствие. Не здоровайся повторно, "
+            "даже если подключился новый голосовой сеанс. "
+        )
+        smalltalk_rules = (
+            " Ты в режиме smol talk с владельцем игры. Общайся непринуждённо "
+            "как знакомая собеседника. Не угадывай слова, не выбирай роли, "
+            "не объявляй очки и не используй игровые инструменты. "
+            "Не мешай текущему ходу другой команды. "
+        ) if smalltalk else (
                 " Сейчас ты играешь ровно с одним человеком, его голос "
                 "единственный на твоём входе. В начале хода обсудите, кто "
                 "объясняет. Когда партнёр говорит 'объясняй ты', НЕМЕДЛЕННО "
@@ -46,7 +59,7 @@ class HotHatPlayer(Agent):
                 "При 'пропусти' вызови skip_after_teammate_request. "
                 "Никогда не начисляй очки голосом и не меняй таймер сам."
             )
-        )
+        super().__init__(instructions=VOICE_INSTRUCTIONS + etiquette + smalltalk_rules)
 
     @function_tool
     async def choose_to_explain(self, context: RunContext) -> str:
@@ -121,6 +134,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         room_id = str(metadata["roomId"])
         bot_uid = str(metadata["botUid"])
         max_seconds = min(180, int(metadata.get("maxSessionSeconds", 180)))
+        mode = "smalltalk" if metadata.get("mode") == "smalltalk" else "game"
+        should_greet = metadata.get("shouldGreet") is True
         if not session_id.startswith("ai_") or not bot_uid.startswith("ai-gpt-live-"):
             raise ValueError("Unrecognized GPT-Live dispatch")
         if ctx.room.name != "hot-hat-" + room_id:
@@ -139,6 +154,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             return
         if str(initial.get("botUid", "")) != bot_uid:
             return
+        if str(initial.get("mode", "game")) != mode:
+            logger.warning("Rublisha dispatch context mode mismatch")
+            return
         human_uid = str(initial.get("humanUid") or "")
         if not human_uid:
             return
@@ -155,7 +173,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         except Exception:
             logger.info("Agent participant metadata unavailable, audio still works")
 
-        agent = HotHatPlayer(game, human_uid)
+        agent = HotHatPlayer(game, human_uid, smalltalk=(mode == "smalltalk"),
+                             should_greet=should_greet)
         session = AgentSession(llm=inference.DuplexModel(
             model=MODEL_ID,
             voice=settings.voice,
@@ -223,6 +242,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         agent.duplex_session.append_commentary(
                             "Начни объяснять новое слово короткими подсказками."
                         )
+                    elif role == "smalltalk":
+                        agent.duplex_session.append_instructions(
+                            "РЕЖИМ SMOL TALK: разговаривай только с владельцем "
+                            "неформально. Никаких игровых слов, очков, смены ролей."
+                        )
                     elif role == "guesser":
                         agent.duplex_session.append_instructions(
                             "ТВОЯ РОЛЬ: УГАДЫВАЮЩИЙ. Секретного слова не знаешь. "
@@ -264,10 +288,19 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
 
             ticker = asyncio.create_task(report_usage())
             watcher = asyncio.create_task(follow_game_state())
-            session.generate_reply(instructions=(
-                "Поприветствуй напарника в двух словах и спроси, "
-                "кто сейчас будет объяснять, а кто угадывать."
-            ))
+            if mode == "smalltalk":
+                session.generate_reply(instructions=(
+                    "Начни лёгкий разговор по-русски. "
+                    + ("Поздоровайся коротко. " if should_greet else
+                       "Не здоровайся — вы уже знакомы по этой партии. ")
+                    + "Спроси у владельца что-нибудь ненавязчивое."
+                ))
+            else:
+                session.generate_reply(instructions=(
+                    ("Поздоровайся с напарником в двух словах. " if should_greet else
+                     "Не здоровайся повторно. ")
+                    + "Коротко уточни, кто будет объяснять, а кто угадывать."
+                ))
             try:
                 await asyncio.wait_for(stop.wait(),
                                        timeout=min(180, max_seconds))
