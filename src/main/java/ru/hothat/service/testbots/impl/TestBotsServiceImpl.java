@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.hothat.ai.AiVoiceSeatPolicy;
 import ru.hothat.config.ApiException;
 import ru.hothat.config.HotHatUser;
 import ru.hothat.media.spi.MemeLibraryPort;
@@ -399,6 +400,13 @@ public class TestBotsServiceImpl implements TestBotsService {
 
     private Map<String, Object> startTurn(Room room, HotHatUser user, long now) {
         List<String> roster = GameRules.rosterForTeam(room, room.getCurrentTeamId());
+        if (roster.stream().anyMatch(AiVoiceSeatPolicy::isAi)) {
+            // In test rooms, the old scripted runner must never decide who
+            // explains for the GPT-Live team. The actual human/AI pair
+            // negotiates the role during turnIntro; either the real person
+            // or an authenticated AI game action explicitly begins the turn.
+            return step(room, "gpt_live_team_waiting_for_role", 1000);
+        }
         Set<String> botSet = new HashSet<>(room.getTestBotIds());
         String ownerInRoster = roster.contains(user.uid()) ? user.uid() : null;
         String humanInRoster = ownerInRoster != null ? ownerInRoster
