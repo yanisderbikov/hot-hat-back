@@ -147,6 +147,9 @@ public class AiVoiceDispatchScheduler {
                         && Objects.equals(session.getGameNumber(),room.getGameNumber())
                         && rooms.getPlayer(room.getId(),session.getBotUid()).isPresent()
                         && rooms.getPlayer(room.getId(),session.getSpeakerUid()).isPresent()
+                        // A game turn must take precedence over owner smalltalk.
+                        && !(eligible(room) && Objects.equals(
+                             room.getCurrentTeamId(),session.getTeamId()))
                     : eligible(room) && aiUidForActiveTeam(room)!=null
                         && Objects.equals(session.getBotUid(),aiUidForActiveTeam(room))
                         && Objects.equals(session.getTeamId(),room.getCurrentTeamId())
