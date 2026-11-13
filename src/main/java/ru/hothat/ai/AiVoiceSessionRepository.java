@@ -12,4 +12,5 @@ public interface AiVoiceSessionRepository extends JpaRepository<AiVoiceSession,S
         String roomId,Integer gameNumber);
     List<AiVoiceSession> findByCreatedAtGreaterThanEqualOrderByCreatedAtDesc(Instant since);
     List<AiVoiceSession> findByStatusIn(List<String> statuses);
+    List<AiVoiceSession> findTop500ByOrderByCreatedAtDesc();
 }
