@@ -42,16 +42,20 @@ class GameClient:
         return await self.request("POST", "choose-explainer", {})
 
     async def heard(self, human_uid: str, transcript: str) -> dict:
-        return await self.request("POST", "heard", {
+        action_id = "aiw_" + uuid.uuid4().hex
+        result = await self.request("POST", "heard", {
             "speakerUid": human_uid, "transcript": transcript[:500],
-            "actionId": "aiw_" + uuid.uuid4().hex,
+            "actionId": action_id,
         })
+        return {**result, "actionId": action_id}
 
     async def skip(self, human_uid: str, transcript: str) -> dict:
-        return await self.request("POST", "skip", {
+        action_id = "ais_" + uuid.uuid4().hex
+        result = await self.request("POST", "skip", {
             "speakerUid": human_uid, "transcript": transcript[:500],
-            "actionId": "ais_" + uuid.uuid4().hex,
+            "actionId": action_id,
         })
+        return {**result, "actionId": action_id}
 
     async def report(self, voice_seconds: float, input_tokens: int = 0,
                      output_tokens: int = 0, finished: bool = False,
