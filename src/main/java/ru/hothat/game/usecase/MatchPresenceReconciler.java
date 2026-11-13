@@ -47,12 +47,7 @@ class MatchPresenceReconciler {
         if (!state.getPhase().pausable()) {
             return new Result(Outcome.NOT_LIVE, List.of(), null, 0);
         }
-        List<String> expected = new ArrayList<>();
-        for (String uid : state.allPlayers()) {
-            if (!state.isTestBot(uid)) {
-                expected.add(uid);
-            }
-        }
+        List<String> expected = expectedTransportParticipants(state);
         List<String> missing = expected.stream().filter(uid -> !connected.contains(uid)).toList();
         long limit = state.isRanked() ? RANKED_LIMIT_MS : CASUAL_LIMIT_MS;
 
@@ -73,6 +68,20 @@ class MatchPresenceReconciler {
         }
         engine.pauseForMissing(state, missing, missing.stream().map(state::nameOf).toList());
         return new Result(Outcome.PAUSED, missing, null, limit);
+    }
+
+    /**
+     * GPT-Live is a virtual game seat, not a permanent LiveKit participant.
+     * Its worker is dispatched only during the AI team's turn. Requiring it
+     * in the transport roster before dispatch deadlocks the game: the presence
+     * reconciler pauses the match, and the dispatcher refuses paused matches.
+     * Keep all real humans subject to the normal disconnect/forfeit rules.
+     */
+    static List<String> expectedTransportParticipants(MatchState state) {
+        return state.allPlayers().stream()
+                .filter(uid -> !state.isTestBot(uid))
+                .filter(uid -> !uid.startsWith("ai-gpt-live-"))
+                .toList();
     }
 
     private Result whenEverybodyIsBack(MatchSession session, MatchState state) {
