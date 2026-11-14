@@ -363,7 +363,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                              should_greet=should_greet, character_name=character_name,
                              personality=personality, duet_role=duo_role,
                              recent_words=initial.get("recentWords") or [])
-        session = AgentSession(llm=inference.DuplexModel(
+        session = AgentSession(
+            # Fast natural barge-in: a guessing teammate must be allowed to
+            # speak the answer over the end of a long clue. Server scoring is
+            # independent of conversation turn boundaries.
+            allow_interruptions=True,
+            min_interruption_duration=0.15,
+            min_endpointing_delay=0.18,
+            max_endpointing_delay=0.8,
+            llm=inference.DuplexModel(
             model=MODEL_ID,
             voice=voice,
             extra_kwargs={"responses_options": {
@@ -392,6 +400,19 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         last_agent_spoke = 0.0
         duet_wrong_guesses = 0
         duet_guess_verification_pending = False
+        last_immediate_hint = 0.0
+
+        async def stop_stale_explanation():
+            # A model can continue generating a stale hint after a correct
+            # spoken answer; stop its actual audio before switching cards.
+            # Human interrupt + server-confirmed score both use this path.
+            if str(getattr(session, "agent_state", "")) not in (
+                    "speaking", "thinking"):
+                return
+            try:
+                await asyncio.wait_for(session.interrupt(force=True), timeout=1.6)
+            except (RuntimeError, asyncio.TimeoutError):
+                pass
 
         def duet_agent_speech(event):
             nonlocal last_agent_spoke
@@ -402,6 +423,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         def duet_partner_speech(event):
             if watch_game_speech and str(getattr(event, "new_state", "")) == "speaking":
                 duet_live.mark_heard(time.monotonic())
+                # A guesser is allowed to interrupt the explainer mid-hint.
+                # Yield the audio floor immediately; ASR and the server will
+                # independently decide if this is the correct word.
+                if is_duo and latest == "explainer":
+                    asyncio.create_task(stop_stale_explanation())
 
         session.on("agent_state_changed", duet_agent_speech)
         session.on("user_state_changed", duet_partner_speech)
@@ -422,6 +448,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             if latest != "explainer":
                 return
             nonlocal duet_wrong_guesses, duet_guess_verification_pending
+            nonlocal last_immediate_hint
             try:
                 lower = phrase.lower()
                 if any(x in lower for x in (
@@ -439,6 +466,13 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     if is_duo:
                         duet_guess_verification_pending = True
                     result = await game.heard(human_uid, phrase)
+                    if mode == "game":
+                        # No phrases/secrets in production logs. See both human
+                        # and AI+AI results when a player reports false "Верно".
+                        logger.info("Peer voice score: mode=%s bot=%s result=%s",
+                                    "duet" if is_duo else "solo",bot_uid[-6:],
+                                    "MATCH" if result.get("matched")
+                                    else str(result.get("reason") or "NO_MATCH")[:32])
                     if is_duo:
                         # No transcripts/secret words in logs: only the
                         # backend's rejection code for safe score diagnostics.
@@ -485,6 +519,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             # No next card yet: let the state watcher initiate
                             # its hint when the server makes the word available.
                             agent.suppress_next_word_commentary = False
+                        await stop_stale_explanation()
                         session.generate_reply(instructions=(
                             "Сервер подтвердил ПРАВИЛЬНУЮ догадку напарника. "
                             "Ты ОБЪЯСНЯЮЩИЙ. Произнеси ровно одно короткое "
@@ -495,30 +530,30 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                else " И ничего больше. Без поздравлений, "
                                "обсуждения очков или повторения слова.")
                         ))
-                    elif is_duo:
-                        duet_wrong_guesses += 1
-                        # The model cannot decide that a card was guessed.
-                        # Its spoken "Да, верно" must NEVER become a card
-                        # transition unless the authoritative server counted
-                        # the answer. Correct the explainer on EVERY mismatch.
-                        if result.get("reason") == "FORM_NOT_EXACT":
-                            agent.duplex_session.append_instructions(
-                                "СЕРВЕР НЕ ЗАСЧИТАЛ последнюю догадку. "
-                                "ТАЙНАЯ КАРТОЧКА ОСТАЛАСЬ ПРЕЖНЕЙ. "
-                                "НЕ говори «верно»/«правильно», НЕ меняй "
-                                "слово и НЕ объясняй выдуманную новую "
-                                "карточку. Дай следующую конкретную "
-                                "подсказку к ТЕКУЩЕМУ слову."
-                            )
-                        if duet_wrong_guesses in (2, 4):
-                            # Adapt silently; never schedule another competing
-                            # spoken response while the teammate is guessing.
-                            agent.duplex_session.append_instructions(
-                                "Напарник уже предложил несколько неверных "
-                                "версий. СЛЕДУЮЩУЮ подсказку дай с другой "
-                                "стороны и конкретнее: категория, назначение "
-                                "или заметное отличие. Не повторяй прошлое."
-                            )
+                    elif result.get("reason") == "FORM_NOT_EXACT":
+                        if is_duo:
+                            duet_wrong_guesses += 1
+                        # A model may audibly say "угадал" without the server
+                        # having counted it. Make the verified result decisive
+                        # for solo Rublisha as well as for AI duets.
+                        agent.duplex_session.append_instructions(
+                            "СЕРВЕР НЕ ЗАСЧИТАЛ последнюю голосовую догадку. "
+                            "Это ВСЁ ЕЩЁ ТА ЖЕ карточка! Не подтверждай её, "
+                            "не выдавай воображаемые очки и не переходи на "
+                            "новое слово. Продолжи текущую карточку."
+                        )
+                        if time.monotonic() - last_immediate_hint >= 0.75:
+                            last_immediate_hint = time.monotonic()
+                            # Wrong guesses should provoke fresh hints right
+                            # away, not after the 5-second liveness watchdog.
+                            await stop_stale_explanation()
+                            session.generate_reply(instructions=(
+                                "Ответ НЕ засчитан сервером. "
+                                "СРАЗУ дай ОДНУ НОВУЮ конкретную подсказку "
+                                "к текущему секретному слову, 3–8 слов. "
+                                "Нельзя произносить само слово. "
+                                "Никаких «да», «верно», «угадал» и болтовни."
+                            ))
             except Exception as exc:
                 logger.debug("No game action for transcribed utterance: %s", exc)
             finally:
@@ -535,7 +570,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             # source than the explainer's peer-input transcript alone.
             # No text is logged or stored; backend checks BOTH the
             # authenticated GUESSER seat and the current secret word.
-            if not is_duo or bot_uid == designated_explainer_uid:
+            if mode != "game" or scripted_partner:
                 return
             item = getattr(event, "item", None)
             if (getattr(item, "role", "") != "assistant"
@@ -549,7 +584,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 return
             try:
                 result = await game.duet_guesser_spoke(phrase)
-                logger.info("Duet own-voice guess: bot=%s result=%s",
+                logger.info("Own-voice guess: mode=%s bot=%s result=%s",
+                            "duet" if is_duo else "solo",
                             bot_uid[-6:], "MATCH" if result.get("matched")
                             else str(result.get("reason") or "NO_MATCH")[:32])
                 if result.get("matched"):
@@ -574,7 +610,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 logger.debug("Duet self-voice guess was not scored: %s",
                              type(exc).__name__)
 
-        if is_duo:
+        if mode == "game" and not scripted_partner:
             session.on("conversation_item_added",
                        lambda event: asyncio.create_task(on_guesser_own_voice(event)))
 
@@ -694,7 +730,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                              "Если человек говорит, что объясняешь ты, "
                              "вызови choose_to_explain и только затем объясняй.")
                         )
-                await asyncio.sleep(0.7)
+                # A voice-scored AI answer should reach the explainer before
+                # another multi-second clue starts. Poll more frequently only
+                # for short live two-AI rounds (not for smalltalk).
+                await asyncio.sleep(0.24 if is_duo and role in ("explainer", "guesser")
+                                    else 0.7)
 
         async def duet_liveness_watchdog():
             nonlocal error_code
