@@ -142,14 +142,77 @@ public class AiVoiceGameService {
     }
 
     /**
-     * Exact inflected-form match: ignore casing and separators only. Do not
-     * accept stems, synonyms or substring matches (кот != котик). This does
-     * NOT assert perfect speech recognition; unknown speaker never scores.
+     * A voice guess must contain the whole actual word or word sequence.
+     * Russian inflection is NOT a different game answer: "космонавта",
+     * "путешествия", "снежного человека" count for the nominative card.
+     * Never use substring/stem matching (кот != котик).
      */
     public static boolean exactWordSpoken(String target,String transcript) {
         String expected=wordsOnly(target);
         String observed=wordsOnly(transcript);
-        return !expected.isBlank() && (" "+observed+" ").contains(" "+expected+" ");
+        if(expected.isBlank() || observed.isBlank())return false;
+        String[] need=expected.split(" ");
+        String[] spoken=observed.split(" ");
+        if(spoken.length<need.length)return false;
+        for(int offset=0;offset+need.length<=spoken.length;offset++) {
+            boolean matched=true;
+            for(int j=0;j<need.length;j++) {
+                if(!sameSpokenRussianForm(need[j],spoken[offset+j])) {
+                    matched=false;
+                    break;
+                }
+            }
+            if(matched)return true;
+        }
+        return false;
+    }
+
+    private static boolean sameSpokenRussianForm(String lemma,String heard) {
+        if(lemma.equals(heard))return true;
+        // Keep unfamiliar scripts and numerals strictly literal.
+        if(!lemma.matches("[а-я]+") || !heard.matches("[а-я]+")
+                || lemma.length()<3)return false;
+        // Adjectives: снежный -> снежного; секретный -> секретному,
+        // синий -> синего; avoid accepting arbitrary shared stems.
+        if(lemma.length()>4 && (lemma.endsWith("ый")||lemma.endsWith("ий")
+                ||lemma.endsWith("ой"))) {
+            String stem=lemma.substring(0,lemma.length()-2);
+            String endings=lemma.endsWith("ий")
+                    ? "его ему им ем яя ее ие их ими юю ей"
+                    : "ого ому ым ом ая ое ые ых ыми ую ой";
+            for(String ending:endings.split(" "))
+                if(heard.equals(stem+ending))return true;
+            return false;
+        }
+        if(lemma.endsWith("ие")) {
+            String stem=lemma.substring(0,lemma.length()-2);
+            for(String ending:List.of("ия","ию","ием","ии","ий","иям","иями","иях"))
+                if(heard.equals(stem+ending))return true;
+            return false;
+        }
+        String stem=lemma;
+        List<String> endings=List.of();
+        if(lemma.endsWith("а")) {
+            stem=lemma.substring(0,lemma.length()-1);
+            endings=List.of("ы","и","е","у","ой","ою","ам","ами","ах");
+        } else if(lemma.endsWith("я")) {
+            stem=lemma.substring(0,lemma.length()-1);
+            endings=List.of("и","е","ю","ей","ею","ям","ями","ях");
+        } else if(lemma.endsWith("о")) {
+            stem=lemma.substring(0,lemma.length()-1);
+            endings=List.of("а","у","ом","е","ам","ами","ах");
+        } else if(lemma.endsWith("е")) {
+            stem=lemma.substring(0,lemma.length()-1);
+            endings=List.of("я","ю","ем","и","й","ям","ями","ях");
+        } else if(lemma.endsWith("ь")) {
+            stem=lemma.substring(0,lemma.length()-1);
+            endings=List.of("я","ю","ем","е","и","ей","ью","ям","ями","ях");
+        } else if(lemma.matches(".*[бвгджзйклмнпрстфхцчшщ]")) {
+            endings=List.of("а","у","ом","е","ы","и","ов","ев","ам","ами","ах");
+        }
+        for(String ending:endings)
+            if(heard.equals(stem+ending))return true;
+        return false;
     }
 
     private static String wordsOnly(String text) {
