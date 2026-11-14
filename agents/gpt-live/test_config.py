@@ -42,7 +42,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("_history_prompt(recent_words)", source)
         self.assertIn('state.get("recentWords")', source)
         self.assertIn('row.get("outcome") == "guessed"', source)
-        self.assertIn("_is_voice_confirmed_guess(row)", source)
+        self.assertIn("_voice_confirmation(", source)
         self.assertIn("давай след слово", source)
         self.assertIn("set_attributes", source)
         self.assertIn("last_skipped_input_version", source)
