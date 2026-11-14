@@ -519,6 +519,14 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         return
                     if not action:
                         continue
+                    recover_thinking=action.startswith("reset_")
+                    if recover_thinking:
+                        try:
+                            await asyncio.wait_for(session.interrupt(force=True),
+                                                   timeout=2)
+                        except (RuntimeError,asyncio.TimeoutError):
+                            pass
+                    base_action=action.removeprefix("reset_")
                     phrase={
                         "give_hint": (
                             "Твоя очередь ОБЪЯСНЯТЬ. Не называй тайное слово. "
@@ -535,7 +543,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             "Скажи очень коротко: Дай подсказку! "
                             "После ответа сразу пробуй угадать."
                         ),
-                    }[action]
+                    }[base_action]
                     logger.info("Duet silence recovery: bot=%s role=%s prompt=%s "
                                 "attempt=%s",
                                 bot_uid[-6:],duet_snapshot.get("role"),action,
