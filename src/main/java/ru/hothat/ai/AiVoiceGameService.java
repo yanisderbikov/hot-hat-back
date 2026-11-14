@@ -248,11 +248,18 @@ public class AiVoiceGameService {
                 game.isPaused())throw ApiException.of("AI_STALE_WORD",409);
         String teamId=game.getCurrentTeamId();
         WordResolved resolved=engine.guess(game,game.getTurnId(),wordActionId);
+        // An utterance may reach this transaction after the final-word grace
+        // period. TURN_EXPIRED is NOT a correct counted guess, even if the
+        // speech happens to contain the right word. Never say "Верно!" for 0.
+        if (resolved.outcome()!=WordResolved.Outcome.COUNTED) {
+            if (resolved.outcome()==WordResolved.Outcome.TURN_EXPIRED)txn.commit();
+            return Map.of("matched",false,"reason","NOT_COUNTED",
+                    "turnClosed",resolved.turnClosed());
+        }
         txn.addTeamScore(teamId,resolved.teamScoreDelta());
         txn.commit();
         wordMemory.record(valid.usage().getRoomId(),game.getGameNumber(),teamId,
-                game.getTurnId(),wordActionId,resolved.word(),"guessed",
-                resolved.outcome()==WordResolved.Outcome.COUNTED);
+                game.getTurnId(),wordActionId,resolved.word(),"guessed",true);
         return Map.of("matched",true,"action","guessed","word",resolved.word()==null?"":resolved.word(),
                 "turnClosed",resolved.turnClosed());
     }
@@ -291,8 +298,11 @@ public class AiVoiceGameService {
             return Map.of("matched",false,"reason","WORD_ADVANCED");
         String teamId=game.getCurrentTeamId();
         WordResolved resolved=engine.guess(game,game.getTurnId(),actionId);
-        if (resolved.outcome()!=WordResolved.Outcome.COUNTED)
-            return Map.of("matched",false,"reason","NOT_COUNTED");
+        if (resolved.outcome()!=WordResolved.Outcome.COUNTED) {
+            if (resolved.outcome()==WordResolved.Outcome.TURN_EXPIRED)txn.commit();
+            return Map.of("matched",false,"reason","NOT_COUNTED",
+                    "turnClosed",resolved.turnClosed());
+        }
         txn.addTeamScore(teamId,resolved.teamScoreDelta());
         txn.commit();
         wordMemory.record(u.getRoomId(),game.getGameNumber(),teamId,
