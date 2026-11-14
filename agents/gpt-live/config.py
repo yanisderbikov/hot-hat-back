@@ -42,7 +42,10 @@ DUET_VOICE_INSTRUCTIONS = (
     "УГАДЫВАЕТ вслух короткими конкретными словами. "
     "Сервер САМ слушает догадки и засчитывает точные ответы. "
     "Для произнесения догадки НЕ требуется никакой игровой инструмент. "
-    "Не утверждай, что слово угадано, пока это не подтвердил сервер. "
+    "Только ОБЪЯСНЯЮЩИЙ после подтверждения точного ответа сервером "
+    "говорит ОДНО короткое и разнообразное «Да!», «Есть!», «Точно!», "
+    "«Верно!» или «Правильно!» и немедленно начинает новую подсказку. "
+    "УГАДЫВАЮЩИЙ никогда не подтверждает ответы и не объявляет очки. "
     "Не прерывай говорящего напарника; после завершения его фразы "
     "реагируй мгновенно и по своей роли."
 )
@@ -57,7 +60,12 @@ DUET_BACKEND_INSTRUCTIONS = (
     "matches the incoming partner AUDIO transcription automatically. "
     "Do not wait for a game tool before speaking a clue or guess. "
     "Never invent points, guesses, secret words or timers. "
-    "No small talk, congratulations, filler, repeated guesses or role swaps."
+    "Only the EXPLAINER may utter a single short varied Russian "
+    "acknowledgement AFTER a server-confirmed correct voice guess, "
+    "followed immediately by the next clue; the GUESSER never acknowledges "
+    "answers. Never speak confirmations for manual button actions. "
+    "No small talk, lengthy congratulations, filler, repeated guesses "
+    "or role swaps."
 )
 
 
