@@ -69,6 +69,7 @@ class HotHatPlayer(Agent):
         self.human_input_version = 0
         self.last_skipped_input_version = -1
         self.skip_lock = asyncio.Lock()
+        self.suppress_next_word_commentary = False
         self.recent_word_keys = {
             str(row.get("actionId")) for row in (recent_words or [])
             if isinstance(row, dict) and row.get("actionId")
@@ -333,6 +334,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     result = await game.heard(human_uid, phrase)
                     if result.get("matched"):
                         agent.recent_word_keys.add(str(result.get("actionId") or ""))
+                        # The model will already speak a one-word acknowledgement.
+                        # Do not send a SECOND competing start-speech request
+                        # when its next secret card appears in the polling loop.
+                        agent.suppress_next_word_commentary = True
                         # Auto-guessed: instant 1-2 word acknowledgement only.
                         # The next card is explained by follow_game_state.
                         replies = ("Есть!", "Точно!", "Верно!", "Да!")
@@ -402,7 +407,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             "форме. При точном произнесении слова человеком "
                             "сервер сам засчитает карточку."
                         )
-                        if not (is_duo and word == duet_bootstrap_word
+                        skip_second_prompt=agent.suppress_next_word_commentary
+                        agent.suppress_next_word_commentary=False
+                        if not skip_second_prompt and not (
+                                is_duo and word == duet_bootstrap_word
                                 and state.get("turnId") == duet_bootstrap_turn):
                             agent.duplex_session.append_commentary(
                                 "Сразу объясни следующее слово короткими подсказками."
