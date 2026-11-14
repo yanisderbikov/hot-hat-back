@@ -81,53 +81,84 @@ public class AiVoiceDispatchScheduler {
                 && room.getCurrentTeamId()!=null;
     }
 
-    private String aiUidForActiveTeam(Room room) {
+    private List<String> aiUidsForActiveTeam(Room room) {
         List<String> roster=GameRules.rosterForTeam(room,room.getCurrentTeamId());
-        if(roster.size()!=2)return null;
-        String ai=roster.stream().filter(AiVoiceSeatPolicy::isAi).findFirst().orElse(null);
-        if(ai==null)return null;
-        String human=roster.stream().filter(uid->!uid.equals(ai)).findFirst().orElse("");
-        if(AiVoiceSeatPolicy.isAi(human)||human.startsWith("testbot-"))return null;
+        if(roster.size()!=2)return List.of();
+        List<String> bots=roster.stream().filter(AiVoiceSeatPolicy::isAi).toList();
+        if(bots.size()==2){
+            // The only way to create this roster is through the authenticated
+            // site OWNER's experimental duet placement. No scripted testbots.
+            return bots.stream().allMatch(uid->rooms.getPlayer(room.getId(),uid).isPresent())
+                ? bots : List.of();
+        }
+        if(bots.size()!=1)return List.of();
+        String human=roster.stream().filter(uid->!uid.equals(bots.get(0))).findFirst().orElse("");
+        if(human.startsWith("testbot-"))return List.of();
         Optional<RoomPlayer> row=rooms.getPlayer(room.getId(),human);
-        if(row.isEmpty() || !AiVoiceSeatPolicy.isHuman(row.get()))return null;
-        return ai;
+        if(row.isEmpty() || !AiVoiceSeatPolicy.isHuman(row.get()))return List.of();
+        return bots;
+    }
+
+    private String aiUidForActiveTeam(Room room) {
+        List<String> ids=aiUidsForActiveTeam(room);
+        return ids.isEmpty()?null:ids.get(0);
     }
 
     private void launch(Room room) {
-        String ai=aiUidForActiveTeam(room);
-        if(ai==null)return;
-        List<AiVoiceSession> sessionRows=usage.activeSessions();
-        // Never overlap paid voice sessions, including during STOP.
-        if(!sessionRows.isEmpty()){
-            warnBlocked("GPT-Live dispatch blocked room="+room.getId()
-                    +" by existing voice session status="+sessionRows.get(0).getStatus()
-                    +", session="+sessionRows.get(0).getSessionId());
-            return;
-        }
+        List<String> bots=aiUidsForActiveTeam(room);
+        if(bots.isEmpty())return;
+        boolean duet=bots.size()==2;
         Map<String,Object> prior=Json.map(room.getLastTurn());
         String previousId=Json.str(prior.get("turnId"));
         String roundKey=room.getCurrentTeamId()+":"+
                 (previousId.isBlank() ? "first" : previousId);
-        AiVoiceSession allocated=usage.reserve(room.getId(),room.getGameNumber(),
-                room.getCurrentTeamId(),ai,roundKey);
-        if(!"pending".equals(allocated.getStatus()))return;
-        try {
-            String metadata=mapper.writeValueAsString(Map.of(
-                "sessionId",allocated.getSessionId(),
-                "roomId",room.getId(),
-                "botUid",ai,
-                "teamId",room.getCurrentTeamId(),
-                "gameNumber",room.getGameNumber(),
-                "shouldGreet",usage.shouldGreet(room.getId(),room.getGameNumber(),ai,allocated.getSessionId()),
-                "maxSessionSeconds",180));
-            Map<String,Object> dispatch=livekit.createAiDispatch(room.getId(),metadata);
-            String dispatchId=Json.str(dispatch.get("id"));
-            usage.markDispatched(allocated.getSessionId(),dispatchId);
-            log.info("GPT-Live voice dispatched room={} game={} team={} session={}",
-                    room.getId(),room.getGameNumber(),room.getCurrentTeamId(),allocated.getSessionId());
-        } catch(Exception e) {
-            usage.failDispatch(allocated.getSessionId(),"DISPATCH_FAILED");
-            log.warn("GPT-Live explicit dispatch failed for room {}: {}",room.getId(),e.getMessage());
+        for(String botUid:bots){
+            List<AiVoiceSession> active=usage.activeSessions();
+            boolean alreadyRunning=active.stream().anyMatch(s->
+                    room.getId().equals(s.getRoomId())
+                    && Objects.equals(room.getGameNumber(),s.getGameNumber())
+                    && botUid.equals(s.getBotUid()));
+            if(alreadyRunning)continue;
+            // Duet may have exactly one other ACTIVE game agent of its own
+            // pair. Any other room/session or STOPPING job blocks new costs.
+            boolean mayJoin=duet && active.size()==1 && active.stream().allMatch(s->
+                    "game".equals(s.getMode()) && !"stopping".equals(s.getStatus())
+                    && room.getId().equals(s.getRoomId())
+                    && Objects.equals(room.getGameNumber(),s.getGameNumber())
+                    && room.getCurrentTeamId().equals(s.getTeamId())
+                    && bots.contains(s.getBotUid()));
+            if(!active.isEmpty() && !mayJoin){
+                warnBlocked("GPT-Live dispatch blocked room="+room.getId()
+                        +" by existing voice session status="+active.get(0).getStatus());
+                return;
+            }
+            String key=duet ? roundKey+":"+botUid : roundKey;
+            AiVoiceSession allocated=duet
+                    ? usage.reserve(room.getId(),room.getGameNumber(),room.getCurrentTeamId(),
+                            botUid,key,null,true)
+                    : usage.reserve(room.getId(),room.getGameNumber(),room.getCurrentTeamId(),
+                            botUid,key);
+            if(!"pending".equals(allocated.getStatus()))continue;
+            try {
+                String metadata=mapper.writeValueAsString(Map.of(
+                    "sessionId",allocated.getSessionId(),
+                    "roomId",room.getId(),
+                    "botUid",botUid,
+                    "teamId",room.getCurrentTeamId(),
+                    "gameNumber",room.getGameNumber(),
+                    "shouldGreet",usage.shouldGreet(room.getId(),room.getGameNumber(),botUid,allocated.getSessionId()),
+                    "maxSessionSeconds",180));
+                Map<String,Object> dispatch=livekit.createAiDispatch(room.getId(),metadata);
+                String dispatchId=Json.str(dispatch.get("id"));
+                usage.markDispatched(allocated.getSessionId(),dispatchId);
+                log.info("GPT-Live voice dispatched room={} game={} team={} bot={} session={}",
+                        room.getId(),room.getGameNumber(),room.getCurrentTeamId(),botUid,allocated.getSessionId());
+            }catch(Exception e){
+                usage.failDispatch(allocated.getSessionId(),"DISPATCH_FAILED");
+                log.warn("GPT-Live explicit dispatch failed for room {} bot {}: {}",
+                        room.getId(),botUid,e.getMessage());
+                if(duet)return; // don't pay for a lone agent with no partner
+            }
         }
     }
 
@@ -150,8 +181,7 @@ public class AiVoiceDispatchScheduler {
                         // A game turn must take precedence over owner smalltalk.
                         && !(eligible(room) && Objects.equals(
                              room.getCurrentTeamId(),session.getTeamId()))
-                    : eligible(room) && aiUidForActiveTeam(room)!=null
-                        && Objects.equals(session.getBotUid(),aiUidForActiveTeam(room))
+                    : eligible(room) && aiUidsForActiveTeam(room).contains(session.getBotUid())
                         && Objects.equals(session.getTeamId(),room.getCurrentTeamId())
                         && Objects.equals(session.getGameNumber(),room.getGameNumber());
             boolean expired=session.getStartedAt()!=null
