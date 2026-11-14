@@ -57,7 +57,10 @@ public class AiVoiceSeatService {
         }
         List<RoomPlayer> members = players.stream().filter(p -> teamId.equals(p.getTeamId())).toList();
         RoomPlayer scripted = members.stream()
-                .filter(p -> Boolean.TRUE.equals(p.getIsTestBot())).findFirst().orElse(null);
+                // AI seats use isTestBot=true for presence, but are NOT
+                // scripted test bots and must never be deleted/replaced here.
+                .filter(p -> Boolean.TRUE.equals(p.getIsTestBot())
+                        && !AiVoiceSeatPolicy.isAi(p.getUid())).findFirst().orElse(null);
         if (scripted != null) {
             if (!room.getTestBotIds().contains(scripted.getUid())) {
                 throw ApiException.of("AI_REPLACE_ONLY_SCRIPTED_TEST_BOT",409);
