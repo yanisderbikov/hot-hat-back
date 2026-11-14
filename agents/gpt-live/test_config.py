@@ -48,7 +48,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("last_skipped_input_version", source)
         self.assertIn("skip_once", source)
         self.assertIn('if result.get("matched"):', source)
-        self.assertIn("Произнеси ровно одно короткое", source)
+        self.assertIn("Скажи естественно и коротко", source)
         self.assertIn("suppress_next_word_commentary", source)
         client = Path(__file__).with_name("game_client.py").read_text(encoding="utf-8")
         self.assertIn('return {**result, "actionId": action_id}', client)
@@ -171,8 +171,9 @@ class SettingsTests(unittest.TestCase):
     def test_duet_mismatch_never_acts_as_advanced_card(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
-        self.assertIn("СЕРВЕР НЕ ЗАСЧИТАЛ последнюю голосовую догадку.",source)
-        self.assertIn("ВСЁ ЕЩЁ ТА ЖЕ карточка",source)
+        self.assertIn('elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:',source)
+        self.assertNotIn("Ответ НЕ засчитан сервером.",source)
+        self.assertNotIn("СЕРВЕР НЕ ЗАСЧИТАЛ последнюю голосовую догадку.",source)
         self.assertIn("СЕРВЕР НЕ ЗАСЧИТАЛ эту догадку.",source)
         self.assertIn("СЕРВЕР ЗАСЧИТАЛ твою догадку.",source)
         self.assertIn("pending_duet_ack = None",source)
@@ -183,7 +184,7 @@ class SettingsTests(unittest.TestCase):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         from config import DUET_BACKEND_INSTRUCTIONS, DUET_VOICE_INSTRUCTIONS
         ast.parse(source)
-        self.assertIn("allow_interruptions=True",source)
+        self.assertIn('"allow_interruptions": True',source)
         self.assertIn("min_interruption_duration=0.15",source)
         self.assertIn("async def stop_stale_explanation()",source)
         self.assertIn("await stop_stale_explanation()",source)
@@ -194,6 +195,29 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("ПЕРЕБИВ",DUET_VOICE_INSTRUCTIONS)
         self.assertIn("INTERRUPTS",DUET_BACKEND_INSTRUCTIONS)
         self.assertIn("Peer voice score: mode=",source)
+
+    def test_human_rublisha_uses_natural_dialogue_without_technical_voice(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        from config import VOICE_INSTRUCTIONS, BACKEND_INSTRUCTIONS
+        ast.parse(source)
+        self.assertIn("duet_turn_settings = ({",source)
+        self.assertIn('} if is_duo else {})',source)
+        self.assertIn("**duet_turn_settings,",source)
+        self.assertIn('and is_duo:',source)
+        self.assertIn('now-duet_live.last_activity<11.0:',source)
+        self.assertIn("живo",VOICE_INSTRUCTIONS.replace("живо","живo"))
+        self.assertIn("НИКОГДА не произноси",VOICE_INSTRUCTIONS)
+        self.assertIn("разные подсказки",VOICE_INSTRUCTIONS)
+        self.assertIn("PRIVATE implementation details",BACKEND_INSTRUCTIONS)
+        # A rejection must NOT issue a forced voice reply for a HUMAN.
+        beginning=source.index('elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:')
+        ending=source.index('            except Exception as exc:',beginning)
+        rejection=source[beginning:ending]
+        self.assertNotIn('Ответ НЕ засчитан сервером',rejection)
+        self.assertNotIn('СЕРВЕР НЕ ЗАСЧИТАЛ',rejection)
+        self.assertIn('Продолжай объяснять то же самое слово',rejection)
+        self.assertIn('await stop_stale_explanation()',rejection)
+        self.assertIn('and is_duo:',rejection.splitlines()[0])
 
     def test_scripted_partner_is_test_only_output_speech_without_human_microphone(self):
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
