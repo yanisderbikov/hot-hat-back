@@ -72,6 +72,13 @@ public class AiVoiceGameService {
         view.put("gameNumber",g.getGameNumber());
         view.put("phase",g.getPhase().name().toLowerCase(java.util.Locale.ROOT));
         view.put("botUid",u.getBotUid());
+        AiVoiceCharacters.Character character=AiVoiceCharacters.byName(
+                rooms.getPlayer(u.getRoomId(),u.getBotUid())
+                        .map(ru.hothat.model.room.RoomPlayer::getName).orElse("Рублиша"));
+        view.put("characterId",character.id());
+        view.put("characterName",character.name());
+        view.put("voice",character.voice());
+        view.put("personality",character.personality());
         view.put("humanUid",valid.humanUid());
         view.put("isPaused",g.isPaused());
         view.put("mode",smalltalk?"smalltalk":"game");
