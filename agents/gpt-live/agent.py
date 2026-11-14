@@ -31,6 +31,17 @@ logger = logging.getLogger("hot-hat-gpt-live")
 server = AgentServer()
 
 
+def _is_voice_confirmed_guess(row: dict) -> bool:
+    """Only a server-confirmed voice recognition may cause a verbal 'Есть!'.
+
+    Manual 'Угадали' clicks, scripted test actions and unknown clients must
+    NEVER make the agent narrate score confirmation. All remain in memory.
+    """
+    return (isinstance(row, dict)
+            and row.get("outcome") == "guessed"
+            and str(row.get("actionId") or "").startswith("aiw_"))
+
+
 def _history_prompt(rows: list[dict] | None) -> str:
     """Authoritative resolved-word history, not the current secret card."""
     if not isinstance(rows, list) or not rows:
@@ -85,9 +96,14 @@ class HotHatPlayer(Agent):
                 "Просьбы 'пропусти', 'давай след слово', 'следующее слово', "
                 "'давай другое', 'давай следующее' — одинаковые команды "
                 "пропуска текущей карточки. При них вызови skip_after_teammate_request. "
-                "Подтверждай правильные ответы только после серверного "
-                "засчитывания, коротко и каждый раз чуть по-разному. "
-                "Никогда не начисляй очки голосом и не меняй таймер сам."
+                "В игре ВСЕГДА реагируй на скорость: максимум одно-два "
+                "слова подтверждения, без повторения угаданного слова, без "
+                "лишних поздравлений, сразу переходи к следующей подсказке. "
+                "Если человек НАЖАЛ кнопку 'Угадали', НЕ озвучивай это "
+                "событие: он уже увидел подтверждение на экране. "
+                "Если сервер подтвердил ТВОЁ собственное распознавание "
+                "речи, можешь сказать только 'Есть!' или 'Точно!' и сразу "
+                "играть дальше. Не меняй очки и таймер сама."
             )
         super().__init__(instructions=
                          "Тебя зовут " + character_name + ". " + personality + " "
@@ -317,20 +333,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     result = await game.heard(human_uid, phrase)
                     if result.get("matched"):
                         agent.recent_word_keys.add(str(result.get("actionId") or ""))
-                        replies = (
-                            "Верно! Поехали дальше!", "Точно! Засчитано!",
-                            "Угадали! Молодцы!", "Да, всё правильно!",
-                            "Есть! Класс!", "Это оно, супер!",
-                        )
+                        # Auto-guessed: instant 1-2 word acknowledgement only.
+                        # The next card is explained by follow_game_state.
+                        replies = ("Есть!", "Точно!", "Верно!", "Да!")
                         confirmed = replies[len(agent.recent_word_keys) % len(replies)]
-                        # Immediate feedback even when this final word
-                        # closes the round before the 700ms watcher wakes.
                         session.generate_reply(instructions=(
-                            "Сервер только что ЗАСЧИТАЛ слово "
-                            + str(result.get("word") or "это слово")[:80] +
-                            ". Обязательно скажи напарнику: " + confirmed +
-                            " Без нового приветствия и без раскрытия "
-                            "следующей секретной карточки."))
+                            "Сервер подтвердил ТВОЮ догадку. "
+                            "Скажи МАКСИМУМ ОДНО слово: "+confirmed+
+                            " Никаких поздравлений и пересказа. "
+                            "Сразу продолжай игру на скорость."))
             except Exception as exc:
                 logger.debug("No game action for transcribed utterance: %s", exc)
 
@@ -340,14 +351,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         async def follow_game_state():
             nonlocal latest
             previous = None
-            confirmations = (
-                "Верно! Отлично, поехали дальше!",
-                "Точно! Есть такое слово, следующее!",
-                "Угадали! Класс, продолжаем!",
-                "Да! Засчитано, идём дальше!",
-                "Есть! Правильный ответ, молодцы!",
-                "Ура, это оно! Продолжаем!",
-            )
+            confirmations = ("Есть!", "Верно!", "Точно!", "Да!")
             while not stop.is_set():
                 try:
                     state = await game.context()
@@ -370,18 +374,19 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         agent.duplex_session.append_instructions(_history_prompt(history))
                         if mode != "smalltalk" and role in ("explainer", "guesser"):
                             for row in new_actions[-2:]:
-                                if row.get("outcome") == "guessed":
+                                if _is_voice_confirmed_guess(row):
+                                    # Only verified AUTO speech can produce
+                                    # brief feedback. A MANUAL click has
+                                    # already shown the score on screen.
                                     i = len(agent.recent_word_keys) % len(confirmations)
                                     session.generate_reply(instructions=(
-                                        "Сервер уже ЗАСЧИТАЛ слово "
-                                        + str(row.get("word", ""))[:80] + ". "
-                                        + "Подтверди кратко и бодро: "
-                                        + confirmations[i] +
-                                        " Не называй следующее секретное слово."))
-                                elif row.get("outcome") == "skipped":
-                                    session.generate_reply(instructions=(
-                                        "Сервер подтвердил пропуск. Скажи: "
-                                        "'Пропускаем, дальше!' и продолжай игру."))
+                                        "Это твоя распознанная догадка, "
+                                        "подтверждённая сервером. "
+                                        "Максимум ОДНО слово: " + confirmations[i]
+                                        + " Затем сразу новая подсказка."
+                                    ))
+                                # Manual guesses and skips are SILENT: only
+                                # refresh the confirmed-word context above.
                 word = state.get("currentWord") if role == "explainer" else None
                 key = (state.get("turnId"), role, word, bool(state.get("isPaused")))
                 latest = role
