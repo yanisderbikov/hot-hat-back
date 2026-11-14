@@ -127,6 +127,15 @@ public class AiVoiceGameService {
         MatchState game=session.state();
         if(game.isRanked() || !Objects.equals(game.getCurrentTeamId(),valid.usage().getTeamId()))
             throw ApiException.of("AI_NOT_ACTIVE_TEAM",409);
+        if(AiVoiceSeatPolicy.isAi(valid.humanUid())){
+            List<String> duoRoster=game.rosterOf(valid.usage().getTeamId());
+            // The server, not either LLM, chooses a single speaker.
+            // Without this, guesser could also invoke choose_to_explain,
+            // creating two competing LiveKit turn roles.
+            if(duoRoster.isEmpty() || !Objects.equals(
+                    duoRoster.get(0),valid.usage().getBotUid()))
+                throw ApiException.of("AI_DUO_GUESSER_CANNOT_EXPLAIN",403);
+        }
         TurnStarted started=engine.beginTurn(game,valid.usage().getBotUid());
         session.commit();
         return Map.of("ok",true,"outcome",started.outcome().name(),"role","explainer");
