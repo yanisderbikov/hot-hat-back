@@ -62,10 +62,11 @@ class HotHatPlayer(Agent):
     def __init__(self, game: GameClient, human_uid: str, *, smalltalk: bool = False,
                  should_greet: bool = False,
                  character_name: str = "Рублиша", personality: str = "",
-                 recent_words: list[dict] | None = None):
+                 duet_role: str = "", recent_words: list[dict] | None = None):
         self.game = game
         self.human_uid = human_uid
         self.smalltalk = smalltalk
+        self.duet_role = duet_role
         self.last_human_phrase = ""
         self.human_input_version = 0
         self.last_skipped_input_version = -1
@@ -82,8 +83,34 @@ class HotHatPlayer(Agent):
             " В этой партии уже было приветствие. Не здоровайся повторно, "
             "даже если подключился новый голосовой сеанс. "
         )
-        smalltalk_rules = (
-            " Ты в режиме smol talk с владельцем игры. Общайся непринуждённо "
+        # Role negotiation was inherited from human+AI mode. For TWO voice
+        # bots that conflicted with the server-assigned explainer/guesser role,
+        # causing both to wait for each other or try to take the same job.
+        if duet_role == "explainer":
+            smalltalk_rules=(
+                " ЭКСПЕРИМЕНТАЛЬНЫЙ ИИ-ДУЭТ. Сервер УЖЕ назначил тебя "
+                "ОБЪЯСНЯЮЩИМ. НИКОГДА не обсуждай распределение ролей и "
+                "не проси второго ИИ начать объяснять. Говори первой короткую "
+                "подсказку, затем слушай одну конкретную догадку. "
+                "Если она неверная — сразу новая подсказка. "
+                "Если оба замолчали — сам возобнови объяснение. "
+                "Нельзя произносить секретное слово, его части или однокоренные "
+                "формы. Соревнование на скорость: каждый ответ до одной фразы. "
+            )
+        elif duet_role == "guesser":
+            smalltalk_rules=(
+                " ЭКСПЕРИМЕНТАЛЬНЫЙ ИИ-ДУЭТ. Сервер УЖЕ назначил тебя "
+                "УГАДЫВАЮЩИМ. Не обсуждай распределение ролей, не вызывай "
+                "choose_to_explain, не требуй тайное слово. "
+                "Слушай подсказки второго ИИ и немедленно называй конкретное "
+                "слово-догадку. После неверной догадки продолжай пробовать, "
+                "после подтверждения очков бери следующую подсказку. "
+                "Если объясняющий замолкает — попроси ещё одну подсказку "
+                "в двух словах. Нельзя просто сидеть и ждать таймера. "
+            )
+        else:
+            smalltalk_rules = (
+                " Ты в режиме smol talk с владельцем игры. Общайся непринуждённо "
             "по-дружески. Не угадывай слова, не выбирай роли, "
             "не объявляй очки и не используй игровые инструменты. "
             "Не мешай текущему ходу другой команды. "
@@ -116,6 +143,8 @@ class HotHatPlayer(Agent):
     async def choose_to_explain(self, context: RunContext) -> str:
         """Выбрать роль объясняющего и запустить минутный раунд, только
         когда напарник явно просит тебя объяснять слово."""
+        if self.duet_role == "guesser":
+            return "В ИИ-дуэте тебе назначено УГАДЫВАТЬ. Слушай подсказку!"
         try:
             state = await self.game.choose_explainer()
             return "Роль выбрана сервером. Начинай объяснять, получив слово: " + str(state.get("outcome"))
@@ -285,9 +314,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             except Exception as exc:
                 logger.info("Agent identity %s unavailable: %s", method, type(exc).__name__)
 
+        duo_role=("explainer" if bot_uid==designated_explainer_uid else "guesser") if is_duo else ""
         agent = HotHatPlayer(game, human_uid, smalltalk=(mode == "smalltalk"),
                              should_greet=should_greet, character_name=character_name,
-                             personality=personality,
+                             personality=personality, duet_role=duo_role,
                              recent_words=initial.get("recentWords") or [])
         session = AgentSession(llm=inference.DuplexModel(
             model=MODEL_ID,
