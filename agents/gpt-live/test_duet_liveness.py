@@ -25,6 +25,22 @@ class DuetLivenessTests(unittest.TestCase):
         self.assertIsNone(next_action(live,12.8,word="Метеорит"))
         self.assertEqual(next_action(live,13.4,word="Метеорит"),"give_hint")
 
+    def test_explainer_moves_faster_after_an_incorrect_guess_without_interrupting(self):
+        live=DuetLiveness(last_activity=0)
+        live.card_changed("turn-1","explainer","Парус",0)
+        live.mark_spoke(1.0)
+        live.mark_heard(4.0)
+        self.assertIsNone(next_action(live,7.8,word="Парус"))
+        self.assertIsNone(next_action(live,8.2,word="Парус",
+                                      user_state="speaking"))
+        self.assertEqual(next_action(live,8.2,word="Парус"),"give_hint")
+        live.pending=False
+        live.mark_spoke(9.0)
+        # Once the explainer starts speaking, the last peer guess no longer
+        # controls prompt pacing. No redundant prompt on the new hint.
+        self.assertIsNone(next_action(live,13.5,word="Парус"))
+        self.assertEqual(next_action(live,15.0,word="Парус"),"give_hint")
+
     def test_guesser_first_requests_hint_then_guesses_only_after_hearing_peer(self):
         live=DuetLiveness(last_activity=0)
         live.card_changed("turn-1","guesser",None,0)
