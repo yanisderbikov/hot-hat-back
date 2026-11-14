@@ -39,6 +39,13 @@ public class AiVoiceRoomController {
                         body.characterId()==null?"rublisha":body.characterId()));
     }
 
+    /** No client-side owner guess: the authoritative OWNER role is returned by Java. */
+    @GetMapping("/permissions")
+    public ResponseEntity<Map<String,Object>> permissions(
+            @AuthenticationPrincipal HotHatUser user) {
+        return ResponseEntity.ok(Map.of("allowAiOnlyDuo", user!=null && user.owner()));
+    }
+
     @DeleteMapping("/{aiUid}")
     public ResponseEntity<Map<String,Object>> remove(
             @AuthenticationPrincipal HotHatUser user,
