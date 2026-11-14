@@ -56,7 +56,7 @@ class SettingsTests(unittest.TestCase):
     def test_manual_guessed_button_never_queues_voice_congratulations(self):
         from agent import _is_voice_confirmed_guess
         self.assertFalse(_is_voice_confirmed_guess({
-            "outcome": "guessed", "actionId": "word_c29ac818"
+            "outcome": "guessed", "actionId": "guess_c29ac818"
         }))
         self.assertFalse(_is_voice_confirmed_guess({
             "outcome": "guessed", "actionId": "test-guess-4132"
