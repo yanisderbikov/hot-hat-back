@@ -47,6 +47,7 @@ def _history_prompt(rows: list[dict] | None) -> str:
 class HotHatPlayer(Agent):
     def __init__(self, game: GameClient, human_uid: str, *, smalltalk: bool = False,
                  should_greet: bool = False,
+                 character_name: str = "Рублиша", personality: str = "",
                  recent_words: list[dict] | None = None):
         self.game = game
         self.human_uid = human_uid
@@ -86,7 +87,9 @@ class HotHatPlayer(Agent):
                 "засчитывания, коротко и каждый раз чуть по-разному. "
                 "Никогда не начисляй очки голосом и не меняй таймер сам."
             )
-        super().__init__(instructions=VOICE_INSTRUCTIONS + etiquette + smalltalk_rules
+        super().__init__(instructions=
+                         "Тебя зовут " + character_name + ". " + personality + " "
+                         + VOICE_INSTRUCTIONS + etiquette + smalltalk_rules
                          + " " + _history_prompt(recent_words))
 
     @function_tool
@@ -199,9 +202,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         if str(initial.get("botUid", "")) != bot_uid:
             return
         if str(initial.get("mode", "game")) != mode:
-            logger.warning("Rublisha dispatch context mode mismatch")
+            logger.warning("GPT-Live character dispatch context mode mismatch")
             return
         human_uid = str(initial.get("humanUid") or "")
+        character_name = str(initial.get("characterName") or "Рублиша")[:48]
+        personality = str(initial.get("personality") or "")[:400]
+        voice = str(initial.get("voice") or settings.voice)
         if not human_uid:
             return
 
@@ -214,7 +220,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             })),
             ("set_attributes", {"hotHatAiUid": bot_uid,
                                 "hotHatKind": "hot-hat-gpt-live"}),
-            ("set_name", "Рублиша"),
+            ("set_name", character_name),
         ):
             try:
                 setter = getattr(ctx.room.local_participant, method, None)
@@ -226,11 +232,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 logger.info("Agent identity %s unavailable: %s", method, type(exc).__name__)
 
         agent = HotHatPlayer(game, human_uid, smalltalk=(mode == "smalltalk"),
-                             should_greet=should_greet,
+                             should_greet=should_greet, character_name=character_name,
+                             personality=personality,
                              recent_words=initial.get("recentWords") or [])
         session = AgentSession(llm=inference.DuplexModel(
             model=MODEL_ID,
-            voice=settings.voice,
+            voice=voice,
             extra_kwargs={"responses_options": {
                 "model": BACKEND_MODEL,
                 "instructions": BACKEND_INSTRUCTIONS,
