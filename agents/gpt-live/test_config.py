@@ -48,7 +48,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("last_skipped_input_version", source)
         self.assertIn("skip_once", source)
         self.assertIn('if result.get("matched"):', source)
-        self.assertIn("Максимум ОДНО слово", source)
+        self.assertIn("Произнеси ровно одно короткое", source)
         self.assertIn("suppress_next_word_commentary", source)
         client = Path(__file__).with_name("game_client.py").read_text(encoding="utf-8")
         self.assertIn('return {**result, "actionId": action_id}', client)
