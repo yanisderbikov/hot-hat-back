@@ -78,7 +78,7 @@ public class AiVoiceSmallTalkService {
                 rooms.getPlayer(roomId,botUid).map(RoomPlayer::getTeamId).orElse(""),
                 botUid,key,owner.uid());
         try {
-            boolean greet=usage.shouldGreet(roomId,gameNumber,created.getSessionId());
+            boolean greet=usage.shouldGreet(roomId,gameNumber,botUid,created.getSessionId());
             String metadata=mapper.writeValueAsString(Map.of(
                     "sessionId",created.getSessionId(),"roomId",roomId,
                     "botUid",botUid,"mode","smalltalk","speakerUid",owner.uid(),
