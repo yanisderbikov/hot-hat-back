@@ -119,7 +119,12 @@ public class AiVoiceSeatService {
                 .distinct()
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         ids.add(aiUid);
-        if (ids.size()!=2) throw ApiException.of("AI_TEAM_SIZE_INVALID",409);
+        // The site owner can stage the first half of an experimental AI+AI
+        // pair; ordinary teams must still contain exactly two players.
+        if (ids.size()!=2 && !(user.owner() && ids.size()==1
+                && AiVoiceSeatPolicy.isAi(ids.get(0)))) {
+            throw ApiException.of("AI_TEAM_SIZE_INVALID",409);
+        }
         team.setMemberUids(ids);
         saverRoom.savePlayer(bot);
         saverRoom.saveTeam(team);
