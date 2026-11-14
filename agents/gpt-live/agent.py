@@ -207,7 +207,7 @@ class HotHatPlayer(Agent):
             return "В ИИ-дуэте тебе назначено УГАДЫВАТЬ. Слушай подсказку!"
         try:
             state = await self.game.choose_explainer()
-            return "Роль выбрана сервером. Начинай объяснять, получив слово: " + str(state.get("outcome"))
+            return "Твоя очередь объяснять. Начинай с первой подсказки."
         except Exception:
             return "Не получилось запустить ход. Возможно, напарник уже начал объяснять."
 
@@ -232,12 +232,12 @@ class HotHatPlayer(Agent):
         try:
             result = await self.skip_once(self.last_human_phrase, self.human_input_version)
             if result.get("alreadyHandled"):
-                return "Сервер уже пропустил это слово по данной просьбе."
-            return ("Сервер подтвердил пропуск. Перехожу к следующему слову."
+                return "Это слово уже пропущено, продолжай игру."
+            return ("Пропустили, продолжаем!"
                     if result.get("skipped") else
-                    "Пропуск не подтверждён.")
+                    "Останься на текущем слове, предложи другую подсказку.")
         except Exception:
-            return "Сервер не подтвердил просьбу пропустить слово."
+            return "Продолжи объяснять текущее слово."
 
     @function_tool
     async def read_game_role(self, context: RunContext) -> str:
