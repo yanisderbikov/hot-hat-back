@@ -279,6 +279,8 @@ public class AiVoiceGameService {
         Verified valid=verify(sessionId);
         MatchState snapshot=valid.game();
         AiVoiceSession u=valid.usage();
+        if ("smalltalk".equals(u.getMode()))
+            return Map.of("matched",false,"reason","AI_GAME_ONLY");
         if (snapshot.getPhase()!=MatchPhase.ACTIVE
                 || snapshot.isPaused()
                 || !Objects.equals(snapshot.getGuesserUid(),u.getBotUid())
