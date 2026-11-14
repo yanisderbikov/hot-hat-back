@@ -428,11 +428,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 else:
                     if is_duo:
                         duet_guess_verification_pending = True
-                    try:
-                        result = await game.heard(human_uid, phrase)
-                    finally:
-                        if is_duo:
-                            duet_guess_verification_pending = False
+                    result = await game.heard(human_uid, phrase)
                     if result.get("matched"):
                         agent.recent_word_keys.add(str(result.get("actionId") or ""))
                         # Only the EXPLAINER reaches this branch: the
@@ -496,6 +492,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             )
             except Exception as exc:
                 logger.debug("No game action for transcribed utterance: %s", exc)
+            finally:
+                if is_duo:
+                    duet_guess_verification_pending = False
 
         session.on("user_input_transcribed",
                    lambda event: asyncio.create_task(on_heard(event)))
