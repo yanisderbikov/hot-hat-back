@@ -120,6 +120,24 @@ public class AiVoiceDispatchScheduler {
         String previousId=Json.str(prior.get("turnId"));
         String roundKey=room.getCurrentTeamId()+":"+
                 (previousId.isBlank() ? "first" : previousId);
+        // If a GPT-Live duet deadlocks and the worker reports it as FAILED,
+        // permit ONE new paid session per bot this SAME turn, only if enough
+        // seconds remain. The usual monthly budget / global concurrency
+        // checks still apply. Never restart unrelated teams or human sessions.
+        List<AiVoiceSession> turnSessions=duet ? usage.gameSessions(room.getId(),room.getGameNumber())
+                .stream().filter(s->bots.contains(s.getBotUid())
+                        && s.getTurnKey()!=null
+                        && s.getTurnKey().startsWith(roundKey+":")).toList()
+                : List.of();
+        boolean stalledDuet=duet && turnSessions.stream().anyMatch(s->
+                "failed".equals(s.getStatus()) && List.of(
+                        "DUET_DEADLOCK","DUET_OPENING_FAILED","DUET_OPENING_SILENT"
+                ).contains(s.getErrorCode()));
+        long deadline=GameRules.currentTurnDeadline(room);
+        boolean enoughTime="turnIntro".equals(room.getPhase())
+                || ("active".equals(room.getPhase())
+                    && deadline>System.currentTimeMillis()+16000L);
+        boolean oneRecovery=stalledDuet && enoughTime;
         for(String botUid:bots){
             List<AiVoiceSession> active=usage.activeSessions();
             boolean alreadyRunning=active.stream().anyMatch(s->
@@ -140,13 +158,17 @@ public class AiVoiceDispatchScheduler {
                         +" by existing voice session status="+active.get(0).getStatus());
                 return;
             }
-            String key=duet ? roundKey+":"+botUid : roundKey;
+            String key=duet ? roundKey+":"+botUid
+                    + (oneRecovery ? ":recovery1" : "") : roundKey;
             AiVoiceSession allocated=duet
                     ? usage.reserve(room.getId(),room.getGameNumber(),room.getCurrentTeamId(),
                             botUid,key,null,true)
                     : usage.reserve(room.getId(),room.getGameNumber(),room.getCurrentTeamId(),
                             botUid,key);
             if(!"pending".equals(allocated.getStatus()))continue;
+            if(oneRecovery)
+                log.warn("GPT-Live bounded duet recovery room={} team={} bot={} attempt=1",
+                        room.getId(),room.getCurrentTeamId(),botUid);
             try {
                 String metadata=mapper.writeValueAsString(Map.of(
                     "sessionId",allocated.getSessionId(),
