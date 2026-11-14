@@ -106,6 +106,76 @@ class AiVoiceDispatchSchedulerTest {
     }
 
     @Test
+    void deadlockedOwnerAiDuetRestartsOnceOnSameTurnWithBudgetGuardStillApplied() {
+        enable();
+        String second="ai-gpt-live-bbbbbbbbbbbbbbbbbb";
+        Room room=activeRoom();
+        room.setPhase("active");
+        room.setTurnStartedAt(java.time.Instant.now());
+        room.setTurnDurationSeconds(60.0);
+        room.setTeamRosters(Map.of(TEAM,List.of(BOT,second)));
+        when(rooms.getByPhase("turnIntro",100)).thenReturn(List.of());
+        when(rooms.getByPhase("active",100)).thenReturn(List.of(room));
+        for(String uid:List.of(BOT,second)){
+            when(rooms.getPlayer(ROOM_ID,uid)).thenReturn(Optional.of(
+                RoomPlayer.builder().uid(uid).roomId(ROOM_ID).teamId(TEAM)
+                    .isTestBot(true).build()));
+        }
+        when(usage.activeSessions()).thenReturn(List.of());
+        String base=TEAM+":first:";
+        when(usage.gameSessions(ROOM_ID,1)).thenReturn(List.of(
+            AiVoiceSession.builder().sessionId("ai_failed_old")
+                .roomId(ROOM_ID).gameNumber(1).teamId(TEAM)
+                .botUid(BOT).mode("game").status("failed")
+                .errorCode("DUET_DEADLOCK").turnKey(base+BOT).build()
+        ));
+        for(String uid:List.of(BOT,second)){
+            when(usage.reserve(eq(ROOM_ID),eq(1),eq(TEAM),eq(uid),
+                    eq(base+uid+":recovery1"),isNull(),eq(true)))
+                .thenReturn(AiVoiceSession.builder().sessionId("ai_retry_"+uid)
+                    .status("pending").build());
+        }
+        when(livekit.createAiDispatch(eq(ROOM_ID),anyString()))
+                .thenReturn(Map.of("id","retry-dispatch"));
+
+        scheduler.reconcile();
+        verify(livekit,times(2)).createAiDispatch(eq(ROOM_ID),anyString());
+        verify(usage).markDispatched("ai_retry_"+BOT,"retry-dispatch");
+        verify(usage).markDispatched("ai_retry_"+second,"retry-dispatch");
+    }
+
+    @Test
+    void duetDoesNotPayForRestartWithLessThanSixteenSecondsLeft() {
+        enable();
+        String second="ai-gpt-live-bbbbbbbbbbbbbbbbbb";
+        Room room=activeRoom();
+        room.setPhase("active");
+        room.setTurnStartedAt(java.time.Instant.now().minusSeconds(55));
+        room.setTurnDurationSeconds(60.0);
+        room.setTeamRosters(Map.of(TEAM,List.of(BOT,second)));
+        when(rooms.getByPhase("turnIntro",100)).thenReturn(List.of());
+        when(rooms.getByPhase("active",100)).thenReturn(List.of(room));
+        for(String uid:List.of(BOT,second)){
+            when(rooms.getPlayer(ROOM_ID,uid)).thenReturn(Optional.of(
+                RoomPlayer.builder().uid(uid).roomId(ROOM_ID).teamId(TEAM)
+                    .isTestBot(true).build()));
+        }
+        when(usage.activeSessions()).thenReturn(List.of());
+        String base=TEAM+":first:";
+        when(usage.gameSessions(ROOM_ID,1)).thenReturn(List.of(
+            AiVoiceSession.builder().sessionId("ai_failed_old")
+                .roomId(ROOM_ID).gameNumber(1).teamId(TEAM)
+                .botUid(BOT).mode("game").status("failed")
+                .errorCode("DUET_DEADLOCK").turnKey(base+BOT).build()
+        ));
+        when(usage.reserve(eq(ROOM_ID),eq(1),eq(TEAM),anyString(),
+                anyString(),isNull(),eq(true))).thenReturn(
+                AiVoiceSession.builder().status("failed").build());
+        scheduler.reconcile();
+        verify(livekit,never()).createAiDispatch(anyString(),anyString());
+    }
+
+    @Test
     void neverStartsPaidInferenceWhenDispatchNotEnabled() {
         ReflectionTestUtils.setField(scheduler,"featureEnabled",true);
         ReflectionTestUtils.setField(scheduler,"dispatchEnabled",false);
