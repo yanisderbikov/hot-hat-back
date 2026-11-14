@@ -104,6 +104,21 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('if self.duet_role == "guesser":', source)
         self.assertIn("Сервер УЖЕ назначил тебя", source)
 
+    def test_duet_has_strict_roles_and_no_spoken_guess_confirmations(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        ast.parse(source)
+        # In a duet, next-word explanation is the ONLY response to a point.
+        self.assertIn("agent.suppress_next_word_commentary = not is_duo", source)
+        self.assertIn("if not is_duo and _is_voice_confirmed_guess(row):", source)
+        self.assertIn('if result.get("skipped") and not is_duo:', source)
+        self.assertIn('if not is_duo:\n                            replies', source)
+        # Guesser must never negotiate roles during the TURN_INTRO phase.
+        self.assertIn("Твоя роль в ИИ-дуэте", source)
+        self.assertIn("РОЛИ НЕ ОБСУЖДАЮТСЯ", source)
+        self.assertIn("Не начинай с", source)
+        self.assertIn("duet_wrong_guesses in (2, 4)", source)
+        self.assertIn("НОВАЯ КАРТОЧКА", source)
+
     def test_scripted_partner_is_test_only_output_speech_without_human_microphone(self):
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         self.assertIn('scripted_partner = initial.get("scriptedPartner") is True', source)
