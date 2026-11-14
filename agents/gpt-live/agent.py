@@ -668,6 +668,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 # selecting the acknowledgement before new-word commentary.
                 if key != previous and not (
                         is_duo and duet_guess_verification_pending):
+                    # Switching cards is an actual gameplay transition, not
+                    # another hint on the old one. The model's queued old
+                    # audio must be interrupted before this new card.
+                    changed_active_card=(previous is not None
+                        and previous[1] == "explainer"
+                        and previous[2] != word)
                     previous = key
                     if role == "explainer" and word:
                         if is_duo:
@@ -687,23 +693,28 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 (is_duo or scripted_partner)
                                 and word == duet_bootstrap_word
                                 and state.get("turnId") == duet_bootstrap_turn):
-                            agent.duplex_session.append_commentary(
-                                (("Сервер засчитал верный голосовой ответ. "
-                                  "Произнеси ровно " + pending_duet_ack
-                                  + " и немедленно дай ОДНУ новую подсказку "
-                                  "к только что присланному секретному слову. "
-                                  "Не произноси слово и не объявляй очки.")
-                                 if is_duo and pending_duet_ack else
-                                 ("НОВАЯ КАРТОЧКА: немедленно начни с одной "
-                                  "конкретной подсказки в 3–9 слов. Без "
-                                  "вступлений и обсуждений. Подтверждай только "
-                                  "правильные догадки, проверенные сервером."
-                                  if is_duo else
-                                  "Сразу объясни следующее слово короткими подсказками."))
-                            )
-                            # A pending acknowledgement must survive a
-                            # concurrent peer-ASR HTTP request, but must not
-                            # be replayed for later unrelated cards.
+                            if changed_active_card and is_duo:
+                                await stop_stale_explanation()
+                            # append_commentary merely adds context; it does
+                            # NOT reliably start a new spoken answer while
+                            # the duplex model is working. A real score gets
+                            # an explicit response with the NEW secret word.
+                            session.generate_reply(instructions=(
+                                ("Сервер засчитал голосовой ответ. "
+                                 "Только ты, ОБЪЯСНЯЮЩИЙ, коротко скажи "
+                                 + pending_duet_ack
+                                 + ". СРАЗУ начни ОДНУ новую подсказку "
+                                   "к ТЕКУЩЕМУ секретному слову, 3–8 слов. "
+                                   "Не называй его и не обсуждай очки.")
+                                if is_duo and pending_duet_ack else
+                                ("НОВАЯ КАРТОЧКА: объясни текущее слово "
+                                 "одной конкретной подсказкой 3–8 слов. "
+                                 "Дай угадывающему возможность ответить "
+                                 "ДАЖЕ ЕСЛИ он перебьёт тебя. Без вступлений."
+                                 if is_duo else
+                                 "Новое слово: немедленно объясни коротко, "
+                                 "не произнося секретное слово.")
+                            ))
                             pending_duet_ack = None
                     elif role == "smalltalk":
                         agent.duplex_session.append_instructions(
@@ -715,7 +726,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             "ТВОЯ РОЛЬ: УГАДЫВАЮЩИЙ. Секретного слова не знаешь. "
                             + ("Дослушай подсказку. Отвечай только одним "
                                "конкретным вариантом без комментариев. "
-                               "Не перебивай и не проси поменяться ролями."
+                               "Если понял ответ во время подсказки, "
+                               "НЕМЕДЛЕННО перебей объясняющего одним "
+                               "словом. Не проси менять роли."
                                if is_duo else
                                "Слушай напарника и произноси догадки, но не говори "
                                "что сервер засчитал очко без подтверждения.")
