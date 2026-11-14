@@ -530,6 +530,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             "одна фраза, затем слушай догадку напарника."
                         ))
                         async def check_opening_reply():
+                            nonlocal error_code
                             await first_handle
                             if first_handle.exception() is not None and not stop.is_set():
                                 # GPT-Live may decline generate_reply once:
@@ -545,9 +546,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                     await retry
                                     if retry.exception() is not None:
                                         logger.warning("Duet opening recovery also declined")
+                                        error_code="DUET_OPENING_SILENT"
+                                        # Terminate and report paid usage early;
+                                        # never burn the rest of 180s in silence.
+                                        stop.set()
                         duet_first_reply_task=asyncio.create_task(check_opening_reply())
                     except Exception as exc:
                         logger.warning("Duo opening turn failed: %s", exc)
+                        error_code="DUET_OPENING_FAILED"
+                        stop.set()
                 else:
                     # The guesser must LISTEN first: do not send another
                     # autonomous opening reply before the first voice stream.
