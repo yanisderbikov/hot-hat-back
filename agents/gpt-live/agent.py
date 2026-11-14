@@ -23,7 +23,8 @@ from livekit.agents.llm import function_tool
 
 from config import (
     AGENT_NAME, BACKEND_INSTRUCTIONS, BACKEND_MODEL, MODEL_ID,
-    VOICE_INSTRUCTIONS, read_settings,
+    VOICE_INSTRUCTIONS, DUET_VOICE_INSTRUCTIONS,
+    DUET_BACKEND_INSTRUCTIONS, read_settings,
 )
 from game_client import GameClient
 from duet_liveness import DuetLiveness
@@ -157,7 +158,8 @@ class HotHatPlayer(Agent):
             )
         super().__init__(instructions=
                          "Тебя зовут " + character_name + ". " + personality + " "
-                         + VOICE_INSTRUCTIONS + etiquette + smalltalk_rules
+                         + (DUET_VOICE_INSTRUCTIONS if duet_role
+                            else VOICE_INSTRUCTIONS) + etiquette + smalltalk_rules
                          + " " + _history_prompt(recent_words))
 
     @function_tool
@@ -345,7 +347,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             voice=voice,
             extra_kwargs={"responses_options": {
                 "model": BACKEND_MODEL,
-                "instructions": BACKEND_INSTRUCTIONS,
+                "instructions": (DUET_BACKEND_INSTRUCTIONS if is_duo
+                                 else BACKEND_INSTRUCTIONS),
             }},
         ))
         stop = asyncio.Event()
