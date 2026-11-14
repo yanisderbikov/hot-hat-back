@@ -48,13 +48,18 @@ class DuetLiveness:
             return None
         if role == "explainer" and not word:
             return None
-        if agent_state in ("speaking", "thinking", "initializing"):
+        if agent_state in ("speaking", "initializing"):
             return None
         if user_state == "speaking" or self.pending:
             return None
         # The explainer moves first. The guesser waits longer to avoid a
         # simultaneous prompt when both bots briefly stop talking.
         delay = 6.5 if role == "explainer" else 10.5
+        # Thinking forever without publishing speech is another deadlock:
+        # gently interrupt the stale generation after 12 seconds and ask
+        # for one short next action, never while actual audio is playing.
+        if agent_state == "thinking":
+            delay = max(delay, 12.0)
         if now - self.last_activity < delay or (self.last_prompt > 0 and now - self.last_prompt < 7.5):
             return None
         if self.prompts_without_voice >= 3:
@@ -63,8 +68,6 @@ class DuetLiveness:
         self.last_prompt = now
         self.last_activity = now
         self.pending = True
-        if role == "explainer":
-            return "give_hint"
-        if self.last_peer_voice > 0:
-            return "make_guess"
-        return "request_hint"
+        action = ("give_hint" if role == "explainer" else
+                  "make_guess" if self.last_peer_voice > 0 else "request_hint")
+        return "reset_" + action if agent_state == "thinking" else action
