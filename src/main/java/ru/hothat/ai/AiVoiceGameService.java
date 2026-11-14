@@ -52,8 +52,20 @@ public class AiVoiceGameService {
         if (roster.size()!=2 || !roster.contains(u.getBotUid()))
             throw ApiException.of("AI_NOT_IN_GAME_ROSTER",403);
         String other=roster.stream().filter(id->!id.equals(u.getBotUid())).findFirst().orElse("");
-        if (other.startsWith("testbot-"))
-            throw ApiException.of("AI_NEEDS_HUMAN_PARTNER",403);
+        if (other.startsWith("testbot-")) {
+            // Scripted partners exist only in admin test rooms. They never
+            // supply a microphone track; the runner acts on their behalf.
+            // Check the authoritative room test-bot list AND the saved seat.
+            ru.hothat.model.room.Room room=rooms.getById(u.getRoomId())
+                    .orElseThrow(()->ApiException.of("AI_TEST_ROOM_REQUIRED",403));
+            ru.hothat.model.room.RoomPlayer teammate=rooms.getPlayer(u.getRoomId(),other)
+                    .orElseThrow(()->ApiException.of("AI_SCRIPTED_PARTNER_MISSING",403));
+            if(!Boolean.TRUE.equals(room.getIsTestRoom())
+                    || room.getTestBotIds()==null || !room.getTestBotIds().contains(other)
+                    || !Boolean.TRUE.equals(teammate.getIsTestBot())
+                    || AiVoiceSeatPolicy.isAi(teammate.getUid()))
+                throw ApiException.of("AI_NEEDS_HUMAN_PARTNER",403);
+        }
         if(AiVoiceSeatPolicy.isAi(other)){
             // Only an actual two-AI roster, already validated when OWNER placed
             // the seats, is allowed. Human voices from other teams cannot score.
@@ -89,6 +101,7 @@ public class AiVoiceGameService {
         view.put("humanUid",valid.humanUid()); // legacy key: linked teammate identity
         boolean duo=AiVoiceSeatPolicy.isAi(valid.humanUid());
         view.put("aiDuo",duo);
+        view.put("scriptedPartner",!smalltalk && valid.humanUid().startsWith("testbot-"));
         view.put("designatedExplainerUid",duo && !g.rosterOf(u.getTeamId()).isEmpty()
                 ? g.rosterOf(u.getTeamId()).get(0) : "");
         view.put("isPaused",g.isPaused());
