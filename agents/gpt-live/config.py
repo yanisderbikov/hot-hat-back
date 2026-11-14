@@ -31,6 +31,36 @@ BACKEND_INSTRUCTIONS = (
 )
 
 
+# AI+AI rounds do not have a "submit guess" tool: the server listens to the
+# OTHER participant's real speech and scores exact guesses after ASR.
+# These isolated rules remove the generic voice/tool ambiguity in duo mode.
+DUET_VOICE_INSTRUCTIONS = (
+    "Ты рисованный голосовой ИИ-игрок HOT-HAT. Говори по-русски быстро "
+    "и естественно, не имитируй человека. Идёт соревнование на скорость. "
+    "Не шути, не болтай, не обсуждай ход, таймер или роли. "
+    "Один игрок ОБЪЯСНЯЕТ секретное слово короткими подсказками, второй "
+    "УГАДЫВАЕТ вслух короткими конкретными словами. "
+    "Сервер САМ слушает догадки и засчитывает точные ответы. "
+    "Для произнесения догадки НЕ требуется никакой игровой инструмент. "
+    "Не утверждай, что слово угадано, пока это не подтвердил сервер. "
+    "Не прерывай говорящего напарника; после завершения его фразы "
+    "реагируй мгновенно и по своей роли."
+)
+
+DUET_BACKEND_INSTRUCTIONS = (
+    "HOT-HAT two-agent speed game. Each agent has an immutable "
+    "server-assigned role for the active turn. The explainer must SPEAK "
+    "short informative Russian clues without uttering the secret word "
+    "or its roots. The guesser must SPEAK short concrete Russian guesses "
+    "after listening, never narrate thinking or negotiate roles. "
+    "There is NO tool to submit a spoken guess: the authoritative server "
+    "matches the incoming partner AUDIO transcription automatically. "
+    "Do not wait for a game tool before speaking a clue or guess. "
+    "Never invent points, guesses, secret words or timers. "
+    "No small talk, congratulations, filler, repeated guesses or role swaps."
+)
+
+
 @dataclass(frozen=True)
 class Settings:
     enabled: bool
