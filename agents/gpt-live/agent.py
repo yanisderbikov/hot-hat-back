@@ -11,6 +11,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import time
 
 from livekit.agents import (
@@ -73,7 +74,7 @@ class HotHatPlayer(Agent):
             "не объявляй очки и не используй игровые инструменты. "
             "Не мешай текущему ходу другой команды. "
         ) if smalltalk else (
-                " Сейчас ты играешь ровно с одним человеком, его голос "
+                " Сейчас ты играешь ровно с одним напарником, его голос "
                 "единственный на твоём входе. В начале хода обсудите, кто "
                 "объясняет. Когда партнёр говорит 'объясняй ты', НЕМЕДЛЕННО "
                 "вызови choose_to_explain. Если партнёр сам начал объяснять, "
@@ -168,7 +169,27 @@ def _model_usage(session: AgentSession, elapsed: float) -> tuple[float, int, int
             max(0, input_tokens), max(0, output_tokens))
 
 
-@server.rtc_session(agent_name=AGENT_NAME)
+async def accept_hot_hat_character(req) -> None:
+    """Use the virtual room-player UID as the REAL LiveKit agent identity.
+    This is essential for two AI teammates to subscribe to each other's audio
+    without fragile name lookups or cross-team routing.
+    """
+    try:
+        metadata = json.loads(getattr(req.job, "metadata", "") or "{}")
+        bot_uid = str(metadata.get("botUid") or "")
+        if not re.fullmatch(r"ai-gpt-live-[a-f0-9]{18}", bot_uid):
+            await req.reject()
+            return
+        await req.accept(
+            identity=bot_uid,
+            name="ИИ-игрок",
+            attributes={"hotHatAiUid": bot_uid, "hotHatKind": "hot-hat-gpt-live"},
+        )
+    except (ValueError, TypeError, KeyError):
+        await req.reject()
+
+
+@server.rtc_session(agent_name=AGENT_NAME, on_request=accept_hot_hat_character)
 async def hot_hat_voice_player(ctx: JobContext) -> None:
     settings = read_settings()
     if not settings.enabled:
@@ -208,10 +229,23 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         character_name = str(initial.get("characterName") or "Рублиша")[:48]
         personality = str(initial.get("personality") or "")[:400]
         voice = str(initial.get("voice") or settings.voice)
+        is_duo = initial.get("aiDuo") is True
+        designated_explainer_uid = str(initial.get("designatedExplainerUid") or "")
         if not human_uid:
             return
 
         await ctx.connect()
+        if is_duo:
+            # Both workers must be connected BEFORE either begins listening:
+            # each receives ONLY the OTHER bot's audio (never itself or a
+            # spectator). An unpaired worker exits without paying inference.
+            for _ in range(60):
+                if human_uid in ctx.room.remote_participants:
+                    break
+                await asyncio.sleep(0.2)
+            else:
+                logger.warning("AI duo teammate did not join: %s", human_uid)
+                return
         # Not every LiveKit Cloud worker permits metadata updates. Use both
         # metadata and participant attributes, with AGENT-kind client fallback.
         for method, value in (
@@ -414,6 +448,29 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                        "Не здоровайся — вы уже знакомы по этой партии. ")
                     + "Спроси у владельца что-нибудь ненавязчивое."
                 ))
+            elif is_duo:
+                if bot_uid == designated_explainer_uid:
+                    # In a two-agent experiment the speaker assignment is
+                    # deterministic and server-validated, not negotiated in
+                    # an infinite mutual 'you go first' conversation.
+                    try:
+                        await game.choose_explainer()
+                    except Exception as exc:
+                        logger.warning("Duo turn could not start: %s", exc)
+                    session.generate_reply(instructions=(
+                        ("Представься кратко. " if should_greet else "Не здоровайся повторно. ")
+                        + "Ты объясняешь слово, а твой ИИ-напарник угадывает. "
+                        + "Слушай его догадки. Запрашивай текущее слово через сервер. "
+                        + "Кратко и чётко давай подсказки, не называя слово."
+                    ))
+                else:
+                    session.generate_reply(instructions=(
+                        ("Представься кратко. " if should_greet else "Не здоровайся повторно. ")
+                        + "Ты угадываешь, а твой ИИ-напарник объясняет. "
+                        + "Слушай только его, предлагай по одному слову-догадке. "
+                        + "Не бери роль объясняющего и не утверждай, что слово "
+                        + "засчитали, пока не подтвердил сервер."
+                    ))
             else:
                 session.generate_reply(instructions=(
                     ("Поздоровайся с напарником в двух словах. " if should_greet else
