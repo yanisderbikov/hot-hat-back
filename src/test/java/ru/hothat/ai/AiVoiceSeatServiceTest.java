@@ -65,6 +65,67 @@ class AiVoiceSeatServiceTest {
     }
 
     @Test
+    void addsChosenAiNextToOneScriptedTestBotWithoutDeletingPartner() {
+        Room room=room(true);
+        room.setTestBotIds(new ArrayList<>(List.of(SCRIPTED)));
+        RoomTeam team=team(SCRIPTED);
+        prepare(room,team,List.of(player(SCRIPTED,true)));
+        Map<String,Object> result=seats.add(host,ROOM,TEAM,"shustrik");
+        assertEquals("Шустрик",result.get("name"));
+        assertEquals("shustrik",result.get("characterId"));
+        assertEquals(List.of(SCRIPTED,result.get("uid")),team.getMemberUids());
+        assertTrue(room.getTestBotIds().contains(SCRIPTED));
+        verify(saver,never()).deletePlayer(anyString(),anyString());
+    }
+
+    @Test
+    void replacesOnlyOneOfTwoScriptedTestBotsAndKeepsOther() {
+        String second="testbot-abcdef-2";
+        Room room=room(true);
+        room.setTestBotIds(new ArrayList<>(List.of(SCRIPTED,second)));
+        room.setTestBotRuntime(new LinkedHashMap<>(Map.of(
+                SCRIPTED,Map.of("ready",true),second,Map.of("ready",true))));
+        RoomTeam team=team(SCRIPTED,second);
+        prepare(room,team,List.of(player(SCRIPTED,true),player(second,true)));
+        Map<String,Object> result=seats.add(host,ROOM,TEAM,"mudrila");
+        assertEquals("Мудрила",result.get("name"));
+        assertEquals(List.of(second,result.get("uid")),team.getMemberUids());
+        assertEquals(List.of(second),room.getTestBotIds());
+        assertFalse(room.getTestBotRuntime().containsKey(SCRIPTED));
+        assertTrue(room.getTestBotRuntime().containsKey(second));
+        verify(saver).deletePlayer(ROOM,SCRIPTED);
+        verify(saver,never()).deletePlayer(ROOM,second);
+    }
+
+    @Test
+    void onlySiteOwnerCanReplaceScriptedTeammateWithSecondAi() {
+        String existing="ai-gpt-live-aaaaaaaaaaaaaaaaaa";
+        Room room=room(true);
+        room.setTestBotIds(new ArrayList<>(List.of(SCRIPTED)));
+        room.setTestBotRuntime(new LinkedHashMap<>(Map.of(SCRIPTED,Map.of("ready",true))));
+        RoomTeam team=team(existing,SCRIPTED);
+        RoomPlayer ai=player(existing,true);ai.setName("Бубнил");
+        prepare(room,team,List.of(ai,player(SCRIPTED,true)));
+        HotHatUser siteOwner=new HotHatUser("site-owner",null,null,true,true,false);
+        assertThrows(ApiException.class,()->seats.add(host,ROOM,TEAM,"plut"));
+        Map<String,Object> result=seats.add(siteOwner,ROOM,TEAM,"plut");
+        assertEquals(List.of(existing,result.get("uid")),team.getMemberUids());
+        assertEquals("Плут",result.get("name"));
+        verify(saver).deletePlayer(ROOM,SCRIPTED);
+    }
+
+    @Test
+    void scriptedSeatNotOnAuthoritativeTestBotListCannotBeReplaced() {
+        String second="testbot-abcdef-2";
+        Room room=room(true);
+        room.setTestBotIds(new ArrayList<>(List.of(SCRIPTED)));
+        RoomTeam team=team(second,SCRIPTED);
+        prepare(room,team,List.of(player(second,true),player(SCRIPTED,true)));
+        assertThrows(ApiException.class,()->seats.add(host,ROOM,TEAM,"bubnil"));
+        verify(saver,never()).savePlayer(any());
+    }
+
+    @Test
     void siteOwnerCanStageTwoDistinctAiPlayersInAnEmptyTeam() {
         HotHatUser siteOwner=new HotHatUser("site-owner",null,null,true,true,false);
         Room room=room(true);
