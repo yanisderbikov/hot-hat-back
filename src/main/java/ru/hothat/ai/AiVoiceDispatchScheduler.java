@@ -93,9 +93,17 @@ public class AiVoiceDispatchScheduler {
         }
         if(bots.size()!=1)return List.of();
         String human=roster.stream().filter(uid->!uid.equals(bots.get(0))).findFirst().orElse("");
-        if(human.startsWith("testbot-"))return List.of();
         Optional<RoomPlayer> row=rooms.getPlayer(room.getId(),human);
-        if(row.isEmpty() || !AiVoiceSeatPolicy.isHuman(row.get()))return List.of();
+        if(row.isEmpty())return List.of();
+        if(human.startsWith("testbot-")) {
+            // The test-bot has no microphone. LiveKit worker uses muted-input
+            // mode and the existing test runner generates the simulated guess.
+            boolean scripted=Boolean.TRUE.equals(room.getIsTestRoom())
+                    && room.getTestBotIds()!=null && room.getTestBotIds().contains(human)
+                    && Boolean.TRUE.equals(row.get().getIsTestBot());
+            return scripted ? bots : List.of();
+        }
+        if(!AiVoiceSeatPolicy.isHuman(row.get()))return List.of();
         return bots;
     }
 
