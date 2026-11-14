@@ -119,6 +119,16 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("duet_wrong_guesses in (2, 4)", source)
         self.assertIn("НОВАЯ КАРТОЧКА", source)
 
+    def test_duet_backend_prompts_speak_guesses_without_tools(self):
+        from config import DUET_VOICE_INSTRUCTIONS, DUET_BACKEND_INSTRUCTIONS
+        self.assertIn("НЕ требуется никакой игровой инструмент", DUET_VOICE_INSTRUCTIONS)
+        self.assertIn("NO tool to submit a spoken guess", DUET_BACKEND_INSTRUCTIONS)
+        self.assertIn("Never invent points", DUET_BACKEND_INSTRUCTIONS)
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        self.assertIn("DUET_VOICE_INSTRUCTIONS if duet_role", source)
+        self.assertIn("DUET_BACKEND_INSTRUCTIONS if is_duo", source)
+        self.assertIn("else BACKEND_INSTRUCTIONS", source)
+
     def test_scripted_partner_is_test_only_output_speech_without_human_microphone(self):
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         self.assertIn('scripted_partner = initial.get("scriptedPartner") is True', source)
