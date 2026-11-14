@@ -15,25 +15,25 @@ def next_action(live, now, *, role="explainer", word="Секрет",
 
 
 class DuetLivenessTests(unittest.TestCase):
-    def test_explainer_restarts_hint_after_7_seconds_of_both_bots_silent(self):
+    def test_explainer_restarts_hint_after_five_and_half_seconds_of_silence(self):
         live=DuetLiveness(last_activity=0)
         live.card_changed("turn-1","explainer","Метеорит",0)
-        self.assertIsNone(next_action(live,6.1,word="Метеорит"))
-        self.assertEqual(next_action(live,6.6,word="Метеорит"),"give_hint")
+        self.assertIsNone(next_action(live,5.1,word="Метеорит"))
+        self.assertEqual(next_action(live,5.6,word="Метеорит"),"give_hint")
         self.assertIsNone(next_action(live,8,word="Метеорит"))
         live.pending=False
-        self.assertIsNone(next_action(live,13.8,word="Метеорит"))
-        self.assertEqual(next_action(live,14.4,word="Метеорит"),"give_hint")
+        self.assertIsNone(next_action(live,12.8,word="Метеорит"))
+        self.assertEqual(next_action(live,13.4,word="Метеорит"),"give_hint")
 
     def test_guesser_first_requests_hint_then_guesses_only_after_hearing_peer(self):
         live=DuetLiveness(last_activity=0)
         live.card_changed("turn-1","guesser",None,0)
-        self.assertIsNone(next_action(live,10.2,role="guesser",word=None))
-        self.assertEqual(next_action(live,10.8,role="guesser",word=None),"request_hint")
+        self.assertIsNone(next_action(live,7.2,role="guesser",word=None))
+        self.assertEqual(next_action(live,7.8,role="guesser",word=None),"request_hint")
         live.pending=False
         live.mark_heard(14)
-        self.assertIsNone(next_action(live,22,role="guesser",word=None))
-        self.assertEqual(next_action(live,24.7,role="guesser",word=None),"make_guess")
+        self.assertIsNone(next_action(live,21,role="guesser",word=None))
+        self.assertEqual(next_action(live,22.2,role="guesser",word=None),"make_guess")
         self.assertEqual(live.prompts_without_voice,1)
 
     def test_real_speech_resets_recovery_budget_even_during_long_turn(self):
