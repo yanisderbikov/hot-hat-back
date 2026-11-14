@@ -106,6 +106,21 @@ class AiVoiceDuetScoringTest {
         verify(f.transaction(),never()).commit();
     }
 
+    @Test void expiredSpokenAnswerNeverCountsOrTriggersCorrectConfirmation() {
+        Fixture f=make(GUESSER);
+        when(f.engine().guess(any(),eq("turn-1"),anyString())).thenReturn(
+                new WordResolved(WordResolved.Outcome.TURN_EXPIRED,
+                        "Компас",null,0,5,0,true,0));
+        Map<String,Object> result=f.service().guessedByDuetVoice(
+                "ai_voice","Компас!","aig_123456789012345678");
+        assertEquals(false,result.get("matched"));
+        assertEquals("NOT_COUNTED",result.get("reason"));
+        assertEquals(true,result.get("turnClosed"));
+        verify(f.transaction(),never()).addTeamScore(anyString(),anyInt());
+        // Expired turn's transition must still be persisted.
+        verify(f.transaction(),times(1)).commit();
+    }
+
     @Test void incorrectGuessesAndSubstringsNeverAwardPoints() {
         Fixture f=make(GUESSER);
         for(String guess:List.of("Это карта","Компасик","Угадали!")) {
