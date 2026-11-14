@@ -230,6 +230,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         personality = str(initial.get("personality") or "")[:400]
         voice = str(initial.get("voice") or settings.voice)
         is_duo = initial.get("aiDuo") is True
+        scripted_partner = initial.get("scriptedPartner") is True and mode == "game"
         designated_explainer_uid = str(initial.get("designatedExplainerUid") or "")
         if not human_uid:
             return
@@ -421,11 +422,20 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             await session.start(
                 agent=agent,
                 room=ctx.room,
-                room_options=room_io.RoomOptions(
+                room_options=(room_io.RoomOptions(
+                    # A scripted bot has no LiveKit microphone or participant.
+                    # Keep voice OUTPUT enabled while disabling INPUT; do not
+                    # accidentally bind a spectator or the room host as the
+                    # imaginary bot's microphone.
+                    audio_input=False,
+                    text_input=False,
+                    close_on_disconnect=False,
+                    delete_room_on_close=False,
+                ) if scripted_partner else room_io.RoomOptions(
                     participant_identity=human_uid,
                     close_on_disconnect=True,
                     delete_room_on_close=False,
-                ),
+                )),
             )
             started = time.monotonic()
 
@@ -448,6 +458,24 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                        "Не здоровайся — вы уже знакомы по этой партии. ")
                     + "Спроси у владельца что-нибудь ненавязчивое."
                 ))
+            elif scripted_partner:
+                # In mixed test-only pairs, the scheduled scripted runner
+                # supplies one SIMULATED word guess. The AI must explain,
+                # since the ordinary test-bot doesn't publish audio at all.
+                try:
+                    await game.choose_explainer()
+                    session.generate_reply(instructions=(
+                        ("Представься кратко. " if should_greet else
+                         "Не здоровайся повторно. ")
+                        + "Ты объясняешь секретные слова в тестовой игре. "
+                        + "Соседний тест-бот не разговаривает и делает "
+                        + "только программные пробные догадки. Не выдавай его "
+                        + "симуляцию за настоящую речь или понимание. "
+                        + "Дай короткие голосовые подсказки к слову, которое "
+                        + "тебе передаст сервер; не называй слово напрямую."
+                    ))
+                except Exception as exc:
+                    logger.warning("Test scripted teammate turn not started: %s", exc)
             elif is_duo:
                 if bot_uid == designated_explainer_uid:
                     # In a two-agent experiment the speaker assignment is
