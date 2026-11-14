@@ -44,6 +44,18 @@ def _is_voice_confirmed_guess(row: dict) -> bool:
             and str(row.get("actionId") or "").startswith("aiw_"))
 
 
+def _voice_confirmation(role: str, server_matched: bool, ordinal: int) -> str | None:
+    """Only the explaining bot can confirm a server-verified spoken guess.
+
+    Keep the response diverse, one word, and free from any score claims.
+    The calling path must be a genuine voice match, never a manual click.
+    """
+    if role != "explainer" or server_matched is not True:
+        return None
+    options = ("Есть!", "Точно!", "Верно!", "Да!", "Правильно!")
+    return options[ordinal % len(options)]
+
+
 def _history_prompt(rows: list[dict] | None) -> str:
     """Authoritative resolved-word history, not the current secret card."""
     if not isinstance(rows, list) or not rows:
@@ -371,6 +383,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         duet_live = DuetLiveness(time.monotonic())
         duet_snapshot = {}
         duet_wrong_guesses = 0
+        duet_guess_verification_pending = False
 
         def duet_agent_speech(event):
             if is_duo and str(getattr(event, "new_state", "")) == "speaking":
@@ -398,7 +411,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             input_version = agent.human_input_version
             if latest != "explainer":
                 return
-            nonlocal duet_wrong_guesses
+            nonlocal duet_wrong_guesses, duet_guess_verification_pending
             try:
                 lower = phrase.lower()
                 if any(x in lower for x in (
@@ -413,7 +426,13 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             "Сервер подтвердил пропуск. Скажи коротко: "
                             "'Пропустили, следующее!' и продолжай объяснение."))
                 else:
-                    result = await game.heard(human_uid, phrase)
+                    if is_duo:
+                        duet_guess_verification_pending = True
+                    try:
+                        result = await game.heard(human_uid, phrase)
+                    finally:
+                        if is_duo:
+                            duet_guess_verification_pending = False
                     if result.get("matched"):
                         agent.recent_word_keys.add(str(result.get("actionId") or ""))
                         # Only the EXPLAINER reaches this branch: the
@@ -424,8 +443,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         # explainer delivers its own acknowledgement.
                         agent.suppress_next_word_commentary = True
                         duet_wrong_guesses = 0
-                        replies = ("Есть!", "Точно!", "Верно!", "Да!", "Правильно!")
-                        confirmed = replies[len(agent.recent_word_keys) % len(replies)]
+                        confirmed = _voice_confirmation(
+                            latest, result.get("matched") is True,
+                            len(agent.recent_word_keys))
+                        if not confirmed:
+                            return
                         next_word = None
                         if is_duo and not result.get("turnClosed"):
                             # The backend already advanced the card. Providing
@@ -517,7 +539,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 word = state.get("currentWord") if role == "explainer" else None
                 key = (state.get("turnId"), role, word, bool(state.get("isPaused")))
                 latest = role
-                if key != previous:
+                # The server may advance the card while the speech-match
+                # HTTP request is still resolving. Let its explainer finish
+                # selecting the acknowledgement before new-word commentary.
+                if key != previous and not (
+                        is_duo and duet_guess_verification_pending):
                     previous = key
                     if role == "explainer" and word:
                         if is_duo:
