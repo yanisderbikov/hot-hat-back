@@ -100,8 +100,12 @@ class HotHatPlayer(Agent):
                 "подсказку с другой стороны; не повторяй старую формулировку. "
                 "Если напарник дал несколько неверных версий, меняй тактику: "
                 "тип предмета, место, действие, сравнение или исключение. "
-                "После верного ответа СРАЗУ следующая подсказка, без "
-                "похвалы, пересказа и объявления очков. Не задавай вопросов "
+                "После верной догадки, подтверждённой СЕРВЕРОМ, только ты как "
+                "ОБЪЯСНЯЮЩИЙ говоришь ОДНО короткое подтверждение: «Да!», "
+                "«Точно!», «Верно!», «Есть!» или «Правильно!», меняй формулировку. "
+                "СРАЗУ после этого новая подсказка без паузы, пересказа "
+                "и объявления очков. Не подтверждай неверные догадки. "
+                "Не задавай вопросов "
                 "о ролях и не проси напарника объяснять. "
                 "ОБЩЕЕ разрешение на шутки и болтовню в дуэте НЕ ДЕЙСТВУЕТ. "
                 "Никаких вступлений, комментариев о процессе или длинных фраз. "
@@ -125,8 +129,10 @@ class HotHatPlayer(Agent):
                 "коротко уточнить категорию, например «Это предмет?». "
                 "Если объясняющий надолго замолчал — коротко попроси "
                 "«Ещё подсказку!», но не переспрашивай после каждой версии. "
-                "После верной догадки замолчи и слушай следующую подсказку. "
-                "Не раскрывай секретное слово через инструменты и никогда "
+                "После верной догадки замолчи и слушай следующую подсказку: "
+                "подтверждение произносит ТОЛЬКО объясняющий, не ты. "
+                "Не произноси «Да!», «Верно!», «Есть!» или похвалу в роли "
+                "угадывающего. Не раскрывай секретное слово через инструменты и никогда "
                 "не вызывай choose_to_explain. "
                 "ОБЩЕЕ разрешение на шутки и болтовню в дуэте НЕ ДЕЙСТВУЕТ. "
             )
@@ -152,9 +158,12 @@ class HotHatPlayer(Agent):
                 "лишних поздравлений, сразу переходи к следующей подсказке. "
                 "Если человек НАЖАЛ кнопку 'Угадали', НЕ озвучивай это "
                 "событие: он уже увидел подтверждение на экране. "
-                "Если сервер подтвердил ТВОЁ собственное распознавание "
-                "речи, можешь сказать только 'Есть!' или 'Точно!' и сразу "
-                "играть дальше. Не меняй очки и таймер сама."
+                "Если сервер подтвердил правильную голосовую догадку "
+                "напарника, ты как ОБЪЯСНЯЮЩИЙ обязательно подтверждаешь "
+                "одним коротким словом: «Да!», «Точно!», «Есть!», «Верно!» "
+                "или «Правильно!», затем немедленно играешь дальше. "
+                "Если ты УГАДЫВАЮЩИЙ, не подтверждай ответы. "
+                "Не меняй очки и таймер сама."
             )
         super().__init__(instructions=
                          "Тебя зовут " + character_name + ". " + personality + " "
@@ -407,22 +416,51 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     result = await game.heard(human_uid, phrase)
                     if result.get("matched"):
                         agent.recent_word_keys.add(str(result.get("actionId") or ""))
-                        # The model will already speak a one-word acknowledgement.
-                        # Do not send a SECOND competing start-speech request
-                        # when its next secret card appears in the polling loop.
-                        # In an AI duet, a spoken acknowledgement would race
-                        # with the new-word hint. Only the next hint is voiced.
-                        # Preserve human+AI acknowledgement behaviour.
-                        agent.suppress_next_word_commentary = not is_duo
+                        # Only the EXPLAINER reaches this branch: the
+                        # server has validated a genuine teammate voice guess.
+                        # One confirmation per spoken correct answer, for all
+                        # five AI characters, never for manual-button actions.
+                        # Suppress a competing next-word prompt while the
+                        # explainer delivers its own acknowledgement.
+                        agent.suppress_next_word_commentary = True
                         duet_wrong_guesses = 0
-                        if not is_duo:
-                            replies = ("Есть!", "Точно!", "Верно!", "Да!")
-                            confirmed = replies[len(agent.recent_word_keys) % len(replies)]
-                            session.generate_reply(instructions=(
-                                "Сервер подтвердил ТВОЮ догадку. "
-                                "Скажи МАКСИМУМ ОДНО слово: "+confirmed+
-                                " Никаких поздравлений и пересказа. "
-                                "Сразу продолжай игру на скорость."))
+                        replies = ("Есть!", "Точно!", "Верно!", "Да!", "Правильно!")
+                        confirmed = replies[len(agent.recent_word_keys) % len(replies)]
+                        next_word = None
+                        if is_duo and not result.get("turnClosed"):
+                            # The backend already advanced the card. Providing
+                            # the NEXT word before generate_reply allows ONE
+                            # short reply: "Верно! <new clue>", rather than two
+                            # competing generation requests and a long pause.
+                            try:
+                                next_state = await game.context()
+                                if (next_state.get("role") == "explainer"
+                                        and next_state.get("phase") == "active"
+                                        and not next_state.get("isPaused")):
+                                    next_word = next_state.get("currentWord")
+                            except Exception:
+                                logger.debug("Next duet card not ready for immediate hint")
+                        if next_word:
+                            agent.duplex_session.append_instructions(
+                                "Следующее СЕКРЕТНОЕ слово (не произноси его): "
+                                + str(next_word)
+                                + ". После короткого подтверждения объясни его "
+                                "новой информативной подсказкой в 3–9 слов."
+                            )
+                        elif is_duo and not result.get("turnClosed"):
+                            # No next card yet: let the state watcher initiate
+                            # its hint when the server makes the word available.
+                            agent.suppress_next_word_commentary = False
+                        session.generate_reply(instructions=(
+                            "Сервер подтвердил ПРАВИЛЬНУЮ догадку напарника. "
+                            "Ты ОБЪЯСНЯЮЩИЙ. Произнеси ровно одно короткое "
+                            "подтверждение: " + confirmed
+                            + (" И СРАЗУ объясни новую карточку одной подсказкой "
+                               "в 3–9 слов, не произнося секретное слово. "
+                               "Никакой другой болтовни и счёта." if next_word
+                               else " И ничего больше. Без поздравлений, "
+                               "обсуждения очков или повторения слова.")
+                        ))
                     elif is_duo:
                         duet_wrong_guesses += 1
                         if duet_wrong_guesses in (2, 4):
@@ -443,7 +481,6 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         async def follow_game_state():
             nonlocal latest, duet_wrong_guesses
             previous = None
-            confirmations = ("Есть!", "Верно!", "Точно!", "Да!")
             while not stop.is_set():
                 try:
                     state = await game.context()
@@ -472,21 +509,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         # Keep memory in the running realtime model, not only
                         # in the next paid process after a round change.
                         agent.duplex_session.append_instructions(_history_prompt(history))
-                        if mode != "smalltalk" and role in ("explainer", "guesser"):
-                            for row in new_actions[-2:]:
-                                if not is_duo and _is_voice_confirmed_guess(row):
-                                    # Only verified AUTO speech can produce
-                                    # brief feedback. A MANUAL click has
-                                    # already shown the score on screen.
-                                    i = len(agent.recent_word_keys) % len(confirmations)
-                                    session.generate_reply(instructions=(
-                                        "Это твоя распознанная догадка, "
-                                        "подтверждённая сервером. "
-                                        "Максимум ОДНО слово: " + confirmations[i]
-                                        + " Затем сразу новая подсказка."
-                                    ))
-                                # Manual guesses and skips are SILENT: only
-                                # refresh the confirmed-word context above.
+                        # Never speak from the recent-word history: it also
+                        # reaches the GUESSER and can race the actual explainer.
+                        # Spoken guess confirmations are issued once, only by
+                        # on_heard after the server validates the voice guess.
+                        # Manual "Угадали" clicks are intentionally silent.
                 word = state.get("currentWord") if role == "explainer" else None
                 key = (state.get("turnId"), role, word, bool(state.get("isPaused")))
                 latest = role
@@ -512,8 +539,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 and state.get("turnId") == duet_bootstrap_turn):
                             agent.duplex_session.append_commentary(
                                 ("НОВАЯ КАРТОЧКА: немедленно начни с одной "
-                                 "конкретной подсказки в 3–9 слов. Никаких "
-                                 "подтверждений, вступлений и обсуждений."
+                                 "конкретной подсказки в 3–9 слов. Без "
+                                 "вступлений и обсуждений. Подтверждай только "
+                                 "правильные догадки, проверенные сервером."
                                  if is_duo else
                                  "Сразу объясни следующее слово короткими подсказками.")
                             )
