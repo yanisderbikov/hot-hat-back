@@ -37,18 +37,23 @@ public class AiVoiceSeatService {
         return room;
     }
 
-    /** Adds AI in a team with exactly one human, optionally replacing its scripted test bot. */
-    @Transactional
+    /** Backward-compatible default persona for previously released clients. */
     public Map<String,Object> add(HotHatUser user, String roomId, String teamId) {
+        return add(user,roomId,teamId,"rublisha");
+    }
+
+    /** Server-authoritative cast selection; only the SITE owner may create an AI-only pair. */
+    @Transactional
+    public Map<String,Object> add(HotHatUser user, String roomId, String teamId, String characterId) {
+        AiVoiceCharacters.Character character=AiVoiceCharacters.byId(characterId);
         Room room = requireHost(user, roomId);
         RoomTeam team = getterRoom.getTeam(roomId,teamId)
                 .orElseThrow(() -> ApiException.of("ROOM_TEAM_NOT_FOUND",404));
         List<RoomPlayer> players = getterRoom.getPlayers(roomId);
-        AiVoiceSeatPolicy.requireEligible(room,teamId,players);
-        if (players.stream().anyMatch(p -> AiVoiceSeatPolicy.isAi(p.getUid()))) {
-            // MVP: one voice session per room. Never create simultaneous
-            // paid AI streams or enable a second bot-bot team accidentally.
-            throw ApiException.of("AI_ONE_PER_ROOM_LIMIT",409);
+        AiVoiceSeatPolicy.requireEligible(room,teamId,players,user.owner());
+        if (players.stream().anyMatch(p -> AiVoiceSeatPolicy.isAi(p.getUid())
+                && character.name().equals(p.getName()))) {
+            throw ApiException.of("AI_CHARACTER_ALREADY_IN_ROOM",409);
         }
         List<RoomPlayer> members = players.stream().filter(p -> teamId.equals(p.getTeamId())).toList();
         RoomPlayer scripted = members.stream()
@@ -88,7 +93,7 @@ public class AiVoiceSeatService {
         String aiUid = AiVoiceSeatPolicy.PREFIX + UUID.randomUUID().toString().replace("-","").substring(0,18);
         long now = System.currentTimeMillis();
         RoomPlayer bot = RoomPlayer.builder()
-                .roomId(roomId).uid(aiUid).name("Рублиша")
+                .roomId(roomId).uid(aiUid).name(character.name())
                 .teamId(teamId).isTestBot(true).testBotIndex(null)
                 .joinedAt(Instant.now()).lastSeenAt(now)
                 .mediaReadyAt(now).mediaRevision(now)
@@ -108,7 +113,7 @@ public class AiVoiceSeatService {
         // already passed requireEligible(), rather than copying stale IDs.
         // This also repairs a missing human UID in the team projection.
         List<String> ids = members.stream()
-                .filter(AiVoiceSeatPolicy::isHuman)
+                .filter(p -> AiVoiceSeatPolicy.isHuman(p) || AiVoiceSeatPolicy.isAi(p.getUid()))
                 .map(RoomPlayer::getUid)
                 .filter(uid -> uid != null && !uid.isBlank())
                 .distinct()
@@ -120,7 +125,7 @@ public class AiVoiceSeatService {
         saverRoom.saveTeam(team);
         saverRoom.save(room);
         return Map.of("ok",true,"uid",aiUid,"name",bot.getName(),"teamId",teamId,
-                "voiceEnabled",false,"status","waiting_for_agent");
+                "characterId",character.id(),"voiceEnabled",false,"status","waiting_for_agent");
     }
 
     @Transactional
