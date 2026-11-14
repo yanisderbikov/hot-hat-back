@@ -54,7 +54,7 @@ class DuetLiveness:
             return None
         # The explainer moves first. The guesser waits longer to avoid a
         # simultaneous prompt when both bots briefly stop talking.
-        delay = 6.5 if role == "explainer" else 10.5
+        delay = 5.5 if role == "explainer" else 7.5
         # Thinking forever without publishing speech is another deadlock:
         # gently interrupt the stale generation after 12 seconds and ask
         # for one short next action, never while actual audio is playing.
