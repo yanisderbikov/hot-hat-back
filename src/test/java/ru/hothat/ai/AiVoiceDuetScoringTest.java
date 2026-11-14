@@ -27,7 +27,7 @@ class AiVoiceDuetScoringTest {
     private static final String GUESSER="ai-gpt-live-bbbbbbbbbbbbbbbbbb";
 
     private record Fixture(AiVoiceGameService service, MatchEngine engine,
-                           MatchSession transaction) {}
+                           MatchSession transaction, MatchState game) {}
     private Fixture make(String botUid) {
         MatchStore matches=mock(MatchStore.class);
         AiVoiceUsageService usage=mock(AiVoiceUsageService.class);
@@ -60,7 +60,7 @@ class AiVoiceDuetScoringTest {
             new WordResolved(WordResolved.Outcome.COUNTED,
                              "Компас","Луна",1,6,1,false,0));
         return new Fixture(new AiVoiceGameService(matches,usage,engine,rooms,memory),
-                           engine,txn);
+                           engine,txn,game);
     }
 
     @Test void genuineAiGuesserSpeechScoresOneWordAndTeamPoint() {
@@ -96,6 +96,19 @@ class AiVoiceDuetScoringTest {
             assertFalse(AiVoiceGameService.exactWordSpoken(pair[0],pair[1]),
                     pair[0]+" must reject "+pair[1]);
         }
+    }
+
+    @Test void soloAiGuesserCanScoreHumanTeammatesExplainedWord() {
+        Fixture f=make(GUESSER);
+        String human="human-teammate";
+        f.game().setExplainerUid(human);
+        f.game().setRosters(Map.of(TEAM,List.of(human,GUESSER)));
+        Map<String,Object> result=f.service().guessedByDuetVoice(
+                "ai_voice","Компас?","aig_123456789012345679");
+        assertEquals(true,result.get("matched"));
+        verify(f.engine(),times(1)).guess(any(),eq("turn-1"),anyString());
+        verify(f.transaction(),times(1)).addTeamScore(TEAM,1);
+        verify(f.transaction(),times(1)).commit();
     }
 
     @Test void explainerCannotSubmitHisOwnSecretAsGuesser() {
