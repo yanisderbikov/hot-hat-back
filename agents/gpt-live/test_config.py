@@ -168,6 +168,17 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("async def duet_guesser_spoke(",client)
         self.assertIn('"duet-guesser-spoke"',client)
 
+    def test_duet_mismatch_never_acts_as_advanced_card(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        ast.parse(source)
+        self.assertIn("СЕРВЕР НЕ ЗАСЧИТАЛ последнюю догадку.",source)
+        self.assertIn("ТАЙНАЯ КАРТОЧКА ОСТАЛАСЬ ПРЕЖНЕЙ.",source)
+        self.assertIn("СЕРВЕР НЕ ЗАСЧИТАЛ эту догадку.",source)
+        self.assertIn("СЕРВЕР ЗАСЧИТАЛ твою догадку.",source)
+        self.assertIn("pending_duet_ack = None",source)
+        self.assertIn('if result.get("reason") == "FORM_NOT_EXACT"',source)
+        self.assertIn("ТУ ЖЕ карточку",source)
+
     def test_scripted_partner_is_test_only_output_speech_without_human_microphone(self):
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         self.assertIn('scripted_partner = initial.get("scriptedPartner") is True', source)
