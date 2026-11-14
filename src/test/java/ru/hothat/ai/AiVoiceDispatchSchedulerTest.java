@@ -66,6 +66,46 @@ class AiVoiceDispatchSchedulerTest {
     }
 
     @Test
+    void dispatchesVoiceForAiWithOneSilentScriptedTeammateInTestRoom() {
+        enable();
+        String scripted="testbot-abcdef-3";
+        Room room=activeRoom();
+        room.setIsTestRoom(true);
+        room.setTestBotIds(new java.util.ArrayList<>(List.of(scripted)));
+        room.setTeamRosters(Map.of(TEAM,List.of(scripted,BOT)));
+        when(rooms.getByPhase("turnIntro",100)).thenReturn(List.of(room));
+        when(rooms.getByPhase("active",100)).thenReturn(List.of());
+        when(rooms.getPlayer(ROOM_ID,scripted)).thenReturn(Optional.of(
+                RoomPlayer.builder().uid(scripted).roomId(ROOM_ID)
+                    .teamId(TEAM).isTestBot(true).build()));
+        when(usage.activeSessions()).thenReturn(List.of());
+        when(usage.reserve(eq(ROOM_ID),eq(1),eq(TEAM),eq(BOT),anyString()))
+                .thenReturn(AiVoiceSession.builder().sessionId("ai_scripted_session")
+                    .status("pending").build());
+        when(livekit.createAiDispatch(eq(ROOM_ID),anyString()))
+                .thenReturn(Map.of("id","dispatch-scripted"));
+
+        scheduler.reconcile();
+        verify(livekit).createAiDispatch(eq(ROOM_ID),argThat(metadata->
+                metadata.contains(BOT) && metadata.contains("ai_scripted_session")));
+    }
+
+    @Test
+    void willNotDispatchScriptedBotPartnerInNonTestRoom(){
+        enable();
+        String scripted="testbot-abcdef-3";
+        Room room=activeRoom();
+        room.setTeamRosters(Map.of(TEAM,List.of(scripted,BOT)));
+        when(rooms.getByPhase("turnIntro",100)).thenReturn(List.of(room));
+        when(rooms.getByPhase("active",100)).thenReturn(List.of());
+        when(rooms.getPlayer(ROOM_ID,scripted)).thenReturn(Optional.of(
+                RoomPlayer.builder().uid(scripted).roomId(ROOM_ID)
+                    .teamId(TEAM).isTestBot(true).build()));
+        scheduler.reconcile();
+        verify(livekit,never()).createAiDispatch(anyString(),anyString());
+    }
+
+    @Test
     void neverStartsPaidInferenceWhenDispatchNotEnabled() {
         ReflectionTestUtils.setField(scheduler,"featureEnabled",true);
         ReflectionTestUtils.setField(scheduler,"dispatchEnabled",false);
