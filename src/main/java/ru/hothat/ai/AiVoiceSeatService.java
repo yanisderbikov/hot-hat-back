@@ -56,11 +56,14 @@ public class AiVoiceSeatService {
             throw ApiException.of("AI_CHARACTER_ALREADY_IN_ROOM",409);
         }
         List<RoomPlayer> members = players.stream().filter(p -> teamId.equals(p.getTeamId())).toList();
-        RoomPlayer scripted = members.stream()
-                // AI seats use isTestBot=true for presence, but are NOT
-                // scripted test bots and must never be deleted/replaced here.
+        // One scripted bot + an empty second slot: ADD the voice character
+        // alongside the scripted partner; do not delete the only teammate.
+        // Full test-bot pair (or owner replacing AI's scripted teammate):
+        // atomically replace exactly one scripted seat, leaving a valid duo.
+        RoomPlayer scripted = members.size() >= 2 ? members.stream()
                 .filter(p -> Boolean.TRUE.equals(p.getIsTestBot())
-                        && !AiVoiceSeatPolicy.isAi(p.getUid())).findFirst().orElse(null);
+                        && !AiVoiceSeatPolicy.isAi(p.getUid())).findFirst().orElse(null)
+                : null;
         if (scripted != null) {
             if (!room.getTestBotIds().contains(scripted.getUid())) {
                 throw ApiException.of("AI_REPLACE_ONLY_SCRIPTED_TEST_BOT",409);
@@ -109,14 +112,14 @@ public class AiVoiceSeatService {
                 .arsenal(new LinkedHashMap<>())
                 .build();
 
-        // A manually removed scripted test bot leaves its UID in memberUids
-        // as an invitation reservation. The visible team can contain one
-        // human while that persisted reservation still occupies the second
-        // slot. Build the new pair from actual room_player rows, which have
-        // already passed requireEligible(), rather than copying stale IDs.
-        // This also repairs a missing human UID in the team projection.
+        // Rebuild from real player rows, never from stale memberUids invite
+        // reservations. Keep valid scripted AI teammates when replacing
+        // exactly one seat in full test rooms.
+        final String removedScriptedUid=scripted==null?null:scripted.getUid();
         List<String> ids = members.stream()
-                .filter(p -> AiVoiceSeatPolicy.isHuman(p) || AiVoiceSeatPolicy.isAi(p.getUid()))
+                // Keep the remaining scripted test player in the actual
+                // team roster. Only the chosen replacement UID leaves.
+                .filter(p -> !java.util.Objects.equals(p.getUid(),removedScriptedUid))
                 .map(RoomPlayer::getUid)
                 .filter(uid -> uid != null && !uid.isBlank())
                 .distinct()
