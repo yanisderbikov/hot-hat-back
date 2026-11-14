@@ -25,11 +25,17 @@ class SettingsTests(unittest.TestCase):
 
     def test_character_name_and_once_per_game_greeting(self):
         from config import VOICE_INSTRUCTIONS
-        self.assertIn("Рублиша", VOICE_INSTRUCTIONS)
+        self.assertIn("ИИ-персонаж", VOICE_INSTRUCTIONS)
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         self.assertIn('should_greet = metadata.get("shouldGreet") is True', source)
         self.assertIn('mode == "smalltalk"', source)
         self.assertIn("Не здоровайся повторно", source)
+        self.assertIn("character_name", source)
+        self.assertIn("personality", source)
+        self.assertIn("voice=voice", source)
+        self.assertIn("is_duo", source)
+        self.assertIn("participant_identity=human_uid", source)
+        self.assertIn("await req.accept(", source)
 
     def test_confirmed_word_memory_and_acknowledgements(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
@@ -54,7 +60,7 @@ class SettingsTests(unittest.TestCase):
     def test_worker_has_valid_python_and_no_automatic_dispatch(self):
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
-        self.assertIn("rtc_session(agent_name=AGENT_NAME)", source)
+        self.assertIn("rtc_session(agent_name=AGENT_NAME, on_request=accept_hot_hat_character)", source)
         self.assertIn("if not settings.enabled:", source)
         self.assertIn("await session.aclose()", source)
         self.assertNotIn("delete_room()", source)
