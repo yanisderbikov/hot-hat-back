@@ -118,7 +118,7 @@ public class AiVoiceDispatchScheduler {
                 "botUid",ai,
                 "teamId",room.getCurrentTeamId(),
                 "gameNumber",room.getGameNumber(),
-                "shouldGreet",usage.shouldGreet(room.getId(),room.getGameNumber(),allocated.getSessionId()),
+                "shouldGreet",usage.shouldGreet(room.getId(),room.getGameNumber(),ai,allocated.getSessionId()),
                 "maxSessionSeconds",180));
             Map<String,Object> dispatch=livekit.createAiDispatch(room.getId(),metadata);
             String dispatchId=Json.str(dispatch.get("id"));
