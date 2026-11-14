@@ -49,10 +49,24 @@ class DuetLivenessTests(unittest.TestCase):
         live=DuetLiveness(last_activity=0)
         live.card_changed("turn-1","explainer","Самолёт",0)
         self.assertIsNone(next_action(live,12,agent_state="speaking"))
-        self.assertIsNone(next_action(live,12,agent_state="thinking"))
-        self.assertIsNone(next_action(live,12,user_state="speaking"))
+        self.assertIsNone(next_action(live,11.8,agent_state="thinking"))
+        self.assertEqual(next_action(live,12.5,agent_state="thinking"),"reset_give_hint")
+        live.pending=False
+        self.assertIsNone(next_action(live,12.8,user_state="speaking"))
         live.mark_heard(13)
         self.assertIsNone(next_action(live,18))
+
+    def test_guesser_recovers_from_stuck_thinking_without_guessing_secret(self):
+        live=DuetLiveness(last_activity=0)
+        live.card_changed("turn-1","guesser",None,0)
+        self.assertIsNone(next_action(live,11.8,role="guesser",word=None,
+                                      agent_state="thinking"))
+        self.assertEqual(next_action(live,12.3,role="guesser",word=None,
+                                     agent_state="thinking"),"reset_request_hint")
+        live.pending=False
+        live.mark_heard(16.0)
+        self.assertEqual(next_action(live,28.2,role="guesser",word=None,
+                                     agent_state="thinking"),"reset_make_guess")
 
     def test_liveness_stops_before_turn_ends_or_on_pause(self):
         live=DuetLiveness(last_activity=0)
