@@ -74,6 +74,30 @@ class AiVoiceDuetScoringTest {
         assertFalse(result.containsKey("word")); // secret stays server-side
     }
 
+    @Test void fullRussianCaseFormsScoreButUnrelatedOrDerivedWordsDoNot() {
+        for(String[] pair:List.of(
+                new String[]{"космонавт","А это космонавта!"},
+                new String[]{"пылесос","Пылесосом, наверное."},
+                new String[]{"путешествие","Какое путешествия?"},
+                new String[]{"снежный человек","Это снежного человека!"},
+                new String[]{"секретный агент","А это секретного агента"},
+                new String[]{"чемодан","У чемодана есть ручка"},
+                new String[]{"детектив","Детектива?"})) {
+            assertTrue(AiVoiceGameService.exactWordSpoken(pair[0],pair[1]),
+                    pair[0]+" should match "+pair[1]);
+        }
+        for(String[] pair:List.of(
+                new String[]{"кот","котик"},
+                new String[]{"пылесос","пылесосик"},
+                new String[]{"снежный человек","снежная королева"},
+                new String[]{"космонавт","космонавтика"},
+                new String[]{"секретный агент","секретное агентство"},
+                new String[]{"компас","компост"})) {
+            assertFalse(AiVoiceGameService.exactWordSpoken(pair[0],pair[1]),
+                    pair[0]+" must reject "+pair[1]);
+        }
+    }
+
     @Test void explainerCannotSubmitHisOwnSecretAsGuesser() {
         Fixture f=make(EXPLAINER);
         assertEquals("DUET_GUESSER_ONLY",f.service().guessedByDuetVoice(
