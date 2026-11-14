@@ -171,13 +171,29 @@ class SettingsTests(unittest.TestCase):
     def test_duet_mismatch_never_acts_as_advanced_card(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
-        self.assertIn("СЕРВЕР НЕ ЗАСЧИТАЛ последнюю догадку.",source)
-        self.assertIn("ТАЙНАЯ КАРТОЧКА ОСТАЛАСЬ ПРЕЖНЕЙ.",source)
+        self.assertIn("СЕРВЕР НЕ ЗАСЧИТАЛ последнюю голосовую догадку.",source)
+        self.assertIn("ВСЁ ЕЩЁ ТА ЖЕ карточка",source)
         self.assertIn("СЕРВЕР НЕ ЗАСЧИТАЛ эту догадку.",source)
         self.assertIn("СЕРВЕР ЗАСЧИТАЛ твою догадку.",source)
         self.assertIn("pending_duet_ack = None",source)
         self.assertIn('if result.get("reason") == "FORM_NOT_EXACT"',source)
         self.assertIn("ТУ ЖЕ карточку",source)
+
+    def test_fast_voice_duet_and_human_ai_guesser_regressions(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        from config import DUET_BACKEND_INSTRUCTIONS, DUET_VOICE_INSTRUCTIONS
+        ast.parse(source)
+        self.assertIn("allow_interruptions=True",source)
+        self.assertIn("min_interruption_duration=0.15",source)
+        self.assertIn("async def stop_stale_explanation()",source)
+        self.assertIn("await stop_stale_explanation()",source)
+        self.assertIn('if mode == "game" and not scripted_partner:',source)
+        self.assertIn('if mode != "game" or scripted_partner:',source)
+        self.assertIn("session.generate_reply(instructions=(",source)
+        self.assertIn('await asyncio.sleep(0.24 if is_duo',source)
+        self.assertIn("ПЕРЕБИВ",DUET_VOICE_INSTRUCTIONS)
+        self.assertIn("INTERRUPTS",DUET_BACKEND_INSTRUCTIONS)
+        self.assertIn("Peer voice score: mode=",source)
 
     def test_scripted_partner_is_test_only_output_speech_without_human_microphone(self):
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
