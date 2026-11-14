@@ -509,6 +509,39 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         session.on("user_input_transcribed",
                    lambda event: asyncio.create_task(on_heard(event)))
 
+        async def on_guesser_own_voice(event):
+            # GPT-Live publishes the assistant's OWN actual utterance as a
+            # completed conversation item after the audio finishes. In a
+            # two-AI round, this is a much more reliable independent ASR
+            # source than the explainer's peer-input transcript alone.
+            # No text is logged or stored; backend checks BOTH the
+            # authenticated GUESSER seat and the current secret word.
+            if not is_duo or bot_uid == designated_explainer_uid:
+                return
+            item = getattr(event, "item", None)
+            if (getattr(item, "role", "") != "assistant"
+                    or getattr(item, "interrupted", False)
+                    or latest != "guesser"
+                    or last_agent_spoke <= 0
+                    or time.monotonic() - last_agent_spoke > 15):
+                return
+            phrase = str(getattr(item, "text_content", "") or "").strip()
+            if not phrase:
+                return
+            try:
+                result = await game.duet_guesser_spoke(phrase)
+                if result.get("matched"):
+                    agent.recent_word_keys.add(str(result.get("actionId") or ""))
+                    logger.info("Duet self-voice guess scored: bot=%s",
+                                bot_uid[-6:])
+            except Exception as exc:
+                logger.debug("Duet self-voice guess was not scored: %s",
+                             type(exc).__name__)
+
+        if is_duo:
+            session.on("conversation_item_added",
+                       lambda event: asyncio.create_task(on_guesser_own_voice(event)))
+
         async def follow_game_state():
             nonlocal latest, duet_wrong_guesses
             previous = None
@@ -528,6 +561,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         time.monotonic(),
                     )
                 history = state.get("recentWords") or []
+                pending_duet_ack = None
                 if isinstance(history, list):
                     new_actions = [
                         row for row in reversed(history)
@@ -537,6 +571,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     for row in new_actions:
                         agent.recent_word_keys.add(str(row["actionId"]))
                     if new_actions:
+                        # The alternative self-voice route can score a word
+                        # before the explainer's peer ASR emits a final text.
+                        # Only the EXPLAINER acknowledges this verified score.
+                        if is_duo and role == "explainer":
+                            for scored in new_actions:
+                                if (str(scored.get("actionId") or "").startswith("aig_")
+                                        and scored.get("outcome") == "guessed"):
+                                    pending_duet_ack = _voice_confirmation(
+                                        role, True, len(agent.recent_word_keys))
                         # Keep memory in the running realtime model, not only
                         # in the next paid process after a round change.
                         agent.duplex_session.append_instructions(_history_prompt(history))
@@ -573,12 +616,18 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 and word == duet_bootstrap_word
                                 and state.get("turnId") == duet_bootstrap_turn):
                             agent.duplex_session.append_commentary(
-                                ("НОВАЯ КАРТОЧКА: немедленно начни с одной "
-                                 "конкретной подсказки в 3–9 слов. Без "
-                                 "вступлений и обсуждений. Подтверждай только "
-                                 "правильные догадки, проверенные сервером."
-                                 if is_duo else
-                                 "Сразу объясни следующее слово короткими подсказками.")
+                                (("Сервер засчитал верный голосовой ответ. "
+                                  "Произнеси ровно " + pending_duet_ack
+                                  + " и немедленно дай ОДНУ новую подсказку "
+                                  "к только что присланному секретному слову. "
+                                  "Не произноси слово и не объявляй очки.")
+                                 if is_duo and pending_duet_ack else
+                                 ("НОВАЯ КАРТОЧКА: немедленно начни с одной "
+                                  "конкретной подсказки в 3–9 слов. Без "
+                                  "вступлений и обсуждений. Подтверждай только "
+                                  "правильные догадки, проверенные сервером."
+                                  if is_duo else
+                                  "Сразу объясни следующее слово короткими подсказками."))
                             )
                     elif role == "smalltalk":
                         agent.duplex_session.append_instructions(
