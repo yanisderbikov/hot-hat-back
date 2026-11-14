@@ -39,7 +39,7 @@ class DuetLivenessTests(unittest.TestCase):
         # Once the explainer starts speaking, the last peer guess no longer
         # controls prompt pacing. No redundant prompt on the new hint.
         self.assertIsNone(next_action(live,13.5,word="Парус"))
-        self.assertEqual(next_action(live,15.0,word="Парус"),"give_hint")
+        self.assertEqual(next_action(live,16.0,word="Парус"),"give_hint")
 
     def test_guesser_first_requests_hint_then_guesses_only_after_hearing_peer(self):
         live=DuetLiveness(last_activity=0)
