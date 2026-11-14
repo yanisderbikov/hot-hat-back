@@ -380,17 +380,27 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         duet_bootstrap_turn = None
         duet_first_reply_task = None
         duet_watchdog_task = None
-        duet_live = DuetLiveness(time.monotonic())
+        # Human+AI explaining turns need anti-silence too: previously only
+        # owner AI+AI duets received watchdog prompts.
+        solo_explainer = mode == "game" and not is_duo and not scripted_partner
+        watch_game_speech = is_duo or solo_explainer
+        duet_live = DuetLiveness(
+            time.monotonic(),
+            max_prompts_without_voice=3 if is_duo else 8,
+        )
         duet_snapshot = {}
+        last_agent_spoke = 0.0
         duet_wrong_guesses = 0
         duet_guess_verification_pending = False
 
         def duet_agent_speech(event):
-            if is_duo and str(getattr(event, "new_state", "")) == "speaking":
-                duet_live.mark_spoke(time.monotonic())
+            nonlocal last_agent_spoke
+            if watch_game_speech and str(getattr(event, "new_state", "")) == "speaking":
+                last_agent_spoke = time.monotonic()
+                duet_live.mark_spoke(last_agent_spoke)
 
         def duet_partner_speech(event):
-            if is_duo and str(getattr(event, "new_state", "")) == "speaking":
+            if watch_game_speech and str(getattr(event, "new_state", "")) == "speaking":
                 duet_live.mark_heard(time.monotonic())
 
         session.on("agent_state_changed", duet_agent_speech)
@@ -402,7 +412,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             phrase = str(getattr(event, "transcript", "") or "").strip()
             if not phrase:
                 return
-            if is_duo:
+            if watch_game_speech:
                 duet_live.mark_heard(time.monotonic())
             # RoomOptions.participant_identity binds audio to the ONE human
             # teammate. Nobody from another team can trigger guess/skip.
@@ -509,7 +519,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     stop.set()
                     break
                 role = state.get("role", "unselected")
-                if is_duo:
+                if watch_game_speech:
                     duet_snapshot.clear()
                     duet_snapshot.update(state)
                     duet_live.card_changed(
@@ -605,6 +615,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 await asyncio.sleep(1.35)
                 if not duet_snapshot:
                     continue
+                # In ordinary human+AI games, the model only needs to be
+                # pushed while EXPLAINING. Never inject guessed words or
+                # filler into its legitimate role as human teammate's guesser.
+                if solo_explainer and duet_snapshot.get("role") != "explainer":
+                    continue
                 now=time.monotonic()
                 try:
                     action=duet_live.decide(
@@ -618,10 +633,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         user_state=str(getattr(session, "user_state", "")),
                     )
                     if action=="failed":
-                        logger.warning("Duet stalled after bounded voice prompts; "
-                                       "closing this voice session early: bot=%s",
-                                       bot_uid[-6:])
-                        error_code="DUET_DEADLOCK"
+                        logger.warning(
+                            "%s explainer stalled after bounded voice prompts; bot=%s",
+                            "Duet" if is_duo else "Solo", bot_uid[-6:])
+                        error_code="DUET_DEADLOCK" if is_duo else "SOLO_EXPLAINER_STALLED"
                         stop.set()
                         return
                     if not action:
@@ -651,9 +666,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             "После ответа сразу пробуй угадать."
                         ),
                     }[base_action]
-                    logger.info("Duet silence recovery: bot=%s role=%s prompt=%s "
+                    logger.info("Game speech recovery: mode=%s bot=%s role=%s prompt=%s "
                                 "attempt=%s",
-                                bot_uid[-6:],duet_snapshot.get("role"),action,
+                                "duet" if is_duo else "solo",bot_uid[-6:],
+                                duet_snapshot.get("role"),action,
                                 duet_live.prompts_without_voice)
                     handle=session.generate_reply(instructions=phrase)
                     try:
@@ -820,7 +836,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     + "Коротко уточни, кто будет объяснять, а кто угадывать."
                 ))
             watcher = asyncio.create_task(follow_game_state())
-            if is_duo:
+            if watch_game_speech:
                 duet_watchdog_task=asyncio.create_task(duet_liveness_watchdog())
             try:
                 await asyncio.wait_for(stop.wait(),
