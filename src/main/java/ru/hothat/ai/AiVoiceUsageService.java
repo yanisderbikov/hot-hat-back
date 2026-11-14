@@ -84,12 +84,29 @@ public class AiVoiceUsageService {
 
     @Transactional
     public AiVoiceSession reserve(String roomId,int gameNumber,String teamId,String botUid,String turnKey,String ownerSpeakerUid) {
+        return reserve(roomId,gameNumber,teamId,botUid,turnKey,ownerSpeakerUid,false);
+    }
+
+    /**
+     * One paid agent globally in normal games. ONLY a previously approved
+     * AI-only owner test team may launch a second simultaneous agent.
+     * Retain the same monthly budget reservation for EACH agent.
+     */
+    @Transactional
+    public synchronized AiVoiceSession reserve(String roomId,int gameNumber,String teamId,
+                String botUid,String turnKey,String ownerSpeakerUid,boolean ownerAiDuo) {
         Optional<AiVoiceSession> existing=sessions.findByRoomIdAndGameNumberAndTurnKey(roomId,gameNumber,turnKey);
         if(existing.isPresent())return existing.get();
         List<AiVoiceSession> rows=monthRows();
-        // The first version deliberately allows one paid session globally.
-        // Avoid concurrent unbounded usage while LiveKit pricing isn't verified.
-        if(rows.stream().anyMatch(this::pending))
+        List<AiVoiceSession> running=activeSessions();
+        boolean secondForDuo=ownerAiDuo && ownerSpeakerUid==null && running.size()==1
+            && "game".equals(running.get(0).getMode())
+            && !"stopping".equals(running.get(0).getStatus())
+            && roomId.equals(running.get(0).getRoomId())
+            && teamId.equals(running.get(0).getTeamId())
+            && gameNumber==running.get(0).getGameNumber()
+            && !botUid.equals(running.get(0).getBotUid());
+        if(!running.isEmpty() && !secondForDuo)
             throw ApiException.of("AI_VOICE_SESSION_ALREADY_RUNNING",409);
         if(reservedPlusSpent(rows).add(SESSION_RESERVATION_USD).compareTo(monthlyBudget)>0)
             throw ApiException.of("AI_MONTHLY_BUDGET_EXHAUSTED",402);
