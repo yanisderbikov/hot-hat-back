@@ -55,7 +55,7 @@ class DuetLiveness:
         # The explainer moves first. The guesser waits longer to avoid a
         # simultaneous prompt when both bots briefly stop talking.
         delay = 6.5 if role == "explainer" else 10.5
-        if now - self.last_activity < delay or now - self.last_prompt < 7.5:
+        if now - self.last_activity < delay or (self.last_prompt > 0 and now - self.last_prompt < 7.5):
             return None
         if self.prompts_without_voice >= 3:
             return "failed"
