@@ -471,9 +471,17 @@ public class TestBotsServiceImpl implements TestBotsService {
             saverRoom.save(room);
             return step(room, "turn_ended", 10000);
         }
-        // ALL real explainers control their own words. The bot runner must
-        // never auto-guess during an invited person's live turn.
-        if (!room.getTestBotIds().contains(Json.str(room.getExplainerUid()))) {
+        // Never fabricate a guess on a REAL human's live turn.
+        // In a test-only AI+SCRIPTED duo, the AI explains with paid voice
+        // output but its silent test-bot partner cannot hear or talk. Let the
+        // existing test runner simulate at most one guess for that partner,
+        // explicitly as a scripted TEST result rather than an AI transcript.
+        boolean syntheticPartnerGuess=Boolean.TRUE.equals(room.getIsTestRoom())
+                && AiVoiceSeatPolicy.isAi(Json.str(room.getExplainerUid()))
+                && room.getTestBotIds().contains(Json.str(room.getGuesserUid()))
+                && !AiVoiceSeatPolicy.isAi(Json.str(room.getGuesserUid()));
+        if (!room.getTestBotIds().contains(Json.str(room.getExplainerUid()))
+                && !syntheticPartnerGuess) {
             return step(room, "human_controls_words", 3000);
         }
 
