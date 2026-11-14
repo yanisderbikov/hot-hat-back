@@ -144,8 +144,16 @@ public class AiVoiceUsageService {
      * Failed dispatches did not reach the voice provider and do not count.
      */
     public boolean shouldGreet(String roomId,int gameNumber,String currentSessionId) {
+        return shouldGreet(roomId,gameNumber,null,currentSessionId);
+    }
+
+    /** A greeting is remembered PER PERSONA, not per room: five characters
+     * each introduce themselves once in a game, irrespective of session restarts.
+     */
+    public boolean shouldGreet(String roomId,int gameNumber,String botUid,String currentSessionId) {
         return sessions.findByRoomIdAndGameNumberOrderByCreatedAtDesc(roomId,gameNumber).stream()
                 .noneMatch(s -> !Objects.equals(currentSessionId,s.getSessionId())
+                        && (botUid==null || Objects.equals(botUid,s.getBotUid()))
                         && s.getStartedAt()!=null);
     }
 
