@@ -205,7 +205,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("**duet_turn_settings,",source)
         self.assertIn('and is_duo:',source)
         self.assertIn('now-duet_live.last_activity<11.0:',source)
-        self.assertIn("живo",VOICE_INSTRUCTIONS.replace("живо","живo"))
+        self.assertIn("живо",VOICE_INSTRUCTIONS)
         self.assertIn("НИКОГДА не произноси",VOICE_INSTRUCTIONS)
         self.assertIn("разные подсказки",VOICE_INSTRUCTIONS)
         self.assertIn("PRIVATE implementation details",BACKEND_INSTRUCTIONS)
