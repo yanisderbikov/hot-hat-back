@@ -147,6 +147,22 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("DUET_BACKEND_INSTRUCTIONS if is_duo", source)
         self.assertIn("else BACKEND_INSTRUCTIONS", source)
 
+    def test_solo_explainer_liveness_and_duet_own_speech_scoring(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        client=Path(__file__).with_name("game_client.py").read_text(encoding="utf-8")
+        ast.parse(source)
+        self.assertIn("solo_explainer =",source)
+        self.assertIn("max_prompts_without_voice=3 if is_duo else 8",source)
+        self.assertIn("if watch_game_speech:",source)
+        self.assertIn('solo_explainer and duet_snapshot.get("role") != "explainer"',source)
+        self.assertIn('session.on("conversation_item_added"',source)
+        self.assertIn("on_guesser_own_voice",source)
+        self.assertIn("game.duet_guesser_spoke(phrase)",source)
+        self.assertIn("pending_duet_ack",source)
+        self.assertIn('str(scored.get("actionId") or "").startswith("aig_")',source)
+        self.assertIn("async def duet_guesser_spoke(",client)
+        self.assertIn('"duet-guesser-spoke"',client)
+
     def test_scripted_partner_is_test_only_output_speech_without_human_microphone(self):
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         self.assertIn('scripted_partner = initial.get("scriptedPartner") is True', source)
