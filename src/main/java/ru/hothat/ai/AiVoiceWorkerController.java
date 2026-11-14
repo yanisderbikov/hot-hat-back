@@ -62,6 +62,15 @@ public class AiVoiceWorkerController {
                 body.transcript(),body.actionId()));
     }
 
+    @PostMapping("/duet-guesser-spoke")
+    public ResponseEntity<Map<String,Object>> duetGuesserSpoke(@PathVariable String sessionId,
+            @RequestHeader(value="X-HH-AI-WORKER-KEY",required=false) String secret,
+            @RequestBody SpeechRequest body) {
+        authenticate(secret);
+        return ResponseEntity.ok(game.guessedByDuetVoice(sessionId,
+                body.transcript(),body.actionId()));
+    }
+
     @PostMapping("/skip")
     public ResponseEntity<Map<String,Object>> skip(@PathVariable String sessionId,
             @RequestHeader(value="X-HH-AI-WORKER-KEY",required=false) String secret,
