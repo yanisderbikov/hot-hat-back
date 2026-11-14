@@ -185,7 +185,7 @@ class SettingsTests(unittest.TestCase):
         from config import DUET_BACKEND_INSTRUCTIONS, DUET_VOICE_INSTRUCTIONS
         ast.parse(source)
         self.assertIn('"allow_interruptions": True',source)
-        self.assertIn("min_interruption_duration=0.15",source)
+        self.assertIn('"min_interruption_duration": 0.15',source)
         self.assertIn("async def stop_stale_explanation()",source)
         self.assertIn("await stop_stale_explanation()",source)
         self.assertIn('if mode == "game" and not scripted_partner:',source)
