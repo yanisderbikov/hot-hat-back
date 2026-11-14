@@ -194,6 +194,50 @@ public class AiVoiceGameService {
                 "turnClosed",resolved.turnClosed());
     }
 
+    /**
+     * A two-AI game has TWO authenticated workers. The guessing AI's OWN
+     * completed spoken turn is often transcribed more reliably than the
+     * explainer worker's peer-input transcription. Allow that evidence as a
+     * second scoring route, but only from the server-authorized GUESSER seat.
+     *
+     * A model claiming "correct" is never evidence: require an exact match
+     * to the current server secret word. Human sessions and the explaining
+     * AI cannot call this route.
+     */
+    @Transactional
+    public Map<String,Object> guessedByDuetVoice(String sessionId,
+                                                 String transcript,String actionId) {
+        Verified valid=verify(sessionId);
+        MatchState snapshot=valid.game();
+        AiVoiceSession u=valid.usage();
+        if (!AiVoiceSeatPolicy.isAi(valid.humanUid())
+                || snapshot.getPhase()!=MatchPhase.ACTIVE
+                || snapshot.isPaused()
+                || !Objects.equals(snapshot.getGuesserUid(),u.getBotUid())
+                || !Objects.equals(snapshot.getExplainerUid(),valid.humanUid()))
+            return Map.of("matched",false,"reason","DUET_GUESSER_ONLY");
+        if (!exactWordSpoken(snapshot.getCurrentWord(),transcript))
+            return Map.of("matched",false,"reason","FORM_NOT_EXACT");
+        if (actionId==null || !actionId.matches("^[A-Za-z0-9_-]{6,80}$"))
+            throw ApiException.of("AI_WORD_ACTION_ID_INVALID",400);
+        MatchSession txn=matches.open(u.getRoomId());
+        MatchState game=txn.state();
+        if (!Objects.equals(snapshot.getTurnId(),game.getTurnId())
+                || !Objects.equals(snapshot.getCurrentWord(),game.getCurrentWord())
+                || game.isPaused() || game.getPhase()!=MatchPhase.ACTIVE)
+            return Map.of("matched",false,"reason","WORD_ADVANCED");
+        String teamId=game.getCurrentTeamId();
+        WordResolved resolved=engine.guess(game,game.getTurnId(),actionId);
+        if (resolved.outcome()!=WordResolved.Outcome.COUNTED)
+            return Map.of("matched",false,"reason","NOT_COUNTED");
+        txn.addTeamScore(teamId,resolved.teamScoreDelta());
+        txn.commit();
+        wordMemory.record(u.getRoomId(),game.getGameNumber(),teamId,
+                game.getTurnId(),actionId,resolved.word(),"guessed",true);
+        return Map.of("matched",true,"action","guessed",
+                "turnClosed",resolved.turnClosed());
+    }
+
     @Transactional
     public Map<String,Object> skipOnHumanRequest(String sessionId,String speakerUid,
                                          String transcript,String wordActionId) {
