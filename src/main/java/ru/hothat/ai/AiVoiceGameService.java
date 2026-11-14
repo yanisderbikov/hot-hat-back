@@ -52,8 +52,15 @@ public class AiVoiceGameService {
         if (roster.size()!=2 || !roster.contains(u.getBotUid()))
             throw ApiException.of("AI_NOT_IN_GAME_ROSTER",403);
         String other=roster.stream().filter(id->!id.equals(u.getBotUid())).findFirst().orElse("");
-        if (AiVoiceSeatPolicy.isAi(other) || other.startsWith("testbot-"))
+        if (other.startsWith("testbot-"))
             throw ApiException.of("AI_NEEDS_HUMAN_PARTNER",403);
+        if(AiVoiceSeatPolicy.isAi(other)){
+            // Only an actual two-AI roster, already validated when OWNER placed
+            // the seats, is allowed. Human voices from other teams cannot score.
+            if(rooms.getPlayer(u.getRoomId(),other).isEmpty()
+                    || rooms.getPlayer(u.getRoomId(),u.getBotUid()).isEmpty())
+                throw ApiException.of("AI_DUO_ROSTER_INVALID",403);
+        }
         return new Verified(u,state,other);
     }
 
@@ -79,7 +86,11 @@ public class AiVoiceGameService {
         view.put("characterName",character.name());
         view.put("voice",character.voice());
         view.put("personality",character.personality());
-        view.put("humanUid",valid.humanUid());
+        view.put("humanUid",valid.humanUid()); // legacy key: linked teammate identity
+        boolean duo=AiVoiceSeatPolicy.isAi(valid.humanUid());
+        view.put("aiDuo",duo);
+        view.put("designatedExplainerUid",duo && !g.rosterOf(u.getTeamId()).isEmpty()
+                ? g.rosterOf(u.getTeamId()).get(0) : "");
         view.put("isPaused",g.isPaused());
         view.put("mode",smalltalk?"smalltalk":"game");
         view.put("role",smalltalk?"smalltalk":aiExplaining?"explainer":aiGuessing?"guesser":"unselected");
