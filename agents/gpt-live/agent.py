@@ -455,7 +455,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         if not confirmed:
                             return
                         next_word = None
-                        if is_duo and not result.get("turnClosed"):
+                        if not result.get("turnClosed"):
                             # The backend already advanced the card. Providing
                             # the NEXT word before generate_reply allows ONE
                             # short reply: "Верно! <new clue>", rather than two
@@ -475,7 +475,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 + ". После короткого подтверждения объясни его "
                                 "новой информативной подсказкой в 3–9 слов."
                             )
-                        elif is_duo and not result.get("turnClosed"):
+                        elif not result.get("turnClosed"):
                             # No next card yet: let the state watcher initiate
                             # its hint when the server makes the word available.
                             agent.suppress_next_word_commentary = False
