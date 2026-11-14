@@ -159,6 +159,11 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("on_guesser_own_voice",source)
         self.assertIn("game.duet_guesser_spoke(phrase)",source)
         self.assertIn("pending_duet_ack",source)
+        # A single AI explaining for a person must not be left silent after
+        # the short server-confirmed "Верно!" acknowledgement.
+        self.assertIn('if not result.get("turnClosed"):',source)
+        self.assertIn('elif not result.get("turnClosed"):',source)
+        self.assertIn("И СРАЗУ объясни новую карточку",source)
         self.assertIn('str(scored.get("actionId") or "").startswith("aig_")',source)
         self.assertIn("async def duet_guesser_spoke(",client)
         self.assertIn('"duet-guesser-spoke"',client)
