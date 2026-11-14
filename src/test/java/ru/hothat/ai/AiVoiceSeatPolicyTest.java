@@ -23,11 +23,16 @@ class AiVoiceSeatPolicyTest {
                     List.of(player("human-1","team-a",false))));
         }
     }
-    @Test void acceptsReplacingScriptedTestBotOnlyWithRealHuman(){
+    @Test void standardTestRoomsCanPairVoiceAIWithExistingScriptedTeammates(){
         Room r=room(false,true);
         assertDoesNotThrow(()->AiVoiceSeatPolicy.requireEligible(r,"team-a",
                 List.of(player("human-1","team-a",false),player("testbot-abcdef-1","team-a",true))));
-        assertThrows(ApiException.class,()->AiVoiceSeatPolicy.requireEligible(r,"team-a",
+        assertDoesNotThrow(()->AiVoiceSeatPolicy.requireEligible(r,"team-a",
+                List.of(player("testbot-abcdef-1","team-a",true))));
+        assertDoesNotThrow(()->AiVoiceSeatPolicy.requireEligible(r,"team-a",
+                List.of(player("testbot-abcdef-1","team-a",true),
+                        player("testbot-abcdef-2","team-a",true))));
+        assertThrows(ApiException.class,()->AiVoiceSeatPolicy.requireEligible(room(false,false),"team-a",
                 List.of(player("testbot-abcdef-1","team-a",true))));
     }
     @Test void rejectsRankedAndAIAIAndFullRealPair(){
@@ -48,6 +53,14 @@ class AiVoiceSeatPolicyTest {
                 r,"team-a",List.of(
                     player("ai-gpt-live-aaaaaaaaaaaaaaaaaa","team-a",true),
                     player("ai-gpt-live-bbbbbbbbbbbbbbbbbb","team-a",true)),true));
+    }
+    @Test void ownerCanReplaceLastScriptedPartnerWithSecondVoiceAi(){
+        Room r=room(false,true);
+        List<RoomPlayer> members=List.of(
+                player("ai-gpt-live-aaaaaaaaaaaaaaaaaa","team-a",true),
+                player("testbot-abcdef-1","team-a",true));
+        assertDoesNotThrow(()->AiVoiceSeatPolicy.requireEligible(r,"team-a",members,true));
+        assertThrows(ApiException.class,()->AiVoiceSeatPolicy.requireEligible(r,"team-a",members,false));
     }
     @Test void roomHostAndAdminCannotStageAiOnlyPair() {
         Room r=room(false,true);
