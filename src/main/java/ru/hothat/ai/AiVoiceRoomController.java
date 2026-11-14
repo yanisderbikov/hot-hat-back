@@ -26,7 +26,8 @@ public class AiVoiceRoomController {
     private final AiVoiceSeatService seats;
 
     public record AddRequest(@NotBlank
-         @Pattern(regexp="^[A-Za-z0-9_-]{1,80}$") String teamId) {}
+         @Pattern(regexp="^[A-Za-z0-9_-]{1,80}$") String teamId,
+         @Pattern(regexp="^(rublisha|bubnil|shustrik|mudrila|plut)$") String characterId) {}
 
     @PostMapping
     public ResponseEntity<Map<String,Object>> add(
@@ -34,7 +35,8 @@ public class AiVoiceRoomController {
             @PathVariable @RoomId String roomId,
             @Valid @RequestBody AddRequest body) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(seats.add(user,roomId,body.teamId()));
+                .body(seats.add(user,roomId,body.teamId(),
+                        body.characterId()==null?"rublisha":body.characterId()));
     }
 
     @DeleteMapping("/{aiUid}")
