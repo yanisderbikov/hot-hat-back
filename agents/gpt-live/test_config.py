@@ -52,6 +52,16 @@ class SettingsTests(unittest.TestCase):
         client = Path(__file__).with_name("game_client.py").read_text(encoding="utf-8")
         self.assertIn('return {**result, "actionId": action_id}', client)
 
+    def test_scripted_partner_is_test_only_output_speech_without_human_microphone(self):
+        source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        self.assertIn('scripted_partner = initial.get("scriptedPartner") is True', source)
+        self.assertIn("audio_input=False", source)
+        self.assertIn("text_input=False", source)
+        self.assertIn("close_on_disconnect=False", source)
+        self.assertIn("elif scripted_partner:", source)
+        self.assertIn("await game.choose_explainer()", source)
+        self.assertIn("симуляцию", source)
+
     def test_correct_model_and_named_dispatch(self):
         self.assertEqual(MODEL_ID, "openai/gpt-live-1")
         self.assertEqual(AGENT_NAME, "hot-hat-gpt-live")
