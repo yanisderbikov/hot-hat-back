@@ -49,6 +49,15 @@ class GameClient:
         })
         return {**result, "actionId": action_id}
 
+    async def duet_guesser_spoke(self, transcript: str) -> dict:
+        # Worker-only identity is the authenticated AI session, never a
+        # browser-provided speakerUid. The server checks the actual GUESSER.
+        action_id = "aig_" + uuid.uuid4().hex
+        result = await self.request("POST", "duet-guesser-spoke", {
+            "transcript": transcript[:500], "actionId": action_id,
+        })
+        return {**result, "actionId": action_id}
+
     async def skip(self, human_uid: str, transcript: str) -> dict:
         action_id = "ais_" + uuid.uuid4().hex
         result = await self.request("POST", "skip", {
