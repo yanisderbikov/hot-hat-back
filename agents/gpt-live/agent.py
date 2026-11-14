@@ -439,6 +439,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     if is_duo:
                         duet_guess_verification_pending = True
                     result = await game.heard(human_uid, phrase)
+                    if is_duo:
+                        # No transcripts/secret words in logs: only the
+                        # backend's rejection code for safe score diagnostics.
+                        logger.info("Duet peer-voice guess: bot=%s result=%s",
+                                    bot_uid[-6:], "MATCH" if result.get("matched")
+                                    else str(result.get("reason") or "NO_MATCH")[:32])
                     if result.get("matched"):
                         agent.recent_word_keys.add(str(result.get("actionId") or ""))
                         # Only the EXPLAINER reaches this branch: the
@@ -530,6 +536,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 return
             try:
                 result = await game.duet_guesser_spoke(phrase)
+                logger.info("Duet own-voice guess: bot=%s result=%s",
+                            bot_uid[-6:], "MATCH" if result.get("matched")
+                            else str(result.get("reason") or "NO_MATCH")[:32])
                 if result.get("matched"):
                     agent.recent_word_keys.add(str(result.get("actionId") or ""))
                     logger.info("Duet self-voice guess scored: bot=%s",
