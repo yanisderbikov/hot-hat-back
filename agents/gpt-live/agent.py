@@ -178,6 +178,19 @@ class HotHatPlayer(Agent):
                 "одним коротким словом: «Да!», «Точно!», «Есть!», «Верно!» "
                 "или «Правильно!», затем немедленно играешь дальше. "
                 "Если ты УГАДЫВАЮЩИЙ, не подтверждай ответы. "
+                "Когда ОБЪЯСНЯЕШЬ человеку, веди игру дружелюбно, "
+                "изобретательно и естественно, как напарница, а не судья. "
+                "После неверного варианта НЕ останавливайся: попробуй "
+                "новый подход к тому же слову — действие, место, образ, "
+                "аналогия, противоположность или ситуация из жизни. "
+                "Не повторяй одну и ту же подсказку. Если пользователь "
+                "близок к ответу, подведи дополнительным признаком, "
+                "но НЕ произноси секретное слово сама. "
+                "Никогда не говори вслух «не засчитали», «сервер», "
+                "«система», «распознавание», «ошибка» или технические "
+                "комментарии о том, как проверяется догадка. "
+                "Пока карточка не сменилась, не заявляй, что её угадали. "
+                "Если человек хочет ещё подсказку — отвечай сразу. "
                 "Не меняй очки и таймер сама."
             )
         super().__init__(instructions=
@@ -366,14 +379,19 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                              should_greet=should_greet, character_name=character_name,
                              personality=personality, duet_role=duo_role,
                              recent_words=initial.get("recentWords") or [])
+        # SCRUM-52: return human+Rublisha to the original natural duplex
+        # end-of-turn detection.  The 150/180ms thresholds were meant for
+        # bot+bot speed rounds; applying them to a human fragmented speech
+        # and caused false "unrecognized" / forced-answer loops.
+        # Preserve low latency only for the explicitly two-AI duet.
+        duet_turn_settings = ({
+            "allow_interruptions": True,
+            "min_interruption_duration": 0.15,
+            "min_endpointing_delay": 0.18,
+            "max_endpointing_delay": 0.8,
+        } if is_duo else {})
         session = AgentSession(
-            # Fast natural barge-in: a guessing teammate must be allowed to
-            # speak the answer over the end of a long clue. Server scoring is
-            # independent of conversation turn boundaries.
-            allow_interruptions=True,
-            min_interruption_duration=0.15,
-            min_endpointing_delay=0.18,
-            max_endpointing_delay=0.8,
+            **duet_turn_settings,
             llm=inference.DuplexModel(
             model=MODEL_ID,
             voice=voice,
@@ -463,8 +481,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     result = await agent.skip_once(phrase, input_version)
                     if result.get("skipped") and not is_duo:
                         session.generate_reply(instructions=(
-                            "Сервер подтвердил пропуск. Скажи коротко: "
-                            "'Пропустили, следующее!' и продолжай объяснение."))
+                            "Перешли к новому слову. Скажи естественно "
+                            "'Давай дальше!' и сразу дай новую подсказку. "
+                            "Не обсуждай технические действия."))
                 else:
                     if is_duo:
                         duet_guess_verification_pending = True
@@ -522,46 +541,39 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             # No next card yet: let the state watcher initiate
                             # its hint when the server makes the word available.
                             agent.suppress_next_word_commentary = False
-                        await stop_stale_explanation()
+                        if is_duo:
+                            await stop_stale_explanation()
                         session.generate_reply(instructions=(
-                            "Сервер подтвердил ПРАВИЛЬНУЮ догадку напарника. "
-                            "Ты ОБЪЯСНЯЮЩИЙ. Произнеси ровно одно короткое "
-                            "подтверждение: " + confirmed
+                            "Напарник действительно угадал слово. "
+                            "Ты ОБЪЯСНЯЮЩИЙ. Скажи естественно и коротко: "
+                            + confirmed
                             + (" И СРАЗУ объясни новую карточку одной подсказкой "
                                "в 3–9 слов, не произнося секретное слово. "
                                "Никакой другой болтовни и счёта." if next_word
                                else " И ничего больше. Без поздравлений, "
                                "обсуждения очков или повторения слова.")
                         ))
-                    elif result.get("reason") == "FORM_NOT_EXACT":
-                        if is_duo:
-                            duet_wrong_guesses += 1
-                            if duet_wrong_guesses in (2, 4):
-                                agent.duplex_session.append_instructions(
-                                    "Меняй ракурс объяснения: после "
-                                    "неверного варианта используй другую "
-                                    "категорию, назначение или сравнение."
-                                )
-                        # A model may audibly say "угадал" without the server
-                        # having counted it. Make the verified result decisive
-                        # for solo Rublisha as well as for AI duets.
-                        agent.duplex_session.append_instructions(
-                            "СЕРВЕР НЕ ЗАСЧИТАЛ последнюю голосовую догадку. "
-                            "Это ВСЁ ЕЩЁ ТА ЖЕ карточка! Не подтверждай её, "
-                            "не выдавай воображаемые очки и не переходи на "
-                            "новое слово. Продолжи текущую карточку."
-                        )
+                    elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:
+                        # For TWO AI workers we still need active server-led
+                        # turn taking.  In HUMAN+AI play this branch must be
+                        # completely silent: native real-time dialogue already
+                        # heard the human, and injecting "NOT COUNTED" was
+                        # literally spoken aloud by Rublisha.
+                        duet_wrong_guesses += 1
+                        if duet_wrong_guesses in (2, 4):
+                            agent.duplex_session.append_instructions(
+                                "Следующая подсказка должна отличаться: "
+                                "поменяй категорию, действие или сравнение. "
+                                "Никогда не обсуждай процесс проверки ответа."
+                            )
                         if time.monotonic() - last_immediate_hint >= 0.75:
                             last_immediate_hint = time.monotonic()
-                            # Wrong guesses should provoke fresh hints right
-                            # away, not after the 5-second liveness watchdog.
                             await stop_stale_explanation()
                             session.generate_reply(instructions=(
-                                "Ответ НЕ засчитан сервером. "
-                                "СРАЗУ дай ОДНУ НОВУЮ конкретную подсказку "
-                                "к текущему секретному слову, 3–8 слов. "
-                                "Нельзя произносить само слово. "
-                                "Никаких «да», «верно», «угадал» и болтовни."
+                                "Продолжай объяснять то же самое слово, "
+                                "новым образным способом и очень коротко. "
+                                "Никаких фраз о проверке ответов, системе "
+                                "или очках. Не выдавай секретное слово."
                             ))
             except Exception as exc:
                 logger.debug("No game action for transcribed utterance: %s", exc)
@@ -692,9 +704,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         agent.duplex_session.append_instructions(
                             "ТВОЯ РОЛЬ: ОБЪЯСНЯЮЩИЙ. Текущее секретное слово: "
                             + str(word) +
-                            ". Объясняй по-русски, НЕ произнося слово ни в какой "
-                            "форме. При точном произнесении слова человеком "
-                            "сервер сам засчитает карточку."
+                            ". Живо объясняй его человеку, не произнося "
+                            "само слово или однокоренные формы. "
+                            "Подбирай разные ассоциации и примеры, пока "
+                            "напарник не догадается. Если это всё ещё "
+                            "текущая карточка — продолжай подсказки. "
+                            "О системе проверки и очках вслух не говори."
                         )
                         skip_second_prompt=agent.suppress_next_word_commentary
                         agent.suppress_next_word_commentary=False
@@ -772,6 +787,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 if solo_explainer and duet_snapshot.get("role") != "explainer":
                     continue
                 now=time.monotonic()
+                # A human pauses to think or offers another guess: do NOT
+                # inject a competing scripted voice prompt every few seconds.
+                # Recover only a genuinely stalled solo explainer.
+                if solo_explainer and now-duet_live.last_activity<11.0:
+                    continue
                 try:
                     action=duet_live.decide(
                         now=now, epoch_ms=int(time.time()*1000),
