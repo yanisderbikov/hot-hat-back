@@ -104,15 +104,31 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('if self.duet_role == "guesser":', source)
         self.assertIn("Сервер УЖЕ назначил тебя", source)
 
-    def test_duet_has_strict_roles_and_no_spoken_guess_confirmations(self):
+    def test_short_voice_confirmation_only_from_explainer(self):
+        from agent import _voice_confirmation
+        for role in ("guesser", "unselected", "smalltalk", ""):
+            self.assertIsNone(_voice_confirmation(role, True, 0))
+        self.assertIsNone(_voice_confirmation("explainer", False, 0))
+        self.assertIsNone(_voice_confirmation("explainer", 1, 0))
+        variants = [_voice_confirmation("explainer", True, n) for n in range(5)]
+        self.assertEqual(len(set(variants)), 5)
+        self.assertTrue(all(v.endswith("!") and len(v.split()) == 1
+                            for v in variants))
+        self.assertEqual(_voice_confirmation("explainer", True, 5), variants[0])
+
+    def test_duet_confirms_once_without_replaying_history_or_switching_roles(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
-        # In a duet, next-word explanation is the ONLY response to a point.
-        self.assertIn("agent.suppress_next_word_commentary = not is_duo", source)
-        self.assertIn("if not is_duo and _is_voice_confirmed_guess(row):", source)
         self.assertIn('if result.get("skipped") and not is_duo:', source)
-        self.assertIn('if not is_duo:\n                            replies', source)
-        # Guesser must never negotiate roles during the TURN_INTRO phase.
+        self.assertIn("agent.suppress_next_word_commentary = True", source)
+        self.assertIn("_voice_confirmation(", source)
+        self.assertIn("if next_word:", source)
+        self.assertIn("duet_guess_verification_pending", source)
+        # History is memory only. In particular the GUESSER never receives
+        # a second voice prompt after the EXPLAINER scores a correct guess.
+        self.assertNotIn("if not is_duo and _is_voice_confirmed_guess(row):", source)
+        self.assertNotIn("session.generate_reply(instructions=(\n"
+                         "                                        \"Это твоя распознанная", source)
         self.assertIn("Твоя роль в ИИ-дуэте", source)
         self.assertIn("РОЛИ НЕ ОБСУЖДАЮТСЯ", source)
         self.assertIn("Не начинай с", source)
@@ -124,6 +140,8 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("НЕ требуется никакой игровой инструмент", DUET_VOICE_INSTRUCTIONS)
         self.assertIn("NO tool to submit a spoken guess", DUET_BACKEND_INSTRUCTIONS)
         self.assertIn("Never invent points", DUET_BACKEND_INSTRUCTIONS)
+        self.assertIn("Only the EXPLAINER may utter", DUET_BACKEND_INSTRUCTIONS)
+        self.assertIn("the GUESSER never acknowledges", DUET_BACKEND_INSTRUCTIONS)
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         self.assertIn("DUET_VOICE_INSTRUCTIONS if duet_role", source)
         self.assertIn("DUET_BACKEND_INSTRUCTIONS if is_duo", source)
