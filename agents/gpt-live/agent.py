@@ -26,6 +26,7 @@ from config import (
     VOICE_INSTRUCTIONS, read_settings,
 )
 from game_client import GameClient
+from duet_liveness import DuetLiveness
 
 logger = logging.getLogger("hot-hat-gpt-live")
 server = AgentServer()
@@ -303,6 +304,20 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         duet_bootstrap_word = None
         duet_bootstrap_turn = None
         duet_first_reply_task = None
+        duet_watchdog_task = None
+        duet_live = DuetLiveness(time.monotonic())
+        duet_snapshot = {}
+
+        def duet_agent_speech(event):
+            if is_duo and str(getattr(event, "new_state", "")) == "speaking":
+                duet_live.mark_spoke(time.monotonic())
+
+        def duet_partner_speech(event):
+            if is_duo and str(getattr(event, "new_state", "")) == "speaking":
+                duet_live.mark_heard(time.monotonic())
+
+        session.on("agent_state_changed", duet_agent_speech)
+        session.on("user_state_changed", duet_partner_speech)
 
         async def on_heard(event):
             if not getattr(event, "is_final", False):
@@ -310,6 +325,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             phrase = str(getattr(event, "transcript", "") or "").strip()
             if not phrase:
                 return
+            if is_duo:
+                duet_live.mark_heard(time.monotonic())
             # RoomOptions.participant_identity binds audio to the ONE human
             # teammate. Nobody from another team can trigger guess/skip.
             agent.last_human_phrase = phrase
@@ -364,6 +381,14 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     stop.set()
                     break
                 role = state.get("role", "unselected")
+                if is_duo:
+                    duet_snapshot.clear()
+                    duet_snapshot.update(state)
+                    duet_live.card_changed(
+                        str(state.get("turnId") or ""), role,
+                        state.get("currentWord") if role=="explainer" else None,
+                        time.monotonic(),
+                    )
                 history = state.get("recentWords") or []
                 if isinstance(history, list):
                     new_actions = [
@@ -434,6 +459,78 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             "вызови choose_to_explain и только затем объясняй."
                         )
                 await asyncio.sleep(0.7)
+
+        async def duet_liveness_watchdog():
+            nonlocal error_code
+            # Only uses trusted turn state and LiveKit speech events.
+            # Never sends private card text to guesser or logs transcripts.
+            while not stop.is_set():
+                await asyncio.sleep(1.35)
+                if not duet_snapshot:
+                    continue
+                now=time.monotonic()
+                try:
+                    action=duet_live.decide(
+                        now=now, epoch_ms=int(time.time()*1000),
+                        phase=str(duet_snapshot.get("phase") or ""),
+                        role=str(duet_snapshot.get("role") or ""),
+                        word=duet_snapshot.get("currentWord"),
+                        paused=duet_snapshot.get("isPaused") is True,
+                        deadline_ms=int(duet_snapshot.get("deadlineMs") or 0),
+                        agent_state=str(getattr(session, "agent_state", "")),
+                        user_state=str(getattr(session, "user_state", "")),
+                    )
+                    if action=="failed":
+                        logger.warning("Duet stalled after bounded voice prompts; "
+                                       "closing this voice session early: bot=%s",
+                                       bot_uid[-6:])
+                        error_code="DUET_DEADLOCK"
+                        stop.set()
+                        return
+                    if not action:
+                        continue
+                    phrase={
+                        "give_hint": (
+                            "Твоя очередь ОБЪЯСНЯТЬ. Не называй тайное слово. "
+                            "Немедленно дай ОДНУ новую короткую подсказку. "
+                            "Не жди, пока тебя попросят, часы идут!"
+                        ),
+                        "make_guess": (
+                            "Твоя очередь УГАДЫВАТЬ по уже услышанной подсказке. "
+                            "Немедленно скажи одну конкретную догадку. "
+                            "Не проси объясняющего передать тайное слово."
+                        ),
+                        "request_hint": (
+                            "Ты угадываешь, но не слышишь подсказки. "
+                            "Скажи очень коротко: Дай подсказку! "
+                            "После ответа сразу пробуй угадать."
+                        ),
+                    }[action]
+                    logger.info("Duet silence recovery: bot=%s role=%s prompt=%s "
+                                "attempt=%s",
+                                bot_uid[-6:],duet_snapshot.get("role"),action,
+                                duet_live.prompts_without_voice)
+                    handle=session.generate_reply(instructions=phrase)
+                    try:
+                        await asyncio.wait_for(handle,timeout=9)
+                        if handle.exception() is not None:
+                            logger.warning("Duet recovery speech refused: bot=%s",
+                                           bot_uid[-6:])
+                    except asyncio.TimeoutError:
+                        logger.warning("Duet recovery response timed out: bot=%s",
+                                       bot_uid[-6:])
+                        # Only interrupt an orphaned generation, not real audio.
+                        if str(getattr(session, "agent_state", "")) != "speaking":
+                            try:
+                                await asyncio.wait_for(
+                                    session.interrupt(force=True),timeout=2)
+                            except (RuntimeError,asyncio.TimeoutError):
+                                pass
+                    finally:
+                        duet_live.pending=False
+                except Exception as exc:
+                    duet_live.pending=False
+                    logger.warning("Duet recovery monitor failure: %s",type(exc).__name__)
 
         error_code = ""
         ticker = None
@@ -577,6 +674,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     + "Коротко уточни, кто будет объяснять, а кто угадывать."
                 ))
             watcher = asyncio.create_task(follow_game_state())
+            if is_duo:
+                duet_watchdog_task=asyncio.create_task(duet_liveness_watchdog())
             try:
                 await asyncio.wait_for(stop.wait(),
                                        timeout=min(180, max_seconds))
@@ -587,7 +686,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             logger.warning("GPT-Live voice session failed: %s", exc)
         finally:
             stop.set()
-            for task in (ticker, watcher, duet_first_reply_task):
+            for task in (ticker, watcher, duet_first_reply_task, duet_watchdog_task):
                 if task is not None:
                     task.cancel()
                     try:
