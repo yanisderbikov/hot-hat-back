@@ -197,6 +197,15 @@ public class AiVoiceUsageService {
 
     public Optional<AiVoiceSession> byId(String id){return sessions.findById(id);}
 
+    /** Read-only for a bounded OWNER duet recovery after a failed voice
+     * generation. Never revive a human session or an old game's turn.
+     */
+    @Transactional(readOnly=true)
+    public List<AiVoiceSession> gameSessions(String roomId,int gameNumber){
+        return sessions.findByRoomIdAndGameNumberOrderByCreatedAtDesc(roomId,gameNumber)
+                .stream().filter(s->"game".equals(s.getMode())).toList();
+    }
+
     public Map<String,Object> summary(AiVoiceSession s){
         Map<String,Object> m=new LinkedHashMap<>();
         m.put("sessionId",s.getSessionId());m.put("roomId",s.getRoomId());
