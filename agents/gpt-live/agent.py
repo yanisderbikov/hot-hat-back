@@ -497,6 +497,19 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         ))
                     elif is_duo:
                         duet_wrong_guesses += 1
+                        # The model cannot decide that a card was guessed.
+                        # Its spoken "Да, верно" must NEVER become a card
+                        # transition unless the authoritative server counted
+                        # the answer. Correct the explainer on EVERY mismatch.
+                        if result.get("reason") == "FORM_NOT_EXACT":
+                            agent.duplex_session.append_instructions(
+                                "СЕРВЕР НЕ ЗАСЧИТАЛ последнюю догадку. "
+                                "ТАЙНАЯ КАРТОЧКА ОСТАЛАСЬ ПРЕЖНЕЙ. "
+                                "НЕ говори «верно»/«правильно», НЕ меняй "
+                                "слово и НЕ объясняй выдуманную новую "
+                                "карточку. Дай следующую конкретную "
+                                "подсказку к ТЕКУЩЕМУ слову."
+                            )
                         if duet_wrong_guesses in (2, 4):
                             # Adapt silently; never schedule another competing
                             # spoken response while the teammate is guessing.
@@ -541,8 +554,22 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             else str(result.get("reason") or "NO_MATCH")[:32])
                 if result.get("matched"):
                     agent.recent_word_keys.add(str(result.get("actionId") or ""))
+                    # Wait for the explainer to receive the server's new
+                    # card. Do not confirm, invent next hints or announce points.
+                    agent.duplex_session.append_instructions(
+                        "СЕРВЕР ЗАСЧИТАЛ твою догадку. Ты УГАДЫВАЮЩИЙ: "
+                        "только слушай следующую подсказку объясняющего. "
+                        "Не подтверждай ответ и не называй очки."
+                    )
                     logger.info("Duet self-voice guess scored: bot=%s",
                                 bot_uid[-6:])
+                elif result.get("reason") == "FORM_NOT_EXACT":
+                    agent.duplex_session.append_instructions(
+                        "СЕРВЕР НЕ ЗАСЧИТАЛ эту догадку. "
+                        "Объясняющий всё ещё показывает ТУ ЖЕ карточку. "
+                        "Послушай новую подсказку и предложи другой "
+                        "конкретный вариант. Не говори, что уже угадал."
+                    )
             except Exception as exc:
                 logger.debug("Duet self-voice guess was not scored: %s",
                              type(exc).__name__)
@@ -554,6 +581,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         async def follow_game_state():
             nonlocal latest, duet_wrong_guesses
             previous = None
+            pending_duet_ack = None
             while not stop.is_set():
                 try:
                     state = await game.context()
@@ -570,7 +598,6 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         time.monotonic(),
                     )
                 history = state.get("recentWords") or []
-                pending_duet_ack = None
                 if isinstance(history, list):
                     new_actions = [
                         row for row in reversed(history)
@@ -638,6 +665,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                   if is_duo else
                                   "Сразу объясни следующее слово короткими подсказками."))
                             )
+                            # A pending acknowledgement must survive a
+                            # concurrent peer-ASR HTTP request, but must not
+                            # be replayed for later unrelated cards.
+                            pending_duet_ack = None
                     elif role == "smalltalk":
                         agent.duplex_session.append_instructions(
                             "РЕЖИМ SMOL TALK: разговаривай только с владельцем "
