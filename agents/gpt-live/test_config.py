@@ -81,6 +81,9 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("one recovery", source)
         self.assertIn("await first_handle", source)
         self.assertIn("retry.exception()", source)
+        self.assertGreater(source.index("watcher = asyncio.create_task(follow_game_state())"),
+                           source.index("first_handle=session.generate_reply("))
+        self.assertIn("(is_duo or scripted_partner)", source)
         self.assertIn('error_code="DUET_OPENING_SILENT"', source)
         self.assertIn("stop.set()", source)
 
