@@ -410,7 +410,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         skip_second_prompt=agent.suppress_next_word_commentary
                         agent.suppress_next_word_commentary=False
                         if not skip_second_prompt and not (
-                                is_duo and word == duet_bootstrap_word
+                                (is_duo or scripted_partner)
+                                and word == duet_bootstrap_word
                                 and state.get("turnId") == duet_bootstrap_turn):
                             agent.duplex_session.append_commentary(
                                 "Сразу объясни следующее слово короткими подсказками."
@@ -478,7 +479,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         logger.warning("GPT-Live usage callback failed: %s", exc)
 
             ticker = asyncio.create_task(report_usage())
-            watcher = asyncio.create_task(follow_game_state())
+            # Start the game-state watcher AFTER sending the initial voice
+            # instruction. Otherwise the watcher and the opening generate_reply
+            # race to make GPT-Live talk, and BOTH requests may be declined.
             if mode == "smalltalk":
                 session.generate_reply(instructions=(
                     "Начни лёгкий разговор по-русски. "
@@ -492,6 +495,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 # since the ordinary test-bot doesn't publish audio at all.
                 try:
                     await game.choose_explainer()
+                    scripted_current=await game.context()
+                    duet_bootstrap_word=scripted_current.get("currentWord")
+                    duet_bootstrap_turn=scripted_current.get("turnId")
                     session.generate_reply(instructions=(
                         ("Представься кратко. " if should_greet else
                          "Не здоровайся повторно. ")
@@ -570,6 +576,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                      "Не здоровайся повторно. ")
                     + "Коротко уточни, кто будет объяснять, а кто угадывать."
                 ))
+            watcher = asyncio.create_task(follow_game_state())
             try:
                 await asyncio.wait_for(stop.wait(),
                                        timeout=min(180, max_seconds))
