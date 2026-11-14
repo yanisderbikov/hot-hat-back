@@ -536,6 +536,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     elif result.get("reason") == "FORM_NOT_EXACT":
                         if is_duo:
                             duet_wrong_guesses += 1
+                            if duet_wrong_guesses in (2, 4):
+                                agent.duplex_session.append_instructions(
+                                    "Меняй ракурс объяснения: после "
+                                    "неверного варианта используй другую "
+                                    "категорию, назначение или сравнение."
+                                )
                         # A model may audibly say "угадал" without the server
                         # having counted it. Make the verified result decisive
                         # for solo Rublisha as well as for AI duets.
