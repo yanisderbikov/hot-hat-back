@@ -17,6 +17,7 @@ class DuetLiveness:
     card_key: tuple | None = None
     prompts_without_voice: int = 0
     pending: bool = False
+    max_prompts_without_voice: int = 3
 
     def mark_spoke(self, now: float) -> None:
         self.last_voice = now
@@ -66,7 +67,7 @@ class DuetLiveness:
             delay = max(delay, 12.0)
         if now - self.last_activity < delay or (self.last_prompt > 0 and now - self.last_prompt < 7.5):
             return None
-        if self.prompts_without_voice >= 3:
+        if self.prompts_without_voice >= self.max_prompts_without_voice:
             return "failed"
         self.prompts_without_voice += 1
         self.last_prompt = now
