@@ -265,14 +265,13 @@ public class AiVoiceGameService {
     }
 
     /**
-     * A two-AI game has TWO authenticated workers. The guessing AI's OWN
-     * completed spoken turn is often transcribed more reliably than the
-     * explainer worker's peer-input transcription. Allow that evidence as a
-     * second scoring route, but only from the server-authorized GUESSER seat.
+     * An authenticated AI's OWN completed spoken answer is authoritative
+     * evidence of its utterance in either an AI+AI OR human+AI game.
+     * Only the server-authorized GUESSER may submit it; the explainer's
+     * secret word is never accepted as a self-scored guess.
      *
      * A model claiming "correct" is never evidence: require an exact match
-     * to the current server secret word. Human sessions and the explaining
-     * AI cannot call this route.
+     * to the current server secret word and the current live turn.
      */
     @Transactional
     public Map<String,Object> guessedByDuetVoice(String sessionId,
@@ -280,12 +279,11 @@ public class AiVoiceGameService {
         Verified valid=verify(sessionId);
         MatchState snapshot=valid.game();
         AiVoiceSession u=valid.usage();
-        if (!AiVoiceSeatPolicy.isAi(valid.humanUid())
-                || snapshot.getPhase()!=MatchPhase.ACTIVE
+        if (snapshot.getPhase()!=MatchPhase.ACTIVE
                 || snapshot.isPaused()
                 || !Objects.equals(snapshot.getGuesserUid(),u.getBotUid())
                 || !Objects.equals(snapshot.getExplainerUid(),valid.humanUid()))
-            return Map.of("matched",false,"reason","DUET_GUESSER_ONLY");
+            return Map.of("matched",false,"reason","AI_GUESSER_ONLY");
         if (!exactWordSpoken(snapshot.getCurrentWord(),transcript))
             return Map.of("matched",false,"reason","FORM_NOT_EXACT");
         if (actionId==null || !actionId.matches("^[A-Za-z0-9_-]{6,80}$"))
