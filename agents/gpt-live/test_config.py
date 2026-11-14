@@ -87,6 +87,23 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('error_code="DUET_OPENING_SILENT"', source)
         self.assertIn("stop.set()", source)
 
+    def test_duet_voice_watchdog_is_active_only_on_live_gameplay(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        self.assertIn("from duet_liveness import DuetLiveness", source)
+        self.assertIn('session.on("agent_state_changed", duet_agent_speech)', source)
+        self.assertIn('session.on("user_state_changed", duet_partner_speech)', source)
+        self.assertIn('duet_live.card_changed(', source)
+        self.assertIn("action=duet_live.decide(", source)
+        self.assertIn('error_code="DUET_DEADLOCK"', source)
+        self.assertIn('"give_hint":', source)
+        self.assertIn('"make_guess":', source)
+        self.assertIn('"request_hint":', source)
+        self.assertIn("duet_watchdog_task=asyncio.create_task(duet_liveness_watchdog())", source)
+        self.assertIn("duet_first_reply_task, duet_watchdog_task", source)
+        self.assertIn("duet_role=duo_role", source)
+        self.assertIn('if self.duet_role == "guesser":', source)
+        self.assertIn("Сервер УЖЕ назначил тебя", source)
+
     def test_scripted_partner_is_test_only_output_speech_without_human_microphone(self):
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         self.assertIn('scripted_partner = initial.get("scriptedPartner") is True', source)
