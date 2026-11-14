@@ -81,6 +81,8 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("one recovery", source)
         self.assertIn("await first_handle", source)
         self.assertIn("retry.exception()", source)
+        self.assertIn('error_code="DUET_OPENING_SILENT"', source)
+        self.assertIn("stop.set()", source)
 
     def test_scripted_partner_is_test_only_output_speech_without_human_microphone(self):
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
