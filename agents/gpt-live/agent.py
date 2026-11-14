@@ -439,10 +439,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     delete_room_on_close=False,
                 ) if scripted_partner else room_io.RoomOptions(
                     participant_identity=human_uid,
-                    # LiveKit excludes AGENT audio by default! Explicitly
-                    # subscribe to the OTHER voice bot in an OWNER-only duet.
-                    participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_AGENT]
-                        if is_duo else [rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD],
+                    # LiveKit excludes AGENT sound from its DEFAULT kinds.
+                    # For AI+AI pair, explicitly subscribe to AGENT input.
+                    participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_AGENT],
+                    close_on_disconnect=True,
+                    delete_room_on_close=False,
+                ) if is_duo else room_io.RoomOptions(
+                    # Preserve the existing DEFAULT participant kind support
+                    # for ordinary human teammates, including guests/SIP.
+                    participant_identity=human_uid,
                     close_on_disconnect=True,
                     delete_room_on_close=False,
                 )),
@@ -489,7 +494,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             elif is_duo:
                 logger.info("Duet audio linked: bot=%s peer=%s connected=%s",
                             bot_uid[-6:], human_uid[-6:],
-                            session.room_io.linked_participant is not None)
+                            getattr(getattr(session, "room_io", None), "linked_participant", None) is not None)
                 if bot_uid == designated_explainer_uid:
                     # ONE agent initiates; second agent listens to REAL audio.
                     # Both calling generate_reply together caused mutual
