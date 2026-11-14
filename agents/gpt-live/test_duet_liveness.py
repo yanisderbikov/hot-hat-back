@@ -101,6 +101,17 @@ class DuetLivenessTests(unittest.TestCase):
         self.assertEqual(next_action(live,31.0),"failed")
         self.assertEqual(live.prompts_without_voice,3)
 
+    def test_solo_explainer_can_retry_more_than_duet_without_endless_requests(self):
+        live=DuetLiveness(last_activity=0,max_prompts_without_voice=8)
+        live.card_changed("solo-turn","explainer","Гора",0)
+        for i in range(8):
+            now=6+i*8
+            self.assertEqual(next_action(live,now,word="Гора",
+                                         deadline_ms=90_000),"give_hint")
+            live.pending=False
+        self.assertEqual(next_action(live,70,word="Гора",
+                                     deadline_ms=90_000),"failed")
+
     def test_next_word_rearms_recovery_without_leaking_secret_to_guesser(self):
         live=DuetLiveness(last_activity=0)
         live.card_changed("turn-1","explainer","Солнце",0)
