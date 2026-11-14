@@ -14,6 +14,7 @@ import os
 import re
 import time
 
+from livekit import rtc
 from livekit.agents import (
     Agent, AgentServer, AgentSession, JobContext, room_io,
     RunContext, cli, inference,
@@ -282,6 +283,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         session.on("close", lambda *_: stop.set())
         latest = ""
         started = 0.0
+        duet_bootstrap_word = None
+        duet_bootstrap_turn = None
+        duet_first_reply_task = None
 
         async def on_heard(event):
             if not getattr(event, "is_final", False):
@@ -393,9 +397,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             "форме. При точном произнесении слова человеком "
                             "сервер сам засчитает карточку."
                         )
-                        agent.duplex_session.append_commentary(
-                            "Начни объяснять новое слово короткими подсказками."
-                        )
+                        if not (is_duo and word == duet_bootstrap_word
+                                and state.get("turnId") == duet_bootstrap_turn):
+                            agent.duplex_session.append_commentary(
+                                "Сразу объясни следующее слово короткими подсказками."
+                            )
                     elif role == "smalltalk":
                         agent.duplex_session.append_instructions(
                             "РЕЖИМ SMOL TALK: разговаривай только с владельцем "
@@ -433,6 +439,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     delete_room_on_close=False,
                 ) if scripted_partner else room_io.RoomOptions(
                     participant_identity=human_uid,
+                    # LiveKit excludes AGENT audio by default! Explicitly
+                    # subscribe to the OTHER voice bot in an OWNER-only duet.
+                    participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_AGENT]
+                        if is_duo else [rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD],
                     close_on_disconnect=True,
                     delete_room_on_close=False,
                 )),
@@ -477,28 +487,58 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 except Exception as exc:
                     logger.warning("Test scripted teammate turn not started: %s", exc)
             elif is_duo:
+                logger.info("Duet audio linked: bot=%s peer=%s connected=%s",
+                            bot_uid[-6:], human_uid[-6:],
+                            session.room_io.linked_participant is not None)
                 if bot_uid == designated_explainer_uid:
-                    # In a two-agent experiment the speaker assignment is
-                    # deterministic and server-validated, not negotiated in
-                    # an infinite mutual 'you go first' conversation.
+                    # ONE agent initiates; second agent listens to REAL audio.
+                    # Both calling generate_reply together caused mutual
+                    # refusals from GPT-Live at room startup.
                     try:
                         await game.choose_explainer()
+                        current=await game.context()
+                        duet_bootstrap_word=current.get("currentWord")
+                        duet_bootstrap_turn=current.get("turnId")
+                        if not duet_bootstrap_word or current.get("role")!="explainer":
+                            raise RuntimeError("duet secret word/role not ready")
+                        agent.duplex_session.append_instructions(
+                            "Ты объясняешь слово: "+str(duet_bootstrap_word)
+                            +". Никогда не произноси это слово. Играй быстро."
+                        )
+                        first_handle=session.generate_reply(instructions=(
+                            ("Представься одним словом и " if should_greet else "")
+                            +"СЕЙЧАС дай первую короткую подсказку к секретному "
+                            "слову, не называя его. Это игра на скорость: максимум "
+                            "одна фраза, затем слушай догадку напарника."
+                        ))
+                        async def check_opening_reply():
+                            await first_handle
+                            if first_handle.exception() is not None and not stop.is_set():
+                                # GPT-Live may decline generate_reply once:
+                                # bounded one-shot recovery (no paid retry loop).
+                                logger.warning("Duet opening speech refused; one recovery")
+                                await asyncio.sleep(1.2)
+                                if not stop.is_set():
+                                    retry=session.generate_reply(instructions=(
+                                        "Твоя очередь объяснять прямо сейчас. "
+                                        "Произнеси ОДНУ короткую подсказку, затем "
+                                        "выслушай ответ второго ИИ."
+                                    ))
+                                    await retry
+                                    if retry.exception() is not None:
+                                        logger.warning("Duet opening recovery also declined")
+                        duet_first_reply_task=asyncio.create_task(check_opening_reply())
                     except Exception as exc:
-                        logger.warning("Duo turn could not start: %s", exc)
-                    session.generate_reply(instructions=(
-                        ("Представься кратко. " if should_greet else "Не здоровайся повторно. ")
-                        + "Ты объясняешь слово, а твой ИИ-напарник угадывает. "
-                        + "Слушай его догадки. Запрашивай текущее слово через сервер. "
-                        + "Кратко и чётко давай подсказки, не называя слово."
-                    ))
+                        logger.warning("Duo opening turn failed: %s", exc)
                 else:
-                    session.generate_reply(instructions=(
-                        ("Представься кратко. " if should_greet else "Не здоровайся повторно. ")
-                        + "Ты угадываешь, а твой ИИ-напарник объясняет. "
-                        + "Слушай только его, предлагай по одному слову-догадке. "
-                        + "Не бери роль объясняющего и не утверждай, что слово "
-                        + "засчитали, пока не подтвердил сервер."
-                    ))
+                    # The guesser must LISTEN first: do not send another
+                    # autonomous opening reply before the first voice stream.
+                    agent.duplex_session.append_instructions(
+                        "Ты угадываешь и не знаешь секретного слова. "
+                        "Не говори первым: дождись первой голосовой подсказки "
+                        "второго ИИ, затем отвечай одной догадкой за раз. "
+                        "Не объявляй очки, пока сервер их не подтвердил."
+                    )
             else:
                 session.generate_reply(instructions=(
                     ("Поздоровайся с напарником в двух словах. " if should_greet else
@@ -515,7 +555,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             logger.warning("GPT-Live voice session failed: %s", exc)
         finally:
             stop.set()
-            for task in (ticker, watcher):
+            for task in (ticker, watcher, duet_first_reply_task):
                 if task is not None:
                     task.cancel()
                     try:
