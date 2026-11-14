@@ -65,6 +65,53 @@ class AiVoiceSeatServiceTest {
     }
 
     @Test
+    void siteOwnerCanStageTwoDistinctAiPlayersInAnEmptyTeam() {
+        HotHatUser siteOwner=new HotHatUser("site-owner",null,null,true,true,false);
+        Room room=room(true);
+        RoomTeam team=team();
+        prepare(room,team,List.of());
+
+        Map<String,Object> first=seats.add(siteOwner,ROOM,TEAM,"bubnil");
+        assertEquals("Бубнил",first.get("name"));
+        assertEquals(List.of(first.get("uid")),team.getMemberUids());
+
+        RoomPlayer firstPlayer=player(String.valueOf(first.get("uid")),true);
+        firstPlayer.setName("Бубнил");
+        when(getter.getPlayers(ROOM)).thenReturn(List.of(firstPlayer));
+        Map<String,Object> second=seats.add(siteOwner,ROOM,TEAM,"plut");
+        assertEquals("Плут",second.get("name"));
+        assertEquals(List.of(first.get("uid"),second.get("uid")),team.getMemberUids());
+        verify(saver,times(2)).savePlayer(any());
+    }
+
+    @Test
+    void roomHostWithAdminRoleStillCannotStageTwoAiPlayers() {
+        HotHatUser adminHost=new HotHatUser(HUMAN,null,null,true,false,false);
+        prepare(room(false),team(),List.of());
+        assertThrows(ApiException.class,()->seats.add(adminHost,ROOM,TEAM,"bubnil"));
+        verify(saver,never()).savePlayer(any());
+    }
+
+    @Test
+    void fiveDifferentTeamsMayHaveOneAiPlayerEach() {
+        Room room=room(false);
+        RoomTeam team=team(HUMAN);
+        List<RoomPlayer> players=new ArrayList<>();
+        players.add(player(HUMAN,false));
+        prepare(room,team,players);
+        for(String persona:List.of("rublisha","bubnil","shustrik","mudrila","plut")){
+            Map<String,Object> result=seats.add(host,ROOM,TEAM,persona);
+            // Simulate advancing to a different human team after each addition.
+            players.add(RoomPlayer.builder().uid(String.valueOf(result.get("uid")))
+                    .name(String.valueOf(result.get("name"))).teamId("prior-"+persona)
+                    .isTestBot(true).build());
+            when(getter.getPlayers(ROOM)).thenReturn(List.copyOf(players));
+        }
+        assertEquals(5,players.stream().filter(p->p.getUid().startsWith("ai-gpt-live-")).count());
+        assertThrows(ApiException.class,()->seats.add(host,ROOM,TEAM,"rublisha"));
+    }
+
+    @Test
     void fillsReleasedTestBotSlotWithoutKeepingInviteReservation() {
         Room room = room(true);
         RoomTeam team = team(HUMAN, SCRIPTED);
