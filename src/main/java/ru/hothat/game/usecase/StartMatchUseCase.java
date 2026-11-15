@@ -83,10 +83,6 @@ public class StartMatchUseCase {
             if (roster == null || !active(player, now)) {
                 continue;
             }
-            if (!LoadoutRules.charged(player.getLoadout())) {
-                // Имя в коде: игроку на экране показывают, кто именно не готов.
-                throw ApiException.of("LOADOUT_REQUIRED:" + player.displayName(), 409);
-            }
             roster.add(player.getUid());
             names.put(player.getUid(), player.displayName());
             playing.add(player);

@@ -36,11 +36,6 @@ public class SetMatchLoadoutUseCase {
     @Transactional
     public MatchLoadoutResponseDTO run(HotHatUser user, String roomId, SetMatchLoadoutRequestDTO request) {
         List<String> loadout = LoadoutRules.normalize(request.memeIds());
-        if (loadout.size() != LoadoutRules.SIZE) {
-            // Повтор внутри обоймы схлопывается нормализацией, и пяти слотов
-            // не набирается: клиенту это надо назвать отдельным кодом.
-            throw ApiException.of("MEME_DUPLICATE", 409);
-        }
         // Одно чтение на всю обойму, а не пять подряд: пять вопросов «есть
         // такой мем?» на один запрос — тот самый веер одиночных чтений,
         // которого область партии избегает везде.

@@ -94,11 +94,9 @@ public class SabotageArmoryProvider implements SabotageArmoryPort {
     @Override
     @Transactional(readOnly = true)
     public List<String> requireLoadout(String uid) {
-        List<String> loadout = store.loadout(uid);
-        if (loadout.size() != LOADOUT_SIZE) {
-            throw ApiException.of("DEFAULT_LOADOUT_REQUIRED", 409);
-        }
-        return loadout;
+        // SCRUM-55: memes are chosen at firing time, not pre-equipped.
+        // Keep this legacy SPI method for callers, without the 5-slot admission gate.
+        return store.loadout(uid);
     }
 
     @Override
@@ -110,13 +108,8 @@ public class SabotageArmoryProvider implements SabotageArmoryPort {
     @Override
     @Transactional(readOnly = true)
     public Map<String, List<String>> requireLoadouts(Collection<String> uids) {
-        Map<String, List<String>> loadouts = store.loadouts(uids);
-        for (String uid : uids) {
-            if (loadouts.getOrDefault(uid, List.of()).size() != LOADOUT_SIZE) {
-                throw ApiException.of("DEFAULT_LOADOUT_REQUIRED", 409);
-            }
-        }
-        return loadouts;
+        // A team may enter matchmaking and preflight with an empty old loadout.
+        return store.loadouts(uids);
     }
 
     /**

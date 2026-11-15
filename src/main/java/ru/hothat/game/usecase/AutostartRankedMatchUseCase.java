@@ -95,9 +95,6 @@ public class AutostartRankedMatchUseCase {
                     // Кто-то из пары ещё не дошёл до комнаты: ждём дальше.
                     return waiting(RankedAutostartOutcome.WAITING, session, user, players.size(), target, 0);
                 }
-                if (!LoadoutRules.charged(player.getLoadout())) {
-                    throw ApiException.of("LOADOUT_REQUIRED:" + player.displayName(), 409);
-                }
                 names.put(uid, player.displayName());
             }
             order.add(team.teamId());

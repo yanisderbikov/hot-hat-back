@@ -68,22 +68,15 @@ public final class WeaponHandlers {
         if (media == null || memeId == null || memeId.isBlank()) {
             throw ApiException.of("MEME_NOT_LOADED", 400);
         }
-        MatchPlayer attacker = context.attacker();
-        MemeQueue queue = LoadoutRules.queue(attacker);
-        if (!queue.loaded(memeId)) {
-            throw ApiException.of("MEME_NOT_LOADED", 403);
-        }
-        if (!queue.ready(memeId)) {
-            // Ролик отстрелян и ждёт своей очереди: заряд его не возвращает.
-            throw ApiException.of("MEME_IN_RESERVE", 409);
-        }
+        // SCRUM-55: any published meme can be fired by ID. The shared ammo,
+        // cooldown and match eligibility are still checked by SabotageEngine.
         long duration = media.clampedDurationMs();
         SabotageEvent base = event(context, duration, memeId, null, null);
         SabotageEvent withMedia = new SabotageEvent(base.id(), base.type(), memeId, null, null,
                 base.attackerUid(), base.attackerName(), base.targetUid(), base.createdAtMs(), duration,
                 base.gameNumber(), null, null, media.title(), media.src(), media.poster(),
                 media.mediaPath(), media.posterPath(), media.storageProvider(), null, null);
-        return new SabotageDecision(withMedia, lockUntil(context, duration), true, null);
+        return new SabotageDecision(withMedia, lockUntil(context, duration), false, null);
     }
 
     /** Накладка: объект, какахи и мега текст ставятся в точку сцены. */
