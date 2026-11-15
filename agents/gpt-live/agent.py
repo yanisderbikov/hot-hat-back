@@ -489,8 +489,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             is_current=lambda key: (not stop.is_set()
                         and latest=="explainer" and key==active_prompt_key),
             spoke_at=lambda: last_agent_spoke,
-            log=lambda event,attempt,reason: logger.warning(
-                "GPT-Live %s bot=%s attempt=%d reason=%s",
+            log=lambda event,attempt,reason: (
+                logger.warning if event in (
+                    "card_prompt_retry","card_prompt_exhausted") else logger.info
+            )("GPT-Live %s bot=%s count=%d reason=%s",
                 event,bot_uid[-6:],attempt,reason),
         )
 

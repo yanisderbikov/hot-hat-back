@@ -39,6 +39,9 @@ class CardPromptCoordinator:
         if self._task is not None and not self._task.done():
             self._task.cancel()
         self._key = key
+        # Log numeric revision ONLY; never the secret word in production.
+        self.log("card_prompt_queued", int(key[3]) if len(key)>3 else 0,
+                 "new_card")
         self._task = asyncio.create_task(self._run(key, instructions))
 
     async def close(self) -> None:
@@ -71,6 +74,7 @@ class CardPromptCoordinator:
             if not self.is_current(key):
                 return
             try:
+                self.log("card_prompt_request", attempt + 1, "start")
                 handle = self.generate(instructions)
                 if handle is None:
                     raise RuntimeError("generate_reply did not return a request")
@@ -82,6 +86,7 @@ class CardPromptCoordinator:
                     raise RuntimeError("speech did not start within 4.5s")
                 if handle.exception() is not None:
                     raise RuntimeError(type(handle.exception()).__name__)
+                self.log("card_prompt_accepted", attempt + 1, "ok")
                 return
             except asyncio.CancelledError:
                 raise
