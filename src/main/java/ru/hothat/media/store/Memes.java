@@ -1,6 +1,7 @@
 package ru.hothat.media.store;
 
 import org.springframework.data.domain.Limit;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -29,6 +30,9 @@ interface Memes extends JpaRepository<Meme, UUID> {
     Optional<Meme> findBySlug(String slug);
 
     List<Meme> findByStatusOrderByCreatedAtDesc(String status, Limit limit);
+
+    /** Stable multi-page order: createdAt DESC and id DESC are provided by Pageable. */
+    List<Meme> findByStatus(String status, Pageable pageable);
 
     /** Какие из названных мемов существуют: обойма спрашивает про пять сразу. */
     List<Meme> findBySlugIn(Collection<String> slugs);

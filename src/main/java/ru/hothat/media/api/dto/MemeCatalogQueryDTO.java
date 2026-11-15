@@ -26,12 +26,20 @@ public record MemeCatalogQueryDTO(
         @Parameter(description = "Сколько мемов вернуть; по умолчанию 60", example = "60")
         @Min(value = 1, message = "Размер страницы должен быть положительным.")
         @Max(value = 200, message = "Больше двухсот мемов за раз не отдаём.")
-        Integer limit) {
+        Integer limit,
+
+        @Parameter(description = "Номер страницы, начиная с нуля", example = "0")
+        @Min(value = 0, message = "Номер страницы должен быть неотрицательным.")
+        Integer page) {
 
     /** Столько карточек помещается на экран библиотеки без дозагрузки. */
     public static final int DEFAULT_LIMIT = 60;
 
     public int limitOrDefault() {
         return limit == null ? DEFAULT_LIMIT : limit;
+    }
+
+    public int pageOrDefault() {
+        return page == null ? 0 : page;
     }
 }

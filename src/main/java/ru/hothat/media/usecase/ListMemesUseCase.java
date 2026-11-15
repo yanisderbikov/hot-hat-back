@@ -38,7 +38,9 @@ public class ListMemesUseCase {
         // Единственное место умолчания: параметров может не быть вовсе,
         // и «не задано» не должно разъезжаться по контроллеру и мапперу.
         int limit = query == null ? MemeCatalogQueryDTO.DEFAULT_LIMIT : query.limitOrDefault();
-        List<MemeCardView> items = cards.cards(memes.catalog(limit), user.uid());
-        return new MemeCatalogPageResponseDTO(items, null, limit);
+        int page = query == null ? 0 : query.pageOrDefault();
+        List<MemeCardView> items = cards.cards(memes.catalog(limit, page), user.uid());
+        String nextCursor = items.size() < limit ? null : String.valueOf(page + 1);
+        return new MemeCatalogPageResponseDTO(items, nextCursor, limit);
     }
 }

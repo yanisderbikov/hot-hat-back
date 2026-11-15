@@ -2,6 +2,8 @@ package ru.hothat.media.store;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Limit;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Component;
 import ru.hothat.config.ApiException;
 import org.springframework.transaction.annotation.Transactional;
@@ -69,7 +71,14 @@ public class MemeStore {
      */
     @Transactional(readOnly = true)
     public List<Card> catalog(int limit) {
-        List<Meme> rows = memes.findByStatusOrderByCreatedAtDesc(Meme.ACTIVE, Limit.of(limit));
+        return catalog(limit, 0);
+    }
+
+    /** SCRUM-55: stable pagination across the full published library. */
+    @Transactional(readOnly = true)
+    public List<Card> catalog(int limit, int page) {
+        List<Meme> rows = memes.findByStatus(Meme.ACTIVE, PageRequest.of(
+                page, limit, Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"))));
         if (rows.isEmpty()) {
             return List.of();
         }
