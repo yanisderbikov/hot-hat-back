@@ -32,7 +32,7 @@ public class WeaponCatalogController {
     private final GetWeaponCatalogUseCase getCatalog;
 
     @Operation(summary = "Прочитать каталог оружия",
-            description = "Тринадцать видов оружия, стартовый боезапас и общая перезарядка. "
+            description = "Действующие виды оружия без снятых Негатива и старой Подмены, боезапас и общая перезарядка. "
                     + "Боезапас выведен из каталога, поэтому разойтись с ним не может.")
     @ApiResponse(responseCode = "200", description = "Каталог")
     @GetMapping
