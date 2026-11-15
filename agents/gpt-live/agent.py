@@ -71,23 +71,23 @@ def _history_prompt(rows: list[dict] | None) -> str:
 def _human_delegated_explaining(phrase: str) -> bool:
     text = " ".join(str(phrase or "").lower().replace("ё", "е").split())
     return bool(re.search(
-        r"(?:^|\\b)(?:объясняй|объясни|начинай|начни|"
+        r"(?:^|\b)(?:объясняй|объясни|начинай|начни|"
         r"давай ты|теперь ты|твоя очередь|твой ход|"
         r"ты (?:начинай|начинаешь|начни|объясняй|объясняешь|"
         r"объяснишь|объясни|будешь объяснять|будешь начинать|"
         r"будешь первым|первым будешь)|"
-        r"можешь (?:объяснять|начинать|начать|объяснить))\\b",text))
+        r"можешь (?:объяснять|начинать|начать|объяснить))\b",text))
 
 
 def _ai_committed_to_explaining(phrase: str) -> bool:
     text = " ".join(str(phrase or "").lower().replace("ё", "е").split())
-    if re.search(r"\\b(?:не буду|не хочу|не стану)\\s+объяснять",text):
+    if re.search(r"\b(?:не буду|не хочу|не стану)\s+объяснять",text):
         return False
     return bool(re.search(
-        r"(?:^|\\b)(?:я (?:буду )?(?:объяснять|объясню|"
+        r"(?:^|\b)(?:я (?:буду )?(?:объяснять|объясню|"
         r"объясняю|начну|начинаю)|давай я|я первый|"
         r"сейчас объясню|беру на себя|"
-        r"(?:ладно|хорошо|окей|да),? (?:я )?начинаю)\\b",text))
+        r"(?:ладно|хорошо|окей|да),? (?:я )?начинаю)\b",text))
 
 
 class HotHatPlayer(Agent):
@@ -445,6 +445,37 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         last_agent_spoke = 0.0
         duet_wrong_guesses = 0
         duet_guess_verification_pending = False
+        role_selection_lock = asyncio.Lock()
+        role_selection_done = False
+
+        async def ensure_server_started_for_bot(reason: str) -> bool:
+            """Commit an explicit HUMAN+AI role choice to the server once."""
+            nonlocal role_selection_done
+            if (mode != "game" or is_duo or scripted_partner or
+                    role_selection_done or latest != "unselected"):
+                return False
+            async with role_selection_lock:
+                if role_selection_done or stop.is_set():
+                    return False
+                try:
+                    before = await game.context()
+                    if (before.get("phase") not in ("turn_intro","turnintro")
+                            or before.get("role") != "unselected"
+                            or before.get("isPaused")):
+                        return False
+                    await game.choose_explainer()
+                    after = await game.context()
+                    if after.get("phase") != "active" or after.get("role") != "explainer":
+                        return False
+                    role_selection_done = True
+                    logger.info("AI role confirmed by server bot=%s reason=%s",
+                                bot_uid[-6:],reason)
+                    return True
+                except Exception as error:
+                    logger.warning("AI role selection deferred bot=%s cause=%s",
+                                   bot_uid[-6:],type(error).__name__)
+                    return False
+
         last_immediate_hint = 0.0
         last_duet_reply_requested = 0.0
 
@@ -514,6 +545,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             agent.last_human_phrase = phrase
             agent.human_input_version += 1
             input_version = agent.human_input_version
+            if latest == "unselected":
+                if _human_delegated_explaining(phrase):
+                    await ensure_server_started_for_bot("human_delegated")
+                return
             if latest != "explainer":
                 return
             nonlocal duet_wrong_guesses, duet_guess_verification_pending
@@ -681,9 +716,25 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 logger.debug("Duet self-voice guess was not scored: %s",
                              type(exc).__name__)
 
-        if mode == "game" and is_duo and not scripted_partner:
-            session.on("conversation_item_added",
-                       lambda event: asyncio.create_task(on_guesser_own_voice(event)))
+        async def on_assistant_role_commitment(event):
+            # A model may SAY "I'll explain" without calling its optional
+            # tool. Its own final speech also triggers the server transition.
+            if mode != "game" or is_duo or scripted_partner or latest != "unselected":
+                return
+            item = getattr(event,"item",None)
+            if (getattr(item,"role","") != "assistant"
+                    or getattr(item,"interrupted",False)):
+                return
+            if _ai_committed_to_explaining(getattr(item,"text_content","")):
+                await ensure_server_started_for_bot("bot_committed")
+
+        if mode == "game" and not scripted_partner:
+            if is_duo:
+                session.on("conversation_item_added",
+                           lambda event: asyncio.create_task(on_guesser_own_voice(event)))
+            else:
+                session.on("conversation_item_added",
+                           lambda event: asyncio.create_task(on_assistant_role_commitment(event)))
 
         async def follow_game_state():
             nonlocal latest, duet_wrong_guesses
