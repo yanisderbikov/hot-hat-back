@@ -95,7 +95,8 @@ class DuetLivenessTests(unittest.TestCase):
         duo.mark_spoke(5.0)
         duo.mark_heard(6.0)
         self.assertIsNone(next_action(duo,8.0,word="Парус"))
-        self.assertEqual(next_action(duo,8.7,word="Парус"),"give_hint")
+        self.assertIsNone(next_action(duo,8.7,word="Парус"))
+        self.assertEqual(next_action(duo,9.6,word="Парус"),"give_hint")
 
         guess=DuetLiveness(last_activity=0,fast_duet=True)
         guess.card_changed("turn-1","guesser",None,0)
@@ -105,7 +106,7 @@ class DuetLivenessTests(unittest.TestCase):
         guess.pending=False
         guess.mark_heard(5.0)
         self.assertIsNone(next_action(guess,8.0,role="guesser",word=None))
-        self.assertEqual(next_action(guess,9.5,role="guesser",
+        self.assertEqual(next_action(guess,10.0,role="guesser",
                                      word=None),"make_guess")
 
         ordinary=DuetLiveness(last_activity=0)
