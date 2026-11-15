@@ -63,6 +63,14 @@ class GameRulesTest {
         }
     }
 
+    @Test
+    @DisplayName("Снятые диверсии не выдаются за слова после SCRUM-54")
+    void retiredNegativeAndReplacementAreNeverAwarded() {
+        List<String> rewards = GameRules.specialRewardsBetween(0, 104);
+        assertThat(rewards).doesNotContain("negative", "replacement");
+        assertThat(rewards).contains("apozh", "object", "poop", "megaText");
+    }
+
     @Nested
     @DisplayName("Обойма мемов")
     class Loadout {
