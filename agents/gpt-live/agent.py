@@ -29,6 +29,7 @@ from config import (
 )
 from game_client import GameClient
 from duet_liveness import DuetLiveness
+from card_prompts import CardPromptCoordinator
 
 logger = logging.getLogger("hot-hat-gpt-live")
 server = AgentServer()
@@ -104,6 +105,7 @@ class HotHatPlayer(Agent):
         self.last_skipped_input_version = -1
         self.skip_lock = asyncio.Lock()
         self.suppress_next_word_commentary = False
+        self.pending_voice_confirmation = None
         self.recent_word_keys = {
             str(row.get("actionId")) for row in (recent_words or [])
             if isinstance(row, dict) and row.get("actionId")
@@ -478,6 +480,19 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
 
         last_immediate_hint = 0.0
         last_duet_reply_requested = 0.0
+        active_prompt_key = None
+        card_prompts = CardPromptCoordinator(
+            generate=lambda text: session.generate_reply(instructions=text),
+            state=lambda: (str(getattr(session,"agent_state","")),
+                           str(getattr(session,"user_state",""))),
+            is_current=lambda key: (not stop.is_set()
+                        and latest=="explainer" and key==active_prompt_key),
+            spoke_at=lambda: last_agent_spoke,
+            log=lambda event,attempt,reason: logger.warning(
+                "GPT-Live %s bot=%s attempt=%d reason=%s",
+                event,bot_uid[-6:],attempt,reason),
+        )
+
 
         def request_duet_reply(instructions: str):
             """One explicit reply only when the duplex conversation is idle.
@@ -562,11 +577,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     "след карточку", "давай другое",
                 )):
                     result = await agent.skip_once(phrase, input_version)
-                    if result.get("skipped") and not is_duo:
-                        session.generate_reply(instructions=(
-                            "Перешли к новому слову. Скажи естественно "
-                            "'Давай дальше!' и сразу дай новую подсказку. "
-                            "Не обсуждай технические действия."))
+                    if result.get("skipped"):
+                        # Only a new authoritative card can issue its hint;
+                        # no competing immediate generation from the old card.
+                        await stop_stale_explanation()
                 else:
                     if is_duo:
                         duet_guess_verification_pending = True
@@ -586,62 +600,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                     else str(result.get("reason") or "NO_MATCH")[:32])
                     if result.get("matched"):
                         agent.recent_word_keys.add(str(result.get("actionId") or ""))
-                        # Only the EXPLAINER reaches this branch: the
-                        # server has validated a genuine teammate voice guess.
-                        # One confirmation per spoken correct answer, for all
-                        # five AI characters, never for manual-button actions.
-                        # Suppress a competing next-word prompt while the
-                        # explainer delivers its own acknowledgement.
-                        agent.suppress_next_word_commentary = is_duo
                         duet_wrong_guesses = 0
-                        confirmed = _voice_confirmation(
-                            latest, result.get("matched") is True,
-                            len(agent.recent_word_keys))
-                        if not confirmed:
-                            return
-                        next_word = None
-                        if not result.get("turnClosed"):
-                            # The backend already advanced the card. Providing
-                            # the NEXT word before generate_reply allows ONE
-                            # short reply: "Верно! <new clue>", rather than two
-                            # competing generation requests and a long pause.
-                            try:
-                                next_state = await game.context()
-                                if (next_state.get("role") == "explainer"
-                                        and next_state.get("phase") == "active"
-                                        and not next_state.get("isPaused")):
-                                    next_word = next_state.get("currentWord")
-                            except Exception:
-                                logger.debug("Next duet card not ready for immediate hint")
-                        if next_word:
-                            agent.duplex_session.append_instructions(
-                                "Следующее СЕКРЕТНОЕ слово (не произноси его): "
-                                + str(next_word)
-                                + ". После короткого подтверждения объясни его "
-                                "новой информативной подсказкой в 3–9 слов."
-                            )
-                        elif not result.get("turnClosed"):
-                            # No next card yet: let the state watcher initiate
-                            # its hint when the server makes the word available.
-                            agent.suppress_next_word_commentary = False
+                        # The server already advanced the card. Do not ask
+                        # GPT-Live for another reply from the OLD-card ASR.
+                        # The versioned card watcher owns the single NEW hint.
+                        agent.suppress_next_word_commentary = False
                         if is_duo:
-                            await stop_stale_explanation()
-                        else:
-                            # Let the authoritative watcher start the NEXT
-                            # word; don't queue a duplicate old-card response.
-                            await stop_stale_explanation()
-                            return
-                        reply_instructions=(
-                            "Напарник действительно угадал слово. "
-                            "Ты ОБЪЯСНЯЮЩИЙ. Скажи естественно и коротко: "
-                            + confirmed
-                            + (" И СРАЗУ объясни новую карточку одной подсказкой "
-                               "в 3–9 слов, не произнося секретное слово. "
-                               "Никакой другой болтовни и счёта." if next_word
-                               else " И ничего больше. Без поздравлений, "
-                               "обсуждения очков или повторения слова.")
-                        )
-                        request_duet_reply(reply_instructions)
+                            agent.pending_voice_confirmation = _voice_confirmation(
+                                latest, True, len(agent.recent_word_keys))
+                        await stop_stale_explanation()
                     elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:
                         # For TWO AI workers we still need active server-led
                         # turn taking.  In HUMAN+AI play this branch must be
@@ -742,7 +709,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                            lambda event: asyncio.create_task(on_assistant_role_commitment(event)))
 
         async def follow_game_state():
-            nonlocal latest, duet_wrong_guesses
+            nonlocal latest, duet_wrong_guesses, active_prompt_key
             previous = None
             pending_duet_ack = None
             while not stop.is_set():
@@ -791,6 +758,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 key = (state.get("turnId"), role, word,
                        int(state.get("cardRevision") or 0), bool(state.get("isPaused")))
                 latest = role
+                active_prompt_key = key if role=="explainer" and word and (
+                    state.get("phase") == "active" and not state.get("isPaused")) else None
                 # The server may advance the card while the speech-match
                 # HTTP request is still resolving. Let its explainer finish
                 # selecting the acknowledgement before new-word commentary.
@@ -826,6 +795,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         )
                         skip_second_prompt=agent.suppress_next_word_commentary
                         agent.suppress_next_word_commentary=False
+                        if is_duo and agent.pending_voice_confirmation:
+                            pending_duet_ack=agent.pending_voice_confirmation
                         if not skip_second_prompt and not (
                                 (is_duo or scripted_partner)
                                 and word == duet_bootstrap_word
@@ -851,8 +822,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                  "дай подсказку только к ней. Прошлую карточку "
                                  "не повторяй, новое секретное слово не произноси.")
                             )
-                            request_duet_reply(reply_instruction)
+                            # When the model is busy this request is queued,
+                            # retried after refusal and cancelled if the next
+                            # server card supersedes it. Never silently drop.
+                            card_prompts.schedule(key, reply_instruction)
                             pending_duet_ack = None
+                            agent.pending_voice_confirmation = None
                     elif role == "smalltalk":
                         agent.duplex_session.append_instructions(
                             "РЕЖИМ SMOL TALK: разговаривай только с владельцем "
@@ -906,7 +881,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 # A human pauses to think or offers another guess: do NOT
                 # inject a competing scripted voice prompt every few seconds.
                 # Recover only a genuinely stalled solo explainer.
-                if solo_explainer and now-duet_live.last_activity<11.0:
+                # The new-card queue handles immediate first hints. This
+                # watchdog handles subsequent stalled clues on the same word.
+                if card_prompts.busy:
                     continue
                 try:
                     action=duet_live.decide(
@@ -927,6 +904,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         stop.set()
                         return
                     if not action:
+                        continue
+                    if card_prompts.busy:
+                        duet_live.pending=False
                         continue
                     recover_thinking=action.startswith("reset_")
                     if recover_thinking:
@@ -1151,6 +1131,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             logger.warning("GPT-Live voice session failed: %s", exc)
         finally:
             stop.set()
+            await card_prompts.close()
             for task in (ticker, watcher, duet_first_reply_task, duet_watchdog_task):
                 if task is not None:
                     task.cancel()
