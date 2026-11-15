@@ -7,6 +7,7 @@ import ru.hothat.game.api.dto.WeaponView;
 import ru.hothat.game.domain.LoadoutRules;
 import ru.hothat.game.domain.Weapon;
 import ru.hothat.game.domain.WeaponRegistry;
+import ru.hothat.game.domain.WeaponType;
 
 import java.util.List;
 
@@ -25,7 +26,12 @@ public class GetWeaponCatalogUseCase {
 
     @PreAuthorize("hasRole('USER')")
     public WeaponCatalogResponseDTO run() {
-        List<WeaponView> weapons = WeaponRegistry.all().stream().map(GetWeaponCatalogUseCase::view).toList();
+        // Retired effects remain in the legacy enum and historical match
+        // data, but no longer appear as choices in the public game catalog.
+        List<WeaponView> weapons = WeaponRegistry.all().stream()
+                .filter(w -> w.type()!=WeaponType.NEGATIVE
+                          && w.type()!=WeaponType.REPLACEMENT)
+                .map(GetWeaponCatalogUseCase::view).toList();
         return new WeaponCatalogResponseDTO(weapons, WeaponRegistry.baseArsenal(), WeaponRegistry.ammoKeys(),
                 WeaponRegistry.COOLDOWN_MS, LoadoutRules.SIZE);
     }
