@@ -176,6 +176,29 @@ class AiVoiceDispatchSchedulerTest {
     }
 
     @Test
+    void offTurnSmallTalkEndsAtBeginningOfAnotherTeamsTurnIntro() {
+        enable();
+        Room room=activeRoom();
+        AiVoiceSession oldChat=AiVoiceSession.builder()
+                .sessionId("ai_old_off_turn_chat")
+                .status("running").mode("smalltalk")
+                .roomId(ROOM_ID).gameNumber(1)
+                .teamId("other-team")
+                .botUid("ai-gpt-live-bbbbbbbbbbbbbbbbbb")
+                .speakerUid(HUMAN)
+                .livekitDispatchId("smalltalk-dispatch").build();
+        when(usage.activeSessions()).thenReturn(List.of(oldChat));
+        when(rooms.getById(ROOM_ID)).thenReturn(Optional.of(room));
+        when(rooms.getByPhase("turnIntro",100)).thenReturn(List.of());
+        when(rooms.getByPhase("active",100)).thenReturn(List.of());
+
+        scheduler.reconcile();
+
+        verify(livekit).deleteAiDispatch(ROOM_ID,"smalltalk-dispatch");
+        verify(usage).beginStopping("ai_old_off_turn_chat");
+    }
+
+    @Test
     void neverStartsPaidInferenceWhenDispatchNotEnabled() {
         ReflectionTestUtils.setField(scheduler,"featureEnabled",true);
         ReflectionTestUtils.setField(scheduler,"dispatchEnabled",false);

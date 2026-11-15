@@ -57,11 +57,10 @@ public class AiVoiceSmallTalkService {
 
     public Map<String,Object> start(HotHatUser owner,String roomId,String botUid) {
         Room room=requireAccess(owner,roomId,botUid);
-        String aiTeam=rooms.getPlayer(roomId,botUid).map(RoomPlayer::getTeamId).orElse("");
-        // The normal game dispatcher already talks on the AI team's turn.
-        if(List.of("turnIntro","active","appeal").contains(room.getPhase())
-                && aiTeam.equals(room.getCurrentTeamId()))
-            throw ApiException.of("AI_SMALLTALK_NOT_NEEDED_ACTIVE_TEAM",409);
+        // Never play an off-turn AI's smalltalk during another team's game.
+        // This also prevents Bubnil's male voice overlapping Rublisha's turn.
+        if(List.of("turnIntro","active","appeal").contains(room.getPhase()))
+            throw ApiException.of("AI_SMALLTALK_BLOCKED_DURING_MATCH",409);
         if(!featureEnabled || !dispatchEnabled || workerSecret==null || workerSecret.length()<32)
             throw ApiException.of("AI_VOICE_NOT_READY",503);
         List<AiVoiceSession> pending=usage.activeSessions();
