@@ -519,7 +519,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         # No phrases/secrets in production logs. See both human
                         # and AI+AI results when a player reports false "Верно".
                         logger.info("Peer voice score: mode=%s bot=%s result=%s",
-                                    "duet" if is_duo else "solo",bot_uid[-6:],
+                                    "duet",bot_uid[-6:],
                                     "MATCH" if result.get("matched")
                                     else str(result.get("reason") or "NO_MATCH")[:32])
                     if is_duo:
@@ -616,7 +616,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             # source than the explainer's peer-input transcript alone.
             # No text is logged or stored; backend checks BOTH the
             # authenticated GUESSER seat and the current secret word.
-            if mode != "game" or scripted_partner:
+            if mode != "game" or scripted_partner or not is_duo:
+                # In human+AI, only the HUMAN explainer presses Угадали.
+                # The AI merely speaks guesses and cannot auto-score.
                 return
             item = getattr(event, "item", None)
             if (getattr(item, "role", "") != "assistant"
@@ -658,7 +660,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 logger.debug("Duet self-voice guess was not scored: %s",
                              type(exc).__name__)
 
-        if mode == "game" and not scripted_partner:
+        if mode == "game" and is_duo and not scripted_partner:
             session.on("conversation_item_added",
                        lambda event: asyncio.create_task(on_guesser_own_voice(event)))
 
@@ -782,8 +784,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                "НЕМЕДЛЕННО перебей объясняющего одним "
                                "словом. Не проси менять роли."
                                if is_duo else
-                               "Слушай напарника и произноси догадки, но не говори "
-                               "что сервер засчитал очко без подтверждения.")
+                               "Слушай ТОЛЬКО своего напарника и называй "
+                               "догадки голосом. Только ЧЕЛОВЕК-ОБЪЯСНЯЮЩИЙ "
+                               "нажимает «Угадали» и подтверждает ответ. "
+                               "Ты НЕ нажимаешь «Угадали» и НЕ пользуешься "
+                               "инструментами зачёта вместо человека.")
                         )
                     elif role == "unselected":
                         agent.duplex_session.append_instructions(
@@ -913,20 +918,28 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     # accidentally bind a spectator or the room host as the
                     # imaginary bot's microphone.
                     audio_input=False,
+                    audio_output=True,
                     text_input=False,
                     close_on_disconnect=False,
                     delete_room_on_close=False,
                 ) if scripted_partner else room_io.RoomOptions(
+                    # Only this team's AI teammate is a valid input.
                     participant_identity=human_uid,
-                    # LiveKit excludes AGENT sound from its DEFAULT kinds.
-                    # For AI+AI pair, explicitly subscribe to AGENT input.
                     participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_AGENT],
+                    audio_input=True,
+                    audio_output=True,
+                    text_input=False,
                     close_on_disconnect=True,
                     delete_room_on_close=False,
                 ) if is_duo else room_io.RoomOptions(
                     # Preserve the existing DEFAULT participant kind support
                     # for ordinary human teammates, including guests/SIP.
+                    # The agent hears only its human teammate's identity,
+                    # while its speech is an audible track for the WHOLE room.
                     participant_identity=human_uid,
+                    audio_input=True,
+                    audio_output=True,
+                    text_input=False,
                     close_on_disconnect=True,
                     delete_room_on_close=False,
                 )),

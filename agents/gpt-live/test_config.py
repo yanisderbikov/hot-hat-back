@@ -188,8 +188,8 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('"min_interruption_duration": 0.32',source)
         self.assertIn("async def stop_stale_explanation()",source)
         self.assertIn("await stop_stale_explanation()",source)
-        self.assertIn('if mode == "game" and not scripted_partner:',source)
-        self.assertIn('if mode != "game" or scripted_partner:',source)
+        self.assertIn('if mode == "game" and is_duo and not scripted_partner:',source)
+        self.assertIn('if mode != "game" or scripted_partner or not is_duo:',source)
         self.assertIn("session.generate_reply(instructions=(",source)
         self.assertIn('await asyncio.sleep(0.24 if is_duo',source)
         self.assertIn("ПЕРЕБИВ",DUET_VOICE_INSTRUCTIONS)
@@ -263,6 +263,20 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("await session.aclose()", source)
         self.assertNotIn("delete_room()", source)
 
+
+    def test_human_only_confirmation_and_one_partner_in_public_voice_room(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        from config import VOICE_INSTRUCTIONS
+        ast.parse(source)
+        self.assertIn('if mode == "game" and is_duo and not scripted_partner:',source)
+        self.assertIn('if mode != "game" or scripted_partner or not is_duo:',source)
+        self.assertIn("Только ЧЕЛОВЕК-ОБЪЯСНЯЮЩИЙ",source)
+        self.assertIn("ТОЛЬКО человек нажимает",VOICE_INSTRUCTIONS)
+        self.assertEqual(source.count("participant_identity=human_uid,"),2)
+        self.assertEqual(source.count("audio_output=True,"),3)
+        self.assertEqual(source.count("audio_input=True,"),2)
+        self.assertEqual(source.count("text_input=False,"),3)
+        self.assertIn("participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_AGENT]",source)
 
 if __name__ == "__main__":
     unittest.main()
