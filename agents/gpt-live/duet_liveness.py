@@ -21,6 +21,9 @@ class DuetLiveness:
     # Only TWO authentic AI participants use the shorter idle delays.
     # Human+AI keeps the previously tested 5.5/7.5-second logic.
     fast_duet: bool = False
+    # Opt-in fast cadence for LIVE 60-second match. Historical default
+    # remains unchanged for replay compatibility and standalone tests.
+    speed_round: bool = False
 
     def mark_spoke(self, now: float) -> None:
         self.last_voice = now
@@ -33,8 +36,10 @@ class DuetLiveness:
         self.prompts_without_voice = 0
 
     def card_changed(self, turn_id: str, role: str, word: str | None,
-                     now: float) -> None:
+                     now: float, revision: int = 0) -> None:
         key = (turn_id, role, word if role == "explainer" else None)
+        if revision and role == "explainer":
+            key += (revision,)
         if key != self.card_key:
             self.card_key = key
             self.last_activity = now
@@ -61,10 +66,22 @@ class DuetLiveness:
         # After hearing a wrong guess the explainer should recover faster.
         # The other agent's actual "speaking" state still blocks interruption.
         # Keep the longer initial delay so startup is not double-prompted.
-        if self.fast_duet:
-            # A 60-second bot duet cannot afford 8-second gaps. Still never
-            # generate while either agent actually speaks. All intermediate
-            # ASR fragments are handled naturally, not with forced prompts.
+        if self.speed_round:
+            if self.fast_duet:
+                # Genuine AI+AI must keep the ball moving: quick follow-up
+                # after a wrong guess without VAD-triggered interruption.
+                delay = (1.2 if self.last_peer_voice > self.last_voice else 2.3
+                         ) if role == "explainer" else 2.6
+                thinking_delay = 5.0
+                cooldown = 2.8
+            else:
+                # Human+AI: the explainer owns the initiative. Do not require
+                # a human to ask for a hint every new word or after a guess.
+                delay = (2.0 if self.last_peer_voice > self.last_voice else 3.2
+                         ) if role == "explainer" else 5.0
+                thinking_delay = 6.0
+                cooldown = 3.0
+        elif self.fast_duet:
             delay = (2.6 if self.last_peer_voice > self.last_voice else 3.6
                      ) if role == "explainer" else 4.2
             thinking_delay = 8.0

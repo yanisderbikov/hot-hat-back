@@ -442,6 +442,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             time.monotonic(),
             max_prompts_without_voice=3 if is_duo else 8,
             fast_duet=is_duo,
+            speed_round=True,
         )
         duet_snapshot = {}
         last_agent_spoke = 0.0
@@ -726,6 +727,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         str(state.get("turnId") or ""), role,
                         state.get("currentWord") if role=="explainer" else None,
                         time.monotonic(),
+                        revision=int(state.get("cardRevision") or 0),
                     )
                 history = state.get("recentWords") or []
                 if isinstance(history, list):

@@ -167,3 +167,36 @@ class DuetLivenessTests(unittest.TestCase):
 
 if __name__=="__main__":
     unittest.main()
+
+
+class LiveSixtySecondCadenceTests(unittest.TestCase):
+    def test_human_ai_explainer_resumes_after_short_silence(self):
+        live=DuetLiveness(last_activity=0, speed_round=True)
+        live.card_changed("turn-1","explainer","Планета",0,revision=1)
+        self.assertIsNone(next_action(live,2.9,word="Планета"))
+        self.assertEqual(next_action(live,3.3,word="Планета"),"give_hint")
+        live.pending=False
+        live.mark_spoke(4.0)
+        live.mark_heard(5.0)
+        self.assertIsNone(next_action(live,6.9,word="Планета"))
+        self.assertEqual(next_action(live,7.1,word="Планета"),"give_hint")
+
+    def test_two_ai_resume_with_minimal_gap_after_wrong_guess(self):
+        live=DuetLiveness(last_activity=0,speed_round=True,fast_duet=True)
+        live.card_changed("turn-1","explainer","Волна",0,revision=1)
+        self.assertEqual(next_action(live,2.4,word="Волна"),"give_hint")
+        live.pending=False
+        live.mark_spoke(3.0)
+        live.mark_heard(4.0)
+        self.assertIsNone(next_action(live,5.1,word="Волна",
+                                      user_state="speaking"))
+        self.assertEqual(next_action(live,5.3,word="Волна"),"give_hint")
+
+    def test_repeated_word_spelling_still_resets_liveness_revision(self):
+        live=DuetLiveness(last_activity=0,speed_round=True)
+        live.card_changed("turn-1","explainer","Магнит",5,revision=2)
+        live.pending=True
+        live.card_changed("turn-1","explainer","Магнит",6,revision=3)
+        self.assertEqual(live.prompts_without_voice,0)
+        self.assertFalse(live.pending)
+        self.assertEqual(live.card_key,("turn-1","explainer","Магнит",3))
