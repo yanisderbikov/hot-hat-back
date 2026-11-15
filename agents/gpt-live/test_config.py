@@ -174,18 +174,18 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:',source)
         self.assertNotIn("Ответ НЕ засчитан сервером.",source)
         self.assertNotIn("СЕРВЕР НЕ ЗАСЧИТАЛ последнюю голосовую догадку.",source)
-        self.assertIn("СЕРВЕР НЕ ЗАСЧИТАЛ эту догадку.",source)
+        self.assertNotIn("СЕРВЕР НЕ ЗАСЧИТАЛ эту догадку.",source)
         self.assertIn("СЕРВЕР ЗАСЧИТАЛ твою догадку.",source)
         self.assertIn("pending_duet_ack = None",source)
-        self.assertIn('if result.get("reason") == "FORM_NOT_EXACT"',source)
-        self.assertIn("ТУ ЖЕ карточку",source)
+        self.assertIn('result.get("reason") == "FORM_NOT_EXACT"',source)
+        self.assertIn("A non-exact peer-ASR result can arrive AFTER",source)
 
     def test_fast_voice_duet_and_human_ai_guesser_regressions(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         from config import DUET_BACKEND_INSTRUCTIONS, DUET_VOICE_INSTRUCTIONS
         ast.parse(source)
         self.assertIn('"allow_interruptions": True',source)
-        self.assertIn('"min_interruption_duration": 0.15',source)
+        self.assertIn('"min_interruption_duration": 0.32',source)
         self.assertIn("async def stop_stale_explanation()",source)
         self.assertIn("await stop_stale_explanation()",source)
         self.assertIn('if mode == "game" and not scripted_partner:',source)
@@ -215,9 +215,30 @@ class SettingsTests(unittest.TestCase):
         rejection=source[beginning:ending]
         self.assertNotIn('Ответ НЕ засчитан сервером',rejection)
         self.assertNotIn('СЕРВЕР НЕ ЗАСЧИТАЛ',rejection)
-        self.assertIn('Продолжай объяснять то же самое слово',rejection)
-        self.assertIn('await stop_stale_explanation()',rejection)
+        self.assertNotIn('session.generate_reply(',rejection)
+        self.assertNotIn('await stop_stale_explanation()',rejection)
+        self.assertIn('the full-duplex explainer hears the answer naturally',rejection)
         self.assertIn('and is_duo:',rejection.splitlines()[0])
+
+    def test_two_ai_never_interrupts_on_vad_or_rejected_asr_fragment(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        start=source.index("def duet_partner_speech(event):")
+        end=source.index('session.on("agent_state_changed"',start)
+        on_speech=source[start:end]
+        self.assertNotIn("stop_stale_explanation()",on_speech)
+        self.assertIn("duet_live.mark_heard",on_speech)
+        start=source.index('elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:')
+        end=source.index('            except Exception as exc:',start)
+        on_mismatch=source[start:end]
+        self.assertNotIn("stop_stale_explanation()",on_mismatch)
+        self.assertNotIn("generate_reply(",on_mismatch)
+        self.assertIn("duet_wrong_guesses += 1",on_mismatch)
+        self.assertIn("request_duet_reply(instructions: str)",source)
+        self.assertIn('peer_state == "speaking"',source)
+        self.assertIn("now - last_duet_reply_requested < 1.25",source)
+        self.assertIn("handle=request_duet_reply(phrase)",source)
+        self.assertIn("await asyncio.wait_for(handle,timeout=9)",source)
+        self.assertIn("fast_duet=is_duo",source)
 
     def test_scripted_partner_is_test_only_output_speech_without_human_microphone(self):
         source = Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
