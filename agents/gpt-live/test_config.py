@@ -48,7 +48,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("last_skipped_input_version", source)
         self.assertIn("skip_once", source)
         self.assertIn('if result.get("matched"):', source)
-        self.assertIn("Скажи естественно и коротко", source)
+        self.assertIn("await stop_stale_explanation()", source)
         self.assertIn("suppress_next_word_commentary", source)
         client = Path(__file__).with_name("game_client.py").read_text(encoding="utf-8")
         self.assertIn('return {**result, "actionId": action_id}', client)
@@ -119,7 +119,7 @@ class SettingsTests(unittest.TestCase):
     def test_duet_confirms_once_without_replaying_history_or_switching_roles(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
-        self.assertIn('if result.get("skipped") and not is_duo:', source)
+        self.assertIn('if result.get("skipped"):', source)
         self.assertIn("agent.suppress_next_word_commentary = False", source)
         self.assertIn("agent.pending_voice_confirmation", source)
         self.assertIn("_voice_confirmation(", source)
@@ -322,4 +322,4 @@ class TurnStateRegressions(unittest.TestCase):
         self.assertIn('previous[3] != key[3]',source)
         self.assertIn('if changed_active_card or beginning_explanation:',source)
         self.assertIn('await stop_stale_explanation()',source)
-        self.assertIn('agent.suppress_next_word_commentary = is_duo',source)
+        self.assertIn('agent.suppress_next_word_commentary = False',source)
