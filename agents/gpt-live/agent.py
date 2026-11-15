@@ -386,9 +386,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         # Preserve low latency only for the explicitly two-AI duet.
         duet_turn_settings = ({
             "allow_interruptions": True,
-            "min_interruption_duration": 0.15,
-            "min_endpointing_delay": 0.18,
-            "max_endpointing_delay": 0.8,
+            # Wait long enough to distinguish an actual spoken word from
+            # mic/noise/VAD fragments, but still allow genuine barge-in.
+            "min_interruption_duration": 0.32,
+            "min_endpointing_delay": 0.35,
+            "max_endpointing_delay": 1.1,
         } if is_duo else {})
         session = AgentSession(
             **duet_turn_settings,
@@ -416,12 +418,39 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         duet_live = DuetLiveness(
             time.monotonic(),
             max_prompts_without_voice=3 if is_duo else 8,
+            fast_duet=is_duo,
         )
         duet_snapshot = {}
         last_agent_spoke = 0.0
         duet_wrong_guesses = 0
         duet_guess_verification_pending = False
         last_immediate_hint = 0.0
+        last_duet_reply_requested = 0.0
+
+        def request_duet_reply(instructions: str) -> bool:
+            """One explicit reply only when the duplex conversation is idle.
+
+            Generating during partner speech or an existing response caused
+            repeated 'model did not start speaking' refusals. Always retain
+            the prompt as private instructions for the natural reply.
+            Human+AI must keep its existing response path untouched.
+            """
+            nonlocal last_duet_reply_requested
+            if not is_duo:
+                session.generate_reply(instructions=instructions)
+                return True
+            now = time.monotonic()
+            agent_state = str(getattr(session, "agent_state", ""))
+            peer_state = str(getattr(session, "user_state", ""))
+            if (peer_state == "speaking"
+                    or agent_state in ("speaking", "thinking", "initializing")
+                    or now - last_duet_reply_requested < 1.25):
+                agent.duplex_session.append_instructions(instructions)
+                logger.debug("Duet reply deferred while speech is in flight: bot=%s",bot_uid[-6:])
+                return False
+            last_duet_reply_requested = now
+            session.generate_reply(instructions=instructions)
+            return True
 
         async def stop_stale_explanation():
             # A model can continue generating a stale hint after a correct
@@ -444,11 +473,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         def duet_partner_speech(event):
             if watch_game_speech and str(getattr(event, "new_state", "")) == "speaking":
                 duet_live.mark_heard(time.monotonic())
-                # A guesser is allowed to interrupt the explainer mid-hint.
-                # Yield the audio floor immediately; ASR and the server will
-                # independently decide if this is the correct word.
-                if is_duo and latest == "explainer":
-                    asyncio.create_task(stop_stale_explanation())
+                # LiveKit DuplexModel handles natural barge-in itself. NEVER
+                # force-interrupt at VAD 'speaking' onset: this fires before
+                # a complete word exists and repeatedly cut OFF BOTH bots.
+                # Only a verified server card transition may forcibly stop
+                # the old explanation.
 
         session.on("agent_state_changed", duet_agent_speech)
         session.on("user_state_changed", duet_partner_speech)
@@ -543,7 +572,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             agent.suppress_next_word_commentary = False
                         if is_duo:
                             await stop_stale_explanation()
-                        session.generate_reply(instructions=(
+                        reply_instructions=(
                             "Напарник действительно угадал слово. "
                             "Ты ОБЪЯСНЯЮЩИЙ. Скажи естественно и коротко: "
                             + confirmed
@@ -552,7 +581,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                "Никакой другой болтовни и счёта." if next_word
                                else " И ничего больше. Без поздравлений, "
                                "обсуждения очков или повторения слова.")
-                        ))
+                        )
+                        request_duet_reply(reply_instructions)
                     elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:
                         # For TWO AI workers we still need active server-led
                         # turn taking.  In HUMAN+AI play this branch must be
@@ -566,15 +596,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 "поменяй категорию, действие или сравнение. "
                                 "Никогда не обсуждай процесс проверки ответа."
                             )
-                        if time.monotonic() - last_immediate_hint >= 0.75:
-                            last_immediate_hint = time.monotonic()
-                            await stop_stale_explanation()
-                            session.generate_reply(instructions=(
-                                "Продолжай объяснять то же самое слово, "
-                                "новым образным способом и очень коротко. "
-                                "Никаких фраз о проверке ответов, системе "
-                                "или очках. Не выдавай секретное слово."
-                            ))
+                        # A non-exact peer-ASR result can arrive AFTER
+                        # the guesser's OWN speech already scored and
+                        # advanced the card. Do not interrupt or inject
+                        # a rival response for a possibly stale fragment:
+                        # the full-duplex explainer hears the answer naturally,
+                        # and the bounded idle watchdog handles actual silence.
             except Exception as exc:
                 logger.debug("No game action for transcribed utterance: %s", exc)
             finally:
@@ -620,12 +647,14 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     )
                     logger.info("Duet self-voice guess scored: bot=%s",
                                 bot_uid[-6:])
-                elif result.get("reason") == "FORM_NOT_EXACT":
+                elif result.get("reason") == "FORM_NOT_EXACT" and not is_duo:
+                    # Keep the original human+AI behaviour. The two-AI
+                    # agent often receives its own outdated transcript
+                    # AFTER the peer has moved to another secret card.
+                    # Do not inject an obsolete "wrong answer" instruction.
                     agent.duplex_session.append_instructions(
-                        "СЕРВЕР НЕ ЗАСЧИТАЛ эту догадку. "
-                        "Объясняющий всё ещё показывает ТУ ЖЕ карточку. "
-                        "Послушай новую подсказку и предложи другой "
-                        "конкретный вариант. Не говори, что уже угадал."
+                        "Эта догадка не изменила карточку. "
+                        "Слушай человека дальше и предложи другой вариант."
                     )
             except Exception as exc:
                 logger.debug("Duet self-voice guess was not scored: %s",
@@ -723,7 +752,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             # NOT reliably start a new spoken answer while
                             # the duplex model is working. A real score gets
                             # an explicit response with the NEW secret word.
-                            session.generate_reply(instructions=(
+                            reply_instruction=(
                                 ("Сервер засчитал голосовой ответ. "
                                  "Только ты, ОБЪЯСНЯЮЩИЙ, коротко скажи "
                                  + pending_duet_ack
@@ -738,7 +767,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                  if is_duo else
                                  "Новое слово: немедленно объясни коротко, "
                                  "не произнося секретное слово.")
-                            ))
+                            )
+                            request_duet_reply(reply_instruction)
                             pending_duet_ack = None
                     elif role == "smalltalk":
                         agent.duplex_session.append_instructions(
@@ -778,7 +808,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             # Only uses trusted turn state and LiveKit speech events.
             # Never sends private card text to guesser or logs transcripts.
             while not stop.is_set():
-                await asyncio.sleep(1.35)
+                await asyncio.sleep(0.75 if is_duo else 1.35)
                 if not duet_snapshot:
                     continue
                 # In ordinary human+AI games, the model only needs to be
@@ -819,6 +849,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                                    timeout=2)
                         except (RuntimeError,asyncio.TimeoutError):
                             pass
+                    # A new card may have just requested a response; do
+                    # not race a second generate_reply with that request.
+                    if is_duo and time.monotonic()-last_duet_reply_requested < 1.75:
+                        duet_live.pending=False
+                        continue
                     base_action=action.removeprefix("reset_")
                     phrase={
                         "give_hint": (
@@ -842,12 +877,17 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 "duet" if is_duo else "solo",bot_uid[-6:],
                                 duet_snapshot.get("role"),action,
                                 duet_live.prompts_without_voice)
-                    handle=session.generate_reply(instructions=phrase)
+                    if is_duo and not request_duet_reply(phrase):
+                        duet_live.pending=False
+                        continue
+                    handle=(session.generate_reply(instructions=phrase)
+                            if not is_duo else None)
                     try:
-                        await asyncio.wait_for(handle,timeout=9)
-                        if handle.exception() is not None:
-                            logger.warning("Duet recovery speech refused: bot=%s",
-                                           bot_uid[-6:])
+                        if handle is not None:
+                            await asyncio.wait_for(handle,timeout=9)
+                            if handle.exception() is not None:
+                                logger.warning("Duet recovery speech refused: bot=%s",
+                                               bot_uid[-6:])
                     except asyncio.TimeoutError:
                         logger.warning("Duet recovery response timed out: bot=%s",
                                        bot_uid[-6:])
