@@ -427,7 +427,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         last_immediate_hint = 0.0
         last_duet_reply_requested = 0.0
 
-        def request_duet_reply(instructions: str) -> bool:
+        def request_duet_reply(instructions: str):
             """One explicit reply only when the duplex conversation is idle.
 
             Generating during partner speech or an existing response caused
@@ -437,8 +437,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             """
             nonlocal last_duet_reply_requested
             if not is_duo:
-                session.generate_reply(instructions=instructions)
-                return True
+                return session.generate_reply(instructions=instructions)
             now = time.monotonic()
             agent_state = str(getattr(session, "agent_state", ""))
             peer_state = str(getattr(session, "user_state", ""))
@@ -447,10 +446,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     or now - last_duet_reply_requested < 1.25):
                 agent.duplex_session.append_instructions(instructions)
                 logger.debug("Duet reply deferred while speech is in flight: bot=%s",bot_uid[-6:])
-                return False
+                return None
             last_duet_reply_requested = now
-            session.generate_reply(instructions=instructions)
-            return True
+            return session.generate_reply(instructions=instructions)
 
         async def stop_stale_explanation():
             # A model can continue generating a stale hint after a correct
@@ -877,17 +875,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 "duet" if is_duo else "solo",bot_uid[-6:],
                                 duet_snapshot.get("role"),action,
                                 duet_live.prompts_without_voice)
-                    if is_duo and not request_duet_reply(phrase):
+                    handle=request_duet_reply(phrase)
+                    if handle is None:
                         duet_live.pending=False
                         continue
-                    handle=(session.generate_reply(instructions=phrase)
-                            if not is_duo else None)
                     try:
-                        if handle is not None:
-                            await asyncio.wait_for(handle,timeout=9)
-                            if handle.exception() is not None:
-                                logger.warning("Duet recovery speech refused: bot=%s",
-                                               bot_uid[-6:])
+                        await asyncio.wait_for(handle,timeout=9)
+                        if handle.exception() is not None:
+                            logger.warning("Duet recovery speech refused: bot=%s",
+                                           bot_uid[-6:])
                     except asyncio.TimeoutError:
                         logger.warning("Duet recovery response timed out: bot=%s",
                                        bot_uid[-6:])
