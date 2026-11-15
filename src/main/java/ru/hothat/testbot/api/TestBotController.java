@@ -25,8 +25,6 @@ import ru.hothat.config.HotHatUser;
 import ru.hothat.testbot.api.dto.FireOwnerFartRequestDTO;
 import ru.hothat.testbot.api.dto.FiredOwnerFartResponseDTO;
 import ru.hothat.testbot.api.dto.IssueTestBotVideoTokenRequestDTO;
-import ru.hothat.testbot.api.dto.SynthesizeSpeechRequestDTO;
-import ru.hothat.testbot.api.dto.SynthesizedSpeechResponseDTO;
 import ru.hothat.testbot.api.dto.TestBotSquadResponseDTO;
 import ru.hothat.testbot.api.dto.ReleasedTestBotResponseDTO;
 import ru.hothat.testbot.api.dto.TestBotTurnResponseDTO;
@@ -37,7 +35,6 @@ import ru.hothat.testbot.usecase.IssueTestBotVideoTokenUseCase;
 import ru.hothat.testbot.usecase.SetUpTestBotsUseCase;
 import ru.hothat.testbot.usecase.ReleaseTestBotSeatUseCase;
 import ru.hothat.testbot.usecase.StopTestBotsUseCase;
-import ru.hothat.testbot.usecase.SynthesizeSpeechUseCase;
 
 /**
  * Отряд тестовых ботов комнаты.
@@ -49,9 +46,8 @@ import ru.hothat.testbot.usecase.SynthesizeSpeechUseCase;
  *
  * <p>Сюда же собраны два действия, живших вне {@code /api/test-bots} и потому
  * защищённых одной лишь ролью {@code ADMIN}: видеотокен бота
- * ({@code POST /api/token} с чужим {@code participant_identity}) и озвучка
- * «облака мыслей» ({@code POST /api/tts}). Оба достижимы только в своей
- * тестовой комнате — раньше это знал лишь интерфейс, теперь знает сервер.
+ * ({@code POST /api/token} с чужим {@code participant_identity}).
+ * Озвучка удалённого эффекта «Облако мысли» больше не доступна через API.
  *
  * <p>Уровень прав у класса один: администратор в своей тестовой комнате.
  * Роль стоит на каждом use-case, владение комнатой — предусловие сценария.
@@ -72,7 +68,6 @@ public class TestBotController {
     private final AdvanceTestBotTurnUseCase advanceTurn;
     private final FireOwnerFartUseCase fireOwnerFart;
     private final IssueTestBotVideoTokenUseCase issueVideoToken;
-    private final SynthesizeSpeechUseCase synthesizeSpeech;
 
     @Operation(summary = "Поднять отряд ботов",
             description = "Рассаживает ботов по командам и готовит комнату к прогону. "
@@ -163,23 +158,5 @@ public class TestBotController {
         return ResponseEntity.status(HttpStatus.CREATED).body(issueVideoToken.run(admin, roomId, request));
     }
 
-    @Operation(summary = "Озвучить реплику бота",
-            description = "Синтезирует короткую фразу «облака мыслей» и отдаёт звук строкой base64. "
-                    + "Отвечает 200, а не 201: на сервере ничего не появляется — одинаковые реплики "
-                    + "отдаются из кеша, и адреса у результата нет.")
-    @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Реплика озвучена"),
-            @ApiResponse(responseCode = "403", description = "TEST_ROOM_ONLY: это не ваша тестовая комната; "
-                    + "FEATURE_DISABLED: тест-режим выключен", content = @Content),
-            @ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND: комнаты нет", content = @Content),
-            @ApiResponse(responseCode = "502", description = "TTS_UNAVAILABLE или TTS_AUDIO_INVALID: "
-                    + "синтезатор речи не ответил или прислал негодный звук", content = @Content)})
-    @PostMapping("/speech-syntheses")
-    public ResponseEntity<SynthesizedSpeechResponseDTO> synthesizeSpeech(
-            @AuthenticationPrincipal HotHatUser admin,
-            @Parameter(description = "Тестовая комната, где живёт отряд", example = "hat-0f3a9c1d7b2e5480")
-            @PathVariable @RoomId String roomId,
-            @Valid @RequestBody SynthesizeSpeechRequestDTO request) {
-        return ResponseEntity.ok(synthesizeSpeech.run(admin, roomId, request));
-    }
+
 }
