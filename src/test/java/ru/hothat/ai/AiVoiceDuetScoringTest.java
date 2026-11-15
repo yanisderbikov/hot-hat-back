@@ -27,7 +27,7 @@ class AiVoiceDuetScoringTest {
     private static final String GUESSER="ai-gpt-live-bbbbbbbbbbbbbbbbbb";
 
     private record Fixture(AiVoiceGameService service, MatchEngine engine,
-                           MatchSession transaction, MatchState game) {}
+                           MatchSession transaction, MatchState game, GetterRoom rooms) {}
     private Fixture make(String botUid) {
         MatchStore matches=mock(MatchStore.class);
         AiVoiceUsageService usage=mock(AiVoiceUsageService.class);
@@ -60,7 +60,7 @@ class AiVoiceDuetScoringTest {
             new WordResolved(WordResolved.Outcome.COUNTED,
                              "Компас","Луна",1,6,1,false,0));
         return new Fixture(new AiVoiceGameService(matches,usage,engine,rooms,memory),
-                           engine,txn,game);
+                           engine,txn,game,rooms);
     }
 
     @Test void genuineAiGuesserSpeechScoresOneWordAndTeamPoint() {
@@ -104,6 +104,9 @@ class AiVoiceDuetScoringTest {
         f.game().setExplainerUid(human);
         f.game().setRosters(Map.of(TEAM,List.of(human,GUESSER)));
         // The test must model an actual human seated in this same team.
+        when(f.rooms().getPlayer(ROOM,human)).thenReturn(Optional.of(
+                RoomPlayer.builder().roomId(ROOM).teamId(TEAM)
+                    .uid(human).name("Человек").isTestBot(false).build()));
         // The voice endpoint still refuses auto-scoring for this human+AI pair.
         // Even the right AI spoken answer must NOT click Угадали for the human.
         for(String guess:List.of("Компас?","Это компас!","Угадали!")) {
