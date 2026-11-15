@@ -25,6 +25,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.hothat.common.validation.RoomId;
 import ru.hothat.config.HotHatUser;
+import ru.hothat.config.ApiException;
+import ru.hothat.game.domain.WeaponType;
 import ru.hothat.game.api.dto.OrderReplacementClipRequestDTO;
 import ru.hothat.game.api.dto.ReplacementClipResponseDTO;
 import ru.hothat.game.api.dto.ReportClipResultRequestDTO;
@@ -84,6 +86,12 @@ public class SabotageController {
             @AuthenticationPrincipal HotHatUser user,
             @Parameter(description = "Комната партии") @PathVariable @RoomId String roomId,
             @Valid @RequestBody UseWeaponRequestDTO request) {
+        // SCRUM-54: retired legacy effects are no longer playable in NEW
+        // gameplay, including a cached old browser. Keep enum decoding and
+        // legacy clip acknowledgement routes for already-recorded matches.
+        if (request.type() == WeaponType.NEGATIVE || request.type() == WeaponType.REPLACEMENT) {
+            throw ApiException.of("WEAPON_REMOVED",409);
+        }
         return ResponseEntity.status(HttpStatus.CREATED).body(useWeapon.run(user, roomId, request));
     }
 
@@ -102,7 +110,10 @@ public class SabotageController {
             @AuthenticationPrincipal HotHatUser user,
             @Parameter(description = "Комната партии") @PathVariable @RoomId String roomId,
             @Valid @RequestBody OrderReplacementClipRequestDTO request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(orderClip.run(user, roomId, request));
+        // Legacy cassette capture is retired. Do not create new clips, but
+        // allow the old /result and /playback endpoints to complete existing
+        // recordings without losing historical evidence.
+        throw ApiException.of("REPLACEMENT_RETIRED",409);
     }
 
     @Operation(summary = "Сообщить итог съёмки",
