@@ -84,6 +84,45 @@ class DuetLivenessTests(unittest.TestCase):
         self.assertEqual(next_action(live,28.2,role="guesser",word=None,
                                      agent_state="thinking"),"reset_make_guess")
 
+    def test_fast_duet_recovers_quickly_but_only_when_both_bots_are_idle(self):
+        duo=DuetLiveness(last_activity=0,fast_duet=True)
+        duo.card_changed("turn-1","explainer","Парус",0)
+        self.assertIsNone(next_action(duo,3.4,word="Парус"))
+        self.assertIsNone(next_action(duo,4.0,word="Парус",
+                                      user_state="speaking"))
+        self.assertEqual(next_action(duo,4.0,word="Парус"),"give_hint")
+        duo.pending=False
+        duo.mark_spoke(5.0)
+        duo.mark_heard(6.0)
+        self.assertIsNone(next_action(duo,8.0,word="Парус"))
+        self.assertEqual(next_action(duo,8.7,word="Парус"),"give_hint")
+
+        guess=DuetLiveness(last_activity=0,fast_duet=True)
+        guess.card_changed("turn-1","guesser",None,0)
+        self.assertIsNone(next_action(guess,4.0,role="guesser",word=None))
+        self.assertEqual(next_action(guess,4.3,role="guesser",
+                                     word=None),"request_hint")
+        guess.pending=False
+        guess.mark_heard(5.0)
+        self.assertIsNone(next_action(guess,8.0,role="guesser",word=None))
+        self.assertEqual(next_action(guess,9.5,role="guesser",
+                                     word=None),"make_guess")
+
+        ordinary=DuetLiveness(last_activity=0)
+        ordinary.card_changed("turn-1","explainer","Парус",0)
+        self.assertIsNone(next_action(ordinary,4.0,word="Парус"))
+        self.assertEqual(next_action(ordinary,5.6,word="Парус"),"give_hint")
+
+    def test_fast_duet_stuck_thinking_recovers_without_cutting_live_speech(self):
+        duo=DuetLiveness(last_activity=0,fast_duet=True)
+        duo.card_changed("turn-1","explainer","Корабль",0)
+        self.assertIsNone(next_action(duo,7.9,agent_state="thinking"))
+        self.assertEqual(next_action(duo,8.2,agent_state="thinking"),
+                         "reset_give_hint")
+        duo.pending=False
+        self.assertIsNone(next_action(duo,10,agent_state="speaking"))
+        self.assertIsNone(next_action(duo,10,user_state="speaking"))
+
     def test_liveness_stops_before_turn_ends_or_on_pause(self):
         live=DuetLiveness(last_activity=0)
         live.card_changed("turn-1","explainer","Компас",0)
