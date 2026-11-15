@@ -120,9 +120,11 @@ class SettingsTests(unittest.TestCase):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
         self.assertIn('if result.get("skipped") and not is_duo:', source)
-        self.assertIn("agent.suppress_next_word_commentary = is_duo", source)
+        self.assertIn("agent.suppress_next_word_commentary = False", source)
+        self.assertIn("agent.pending_voice_confirmation", source)
         self.assertIn("_voice_confirmation(", source)
-        self.assertIn("if next_word:", source)
+        self.assertIn("card_prompts.schedule(key, reply_instruction)",source)
+        self.assertNotIn("if next_word:",source)
         self.assertIn("duet_guess_verification_pending", source)
         # History is memory only. In particular the GUESSER never receives
         # a second voice prompt after the EXPLAINER scores a correct guess.
@@ -161,9 +163,9 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("pending_duet_ack",source)
         # A single AI explaining for a person must not be left silent after
         # the short server-confirmed "Верно!" acknowledgement.
-        self.assertIn('if not result.get("turnClosed"):',source)
-        self.assertIn('elif not result.get("turnClosed"):',source)
-        self.assertIn("И СРАЗУ объясни новую карточку",source)
+        self.assertIn("await stop_stale_explanation()",source)
+        self.assertIn("card_prompts.schedule(key, reply_instruction)",source)
+        self.assertIn("The server already advanced the card",source)
         self.assertIn('str(scored.get("actionId") or "").startswith("aig_")',source)
         self.assertIn("async def duet_guesser_spoke(",client)
         self.assertIn('"duet-guesser-spoke"',client)
@@ -177,6 +179,7 @@ class SettingsTests(unittest.TestCase):
         self.assertNotIn("СЕРВЕР НЕ ЗАСЧИТАЛ эту догадку.",source)
         self.assertIn("СЕРВЕР ЗАСЧИТАЛ твою догадку.",source)
         self.assertIn("pending_duet_ack = None",source)
+        self.assertIn("agent.pending_voice_confirmation = None",source)
         self.assertIn('result.get("reason") == "FORM_NOT_EXACT"',source)
         self.assertIn("A non-exact peer-ASR result can arrive AFTER",source)
 
@@ -204,7 +207,8 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('} if is_duo else {})',source)
         self.assertIn("**duet_turn_settings,",source)
         self.assertIn('and is_duo:',source)
-        self.assertIn('now-duet_live.last_activity<11.0:',source)
+        self.assertNotIn('now-duet_live.last_activity<11.0:',source)
+        self.assertIn('if card_prompts.busy:',source)
         self.assertIn("живо",VOICE_INSTRUCTIONS)
         self.assertIn("НИКОГДА не произноси",VOICE_INSTRUCTIONS)
         self.assertIn("разные подсказки",VOICE_INSTRUCTIONS)
