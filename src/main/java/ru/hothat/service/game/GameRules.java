@@ -57,17 +57,15 @@ public final class GameRules {
 
     /**
      * Редкие диверсии выдаются по номеру суммарно угаданного командой слова:
-     * 4-е — негатив, 6-е — апож, 8-е — подмена, 9-е — объект, 11-е — какахи,
-     * 13-е — мега текст.
+     * 6-е — апож, 9-е — объект, 11-е — какахи, 13-е — мега текст.
+     * Выдача Негатива и старой кассетной Подмены прекращена в SCRUM-54.
      */
     public static List<String> specialRewardsBetween(int previousScore, int nextScore) {
         int from = Math.max(0, previousScore);
         int to = Math.max(from, nextScore);
         List<String> events = new ArrayList<>();
         for (int wordNumber = from + 1; wordNumber <= to; wordNumber++) {
-            if (wordNumber % 4 == 0) events.add("negative");
             if (wordNumber % 6 == 0) events.add("apozh");
-            if (wordNumber % 8 == 0) events.add("replacement");
             if (wordNumber % 9 == 0) events.add("object");
             if (wordNumber % 11 == 0) events.add("poop");
             if (wordNumber % 13 == 0) events.add("megaText");
