@@ -18,6 +18,9 @@ class DuetLiveness:
     prompts_without_voice: int = 0
     pending: bool = False
     max_prompts_without_voice: int = 3
+    # Only TWO authentic AI participants use the shorter idle delays.
+    # Human+AI keeps the previously tested 5.5/7.5-second logic.
+    fast_duet: bool = False
 
     def mark_spoke(self, now: float) -> None:
         self.last_voice = now
@@ -58,14 +61,23 @@ class DuetLiveness:
         # After hearing a wrong guess the explainer should recover faster.
         # The other agent's actual "speaking" state still blocks interruption.
         # Keep the longer initial delay so startup is not double-prompted.
-        delay = (4.0 if self.last_peer_voice > self.last_voice else 5.5
-                 ) if role == "explainer" else 7.5
-        # Thinking forever without publishing speech is another deadlock:
-        # gently interrupt the stale generation after 12 seconds and ask
-        # for one short next action, never while actual audio is playing.
+        if self.fast_duet:
+            # A 60-second bot duet cannot afford 8-second gaps. Still never
+            # generate while either agent actually speaks. All intermediate
+            # ASR fragments are handled naturally, not with forced prompts.
+            delay = (2.6 if self.last_peer_voice > self.last_voice else 3.6
+                     ) if role == "explainer" else 4.2
+            thinking_delay = 8.0
+            cooldown = 5.5
+        else:
+            delay = (4.0 if self.last_peer_voice > self.last_voice else 5.5
+                     ) if role == "explainer" else 7.5
+            thinking_delay = 12.0
+            cooldown = 7.5
+        # Only reset an actually stuck thinking state, not speaking audio.
         if agent_state == "thinking":
-            delay = max(delay, 12.0)
-        if now - self.last_activity < delay or (self.last_prompt > 0 and now - self.last_prompt < 7.5):
+            delay = max(delay, thinking_delay)
+        if now - self.last_activity < delay or (self.last_prompt > 0 and now - self.last_prompt < cooldown):
             return None
         if self.prompts_without_voice >= self.max_prompts_without_voice:
             return "failed"
