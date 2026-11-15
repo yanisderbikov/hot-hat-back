@@ -592,7 +592,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         # five AI characters, never for manual-button actions.
                         # Suppress a competing next-word prompt while the
                         # explainer delivers its own acknowledgement.
-                        agent.suppress_next_word_commentary = True
+                        agent.suppress_next_word_commentary = is_duo
                         duet_wrong_guesses = 0
                         confirmed = _voice_confirmation(
                             latest, result.get("matched") is True,
@@ -626,6 +626,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             agent.suppress_next_word_commentary = False
                         if is_duo:
                             await stop_stale_explanation()
+                        else:
+                            # Let the authoritative watcher start the NEXT
+                            # word; don't queue a duplicate old-card response.
+                            await stop_stale_explanation()
+                            return
                         reply_instructions=(
                             "Напарник действительно угадал слово. "
                             "Ты ОБЪЯСНЯЮЩИЙ. Скажи естественно и коротко: "
@@ -783,7 +788,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         # on_heard after the server validates the voice guess.
                         # Manual "Угадали" clicks are intentionally silent.
                 word = state.get("currentWord") if role == "explainer" else None
-                key = (state.get("turnId"), role, word, bool(state.get("isPaused")))
+                key = (state.get("turnId"), role, word,
+                       int(state.get("cardRevision") or 0), bool(state.get("isPaused")))
                 latest = role
                 # The server may advance the card while the speech-match
                 # HTTP request is still resolving. Let its explainer finish
@@ -795,14 +801,20 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     # audio must be interrupted before this new card.
                     changed_active_card=(previous is not None
                         and previous[1] == "explainer"
-                        and previous[2] != word)
+                        and (previous[2] != word or previous[3] != key[3]))
+                    beginning_explanation=(previous is not None
+                        and previous[1] == "unselected" and role == "explainer")
                     previous = key
                     if role == "explainer" and word:
                         if is_duo:
                             duet_wrong_guesses = 0
                         # Only the explaining AI receives the word through
                         # authenticated server context. No word in room metadata.
+                        if changed_active_card or beginning_explanation:
+                            # Old audio cannot continue after a NEW server card.
+                            await stop_stale_explanation()
                         agent.duplex_session.append_instructions(
+                            "ПРЕДЫДУЩАЯ КАРТОЧКА ЗАКРЫТА. Не возвращайся к ней. "
                             "ТВОЯ РОЛЬ: ОБЪЯСНЯЮЩИЙ. Текущее секретное слово: "
                             + str(word) +
                             ". Живо объясняй его человеку, не произнося "
@@ -818,8 +830,6 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 (is_duo or scripted_partner)
                                 and word == duet_bootstrap_word
                                 and state.get("turnId") == duet_bootstrap_turn):
-                            if changed_active_card and is_duo:
-                                await stop_stale_explanation()
                             # append_commentary merely adds context; it does
                             # NOT reliably start a new spoken answer while
                             # the duplex model is working. A real score gets
@@ -837,8 +847,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                  "Дай угадывающему возможность ответить "
                                  "ДАЖЕ ЕСЛИ он перебьёт тебя. Без вступлений."
                                  if is_duo else
-                                 "Новое слово: немедленно объясни коротко, "
-                                 "не произнося секретное слово.")
+                                 "НОВАЯ подтверждённая карточка: немедленно "
+                                 "дай подсказку только к ней. Прошлую карточку "
+                                 "не повторяй, новое секретное слово не произноси.")
                             )
                             request_duet_reply(reply_instruction)
                             pending_duet_ack = None
