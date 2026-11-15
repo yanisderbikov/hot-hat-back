@@ -34,7 +34,6 @@ public class TestBotsServiceImpl implements TestBotsService {
 
     private static final List<String> FALLBACK_LOADOUT = List.of("builtin-bmw-drugoy-ne-znayu");
     private static final Map<String, Integer> BOT_ARSENAL = Map.of("meme", 4, "tomato", 7, "crocodile", 2);
-    private static final int TEST_THOUGHT_MAX_CHARS = 80;
     private static final int BOT_FART_CHANCE = 18;
     private static final int BOT_SHOT_MIN_MS = 9000;
     private static final int BOT_SHOT_MAX_MS = 20000;
@@ -47,15 +46,6 @@ public class TestBotsServiceImpl implements TestBotsService {
 
     private static final List<String> BOT_CHAT_LINES = List.of("ахаха 😄", "погнали", "ещё!", "норм 😄",
             "кто следующий?", "вот это игра", "🍅 приготовил", "почти одновременно 😄");
-    private static final List<String> BOT_THOUGHT_LINES = List.of(
-            "Я точно знаю это слово.",
-            "Главное сейчас не запутаться.",
-            "Кажется, меня специально сбивают.",
-            "Почему все так подозрительно молчат?",
-            "Сейчас угадают, я уверен.",
-            "Я вообще-то всё контролирую.",
-            "Надо было объяснять проще.",
-            "Только бы не прилетел помидор.");
     private static final List<String> WORDS = List.of("трамвай", "почтовый ящик", "первая любовь",
             "случайная встреча", "ковёр", "футбол", "солёный огурец", "путешествие", "сосед", "кофемолка",
             "пингвин", "чемодан", "гроза", "музей", "велосипед", "космонавт", "будильник", "снежный человек",
@@ -691,10 +681,10 @@ public class TestBotsServiceImpl implements TestBotsService {
 
         int specialCursor = Math.max(0, room.getTestBotSpecialEffectCursor());
         boolean fartRoll = !specialReady && Ids.randomInt(100) < BOT_FART_CHANCE;
-        boolean thoughtRoll = !specialReady && !fartRoll && Ids.randomInt(100) < 30;
+        // SCRUM-54/55: scripted bots only choose supported diversions.
         String type = specialReady
                 ? TEST_SPECIAL_EFFECT_TYPES.get(specialCursor % TEST_SPECIAL_EFFECT_TYPES.size())
-                : (fartRoll ? "fart" : thoughtRoll ? "thought_cloud" : weightedWeapon(attackerArsenal, burst));
+                : (fartRoll ? "fart" : weightedWeapon(attackerArsenal, burst));
         if (type == null) {
             return null;
         }
@@ -711,15 +701,14 @@ public class TestBotsServiceImpl implements TestBotsService {
         }
         String attackerId = Json.str(attacker.get("id"));
         boolean isSpecial = TEST_SPECIAL_EFFECT_TYPES.contains(type);
-        boolean isThought = "thought_cloud".equals(type);
         boolean isFart = "fart".equals(type);
-        if (!isSpecial && !isThought && !isFart) {
+        if (!isSpecial && !isFart) {
             attackerArsenal.merge(type, -1, Integer::sum);
         }
 
         long turnDeadline = GameRules.currentTurnDeadline(room);
         long durationMs = isSpecial ? TEST_SPECIAL_EFFECT_MS
-                : (isThought || isFart) ? 0
+                : isFart ? 0
                 : "tomato".equals(type) ? 2000
                 : "crocodile".equals(type) ? Math.max(1200, turnDeadline - now)
                 : 3200;
@@ -749,11 +738,6 @@ public class TestBotsServiceImpl implements TestBotsService {
         event.put("gameNumber", room.getGameNumber());
         if (isSpecial) {
             event.put("specialOrderVersion", 4);
-        }
-        if (isThought) {
-            event.put("text", Json.str(BOT_THOUGHT_LINES.get(Ids.randomInt(BOT_THOUGHT_LINES.size())),
-                    TEST_THOUGHT_MAX_CHARS));
-            event.put("voiceId", String.valueOf(1 + Ids.randomInt(3)));
         }
         if ("meme".equals(type)) {
             event.put("memeTitle", Json.str(memeMeta.getOrDefault("title", "Мем"), 120));
