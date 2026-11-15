@@ -67,6 +67,10 @@ class AiVoiceScriptedPartnerTest {
         assertEquals("Шустрик",context.get("characterName"));
         assertEquals("beacon",context.get("voice"));
         assertEquals("unselected",context.get("role"));
+        assertEquals(null,context.get("currentWord"),
+                "AI cannot see or explain a word until turn is ACTIVE");
+        assertEquals(0,context.get("cardRevision"),
+                "Before start there is no resolved card");
     }
     @Test void cannotPairWithScriptedBotInOrdinaryRoom(){
         Room r=room();r.setIsTestRoom(false);setUp(r);

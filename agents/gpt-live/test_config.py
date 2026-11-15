@@ -280,3 +280,42 @@ class SettingsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class TurnStateRegressions(unittest.TestCase):
+    def test_human_delegation_and_ai_role_agreement_trigger_authoritative_start(self):
+        from agent import _human_delegated_explaining, _ai_committed_to_explaining
+        for phrase in ("Ты начинаешь", "Давай ты", "Объясняй ты",
+                       "Твоя очередь", "Ну давай, начинай"):
+            self.assertTrue(_human_delegated_explaining(phrase),phrase)
+        for phrase in ("Я объясню", "Хорошо, я начинаю",
+                       "Давай я", "Я буду объяснять"):
+            self.assertTrue(_ai_committed_to_explaining(phrase),phrase)
+        self.assertFalse(_human_delegated_explaining("Я объясняю, ты угадываешь"))
+        self.assertFalse(_ai_committed_to_explaining("Не буду объяснять"))
+
+    def test_old_solved_secret_never_reenters_live_llm_context(self):
+        from agent import _history_prompt
+        ctx=_history_prompt([{"word":"Магнит","outcome":"guessed","actionId":"a1"},
+                             {"word":"Бинокль","outcome":"guessed","actionId":"a2"},
+                             {"word":"Кенгуру","outcome":"skipped","actionId":"a3"}])
+        for secret in ("Магнит","Бинокль","Кенгуру"):
+            self.assertNotIn(secret,ctx)
+        self.assertIn("угадано 2",ctx)
+        self.assertIn("пропущено 1",ctx)
+
+    def test_no_unverified_intro_clues_and_card_version_switch_recovery(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        ast.parse(source)
+        self.assertIn('async def ensure_server_started_for_bot(',source)
+        self.assertIn('await game.choose_explainer()',source)
+        self.assertIn('after.get("role") != "explainer"',source)
+        self.assertIn('if _human_delegated_explaining(phrase):',source)
+        self.assertIn('if _ai_committed_to_explaining(',source)
+        self.assertIn('session.on("conversation_item_added",',source)
+        self.assertIn('int(state.get("cardRevision") or 0)',source)
+        self.assertIn('previous[3] != key[3]',source)
+        self.assertIn('if changed_active_card or beginning_explanation:',source)
+        self.assertIn('await stop_stale_explanation()',source)
+        self.assertIn('agent.suppress_next_word_commentary = is_duo',source)

@@ -119,6 +119,9 @@ public class AiVoiceGameService {
         view.put("turnId",g.getTurnId());
         view.put("deadlineMs",g.getPhase()==MatchPhase.ACTIVE?TurnRules.deadline(g):0);
         view.put("currentWord",aiExplaining?g.getCurrentWord():null);
+        // Per-turn monotonic revision of the actual card. Unlike spelling,
+        // this changes even if the bag contains a repeated word.
+        view.put("cardRevision",g.getGuessedWords().size());
         view.put("wordsLeft",g.getWordsLeft());
         view.put("teamActive",!smalltalk);
         // Only previously resolved (never upcoming/secret) words from this AI team.
