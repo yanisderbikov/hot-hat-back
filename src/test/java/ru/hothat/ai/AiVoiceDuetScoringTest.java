@@ -98,17 +98,21 @@ class AiVoiceDuetScoringTest {
         }
     }
 
-    @Test void soloAiGuesserCanScoreHumanTeammatesExplainedWord() {
+    @Test void humanExplainerAloneConfirmsWhenAiGuesses() {
         Fixture f=make(GUESSER);
         String human="human-teammate";
         f.game().setExplainerUid(human);
         f.game().setRosters(Map.of(TEAM,List.of(human,GUESSER)));
-        Map<String,Object> result=f.service().guessedByDuetVoice(
-                "ai_voice","Компас?","aig_123456789012345679");
-        assertEquals(true,result.get("matched"));
-        verify(f.engine(),times(1)).guess(any(),eq("turn-1"),anyString());
-        verify(f.transaction(),times(1)).addTeamScore(TEAM,1);
-        verify(f.transaction(),times(1)).commit();
+        // Even the right AI spoken answer must NOT click Угадали for the human.
+        for(String guess:List.of("Компас?","Это компас!","Угадали!")) {
+            Map<String,Object> result=f.service().guessedByDuetVoice(
+                    "ai_voice",guess,"aig_123456789012345679");
+            assertEquals(false,result.get("matched"));
+            assertEquals("HUMAN_EXPLAINER_MUST_CONFIRM",result.get("reason"));
+        }
+        verify(f.engine(),never()).guess(any(),anyString(),anyString());
+        verify(f.transaction(),never()).addTeamScore(anyString(),anyInt());
+        verify(f.transaction(),never()).commit();
     }
 
     @Test void explainerCannotSubmitHisOwnSecretAsGuesser() {

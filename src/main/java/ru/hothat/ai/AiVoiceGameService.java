@@ -266,9 +266,9 @@ public class AiVoiceGameService {
 
     /**
      * An authenticated AI's OWN completed spoken answer is authoritative
-     * evidence of its utterance in either an AI+AI OR human+AI game.
-     * Only the server-authorized GUESSER may submit it; the explainer's
-     * secret word is never accepted as a self-scored guess.
+     * evidence ONLY for a verified two-AI team; in a human+AI team,
+     * the explaining HUMAN presses "Угадали" manually.
+     * The AI explainer's secret word can never score itself.
      *
      * A model claiming "correct" is never evidence: require an exact match
      * to the current server secret word and the current live turn.
@@ -281,6 +281,10 @@ public class AiVoiceGameService {
         AiVoiceSession u=valid.usage();
         if ("smalltalk".equals(u.getMode()))
             return Map.of("matched",false,"reason","AI_GAME_ONLY");
+        // A human explainer alone decides when an AI teammate has guessed.
+        // Automatic speech-to-score is reserved for genuine AI+AI pairs.
+        if (!AiVoiceSeatPolicy.isAi(valid.humanUid()))
+            return Map.of("matched",false,"reason","HUMAN_EXPLAINER_MUST_CONFIRM");
         if (snapshot.getPhase()!=MatchPhase.ACTIVE
                 || snapshot.isPaused()
                 || !Objects.equals(snapshot.getGuesserUid(),u.getBotUid())
