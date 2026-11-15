@@ -52,6 +52,15 @@ public class AiVoiceGameService {
         if (roster.size()!=2 || !roster.contains(u.getBotUid()))
             throw ApiException.of("AI_NOT_IN_GAME_ROSTER",403);
         String other=roster.stream().filter(id->!id.equals(u.getBotUid())).findFirst().orElse("");
+        // The stored match roster may temporarily lag behind actual team
+        // memberships. A stale AI team must never claim an unrelated teammate
+        // or change the bot's character/voice during another team's turn.
+        for(String seatUid:roster){
+            ru.hothat.model.room.RoomPlayer seat=rooms.getPlayer(u.getRoomId(),seatUid)
+                    .orElseThrow(()->ApiException.of("AI_ACTUAL_SEAT_MISSING",409));
+            if(!Objects.equals(seat.getTeamId(),u.getTeamId()))
+                throw ApiException.of("AI_ACTUAL_TEAM_MISMATCH",409);
+        }
         if (other.startsWith("testbot-")) {
             // Scripted partners exist only in admin test rooms. They never
             // supply a microphone track; the runner acts on their behalf.

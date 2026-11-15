@@ -84,26 +84,37 @@ public class AiVoiceDispatchScheduler {
     private List<String> aiUidsForActiveTeam(Room room) {
         List<String> roster=GameRules.rosterForTeam(room,room.getCurrentTeamId());
         if(roster.size()!=2)return List.of();
+        // Frozen match rosters MUST agree with the actual room seat records.
+        // Never dispatch a bot from another team because currentTeamId or
+        // room.teamRosters lagged behind a team swap.
+        String activeTeam=room.getCurrentTeamId();
+        List<RoomPlayer> seats=new ArrayList<>(2);
+        for(String uid:roster){
+            Optional<RoomPlayer> row=rooms.getPlayer(room.getId(),uid);
+            if(row.isEmpty() || !Objects.equals(activeTeam,row.get().getTeamId())){
+                log.warn("AI voice dispatch blocked: mismatched roster room={} team={}",
+                        room.getId(),activeTeam);
+                return List.of();
+            }
+            seats.add(row.get());
+        }
         List<String> bots=roster.stream().filter(AiVoiceSeatPolicy::isAi).toList();
         if(bots.size()==2){
-            // The only way to create this roster is through the authenticated
-            // site OWNER's experimental duet placement. No scripted testbots.
-            return bots.stream().allMatch(uid->rooms.getPlayer(room.getId(),uid).isPresent())
-                ? bots : List.of();
+            // Two AI seats only if BOTH actual seats belong to current team.
+            return bots;
         }
         if(bots.size()!=1)return List.of();
         String human=roster.stream().filter(uid->!uid.equals(bots.get(0))).findFirst().orElse("");
-        Optional<RoomPlayer> row=rooms.getPlayer(room.getId(),human);
-        if(row.isEmpty())return List.of();
+        RoomPlayer row=seats.get(roster.indexOf(human));
         if(human.startsWith("testbot-")) {
             // The test-bot has no microphone. LiveKit worker uses muted-input
             // mode and the existing test runner generates the simulated guess.
             boolean scripted=Boolean.TRUE.equals(room.getIsTestRoom())
                     && room.getTestBotIds()!=null && room.getTestBotIds().contains(human)
-                    && Boolean.TRUE.equals(row.get().getIsTestBot());
+                    && Boolean.TRUE.equals(row.getIsTestBot());
             return scripted ? bots : List.of();
         }
-        if(!AiVoiceSeatPolicy.isHuman(row.get()))return List.of();
+        if(!AiVoiceSeatPolicy.isHuman(row))return List.of();
         return bots;
     }
 

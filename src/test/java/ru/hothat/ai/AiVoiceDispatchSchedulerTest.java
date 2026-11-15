@@ -50,6 +50,9 @@ class AiVoiceDispatchSchedulerTest {
         when(rooms.getPlayer(ROOM_ID,HUMAN))
                 .thenReturn(Optional.of(RoomPlayer.builder().uid(HUMAN).roomId(ROOM_ID)
                         .teamId(TEAM).isTestBot(false).build()));
+        when(rooms.getPlayer(ROOM_ID,BOT))
+                .thenReturn(Optional.of(RoomPlayer.builder().uid(BOT).roomId(ROOM_ID)
+                        .teamId(TEAM).isTestBot(true).build()));
         when(usage.activeSessions()).thenReturn(List.of());
         when(usage.reserve(eq(ROOM_ID),eq(1),eq(TEAM),eq(BOT),anyString()))
                 .thenReturn(AiVoiceSession.builder().sessionId("ai_session_one")
@@ -77,6 +80,9 @@ class AiVoiceDispatchSchedulerTest {
         when(rooms.getByPhase("active",100)).thenReturn(List.of());
         when(rooms.getPlayer(ROOM_ID,scripted)).thenReturn(Optional.of(
                 RoomPlayer.builder().uid(scripted).roomId(ROOM_ID)
+                    .teamId(TEAM).isTestBot(true).build()));
+        when(rooms.getPlayer(ROOM_ID,BOT)).thenReturn(Optional.of(
+                RoomPlayer.builder().uid(BOT).roomId(ROOM_ID)
                     .teamId(TEAM).isTestBot(true).build()));
         when(usage.activeSessions()).thenReturn(List.of());
         when(usage.reserve(eq(ROOM_ID),eq(1),eq(TEAM),eq(BOT),anyString()))
@@ -199,6 +205,38 @@ class AiVoiceDispatchSchedulerTest {
     }
 
     @Test
+    void neverDispatchesAnAiFromAnotherActualTeamEvenIfFrozenRosterSaysActive() {
+        enable();
+        when(rooms.getByPhase("turnIntro",100)).thenReturn(List.of(activeRoom()));
+        when(rooms.getByPhase("active",100)).thenReturn(List.of());
+        when(rooms.getPlayer(ROOM_ID,HUMAN)).thenReturn(Optional.of(
+            RoomPlayer.builder().uid(HUMAN).roomId(ROOM_ID).teamId(TEAM).build()));
+        when(rooms.getPlayer(ROOM_ID,BOT)).thenReturn(Optional.of(
+            RoomPlayer.builder().uid(BOT).roomId(ROOM_ID).teamId("other-team").build()));
+        scheduler.reconcile();
+        verify(livekit,never()).createAiDispatch(anyString(),anyString());
+        verify(usage,never()).reserve(anyString(),anyInt(),anyString(),anyString(),anyString());
+    }
+
+    @Test
+    void neverDispatchesFalseAiDuoWhenActualBotSeatsAreInSeparateTeams() {
+        enable();
+        String second="ai-gpt-live-bbbbbbbbbbbbbbbbbb";
+        Room room=activeRoom();
+        room.setTeamRosters(Map.of(TEAM,List.of(BOT,second)));
+        when(rooms.getByPhase("turnIntro",100)).thenReturn(List.of(room));
+        when(rooms.getByPhase("active",100)).thenReturn(List.of());
+        when(rooms.getPlayer(ROOM_ID,BOT)).thenReturn(Optional.of(
+            RoomPlayer.builder().uid(BOT).roomId(ROOM_ID).teamId(TEAM).build()));
+        when(rooms.getPlayer(ROOM_ID,second)).thenReturn(Optional.of(
+            RoomPlayer.builder().uid(second).roomId(ROOM_ID).teamId("other-team").build()));
+        scheduler.reconcile();
+        verify(livekit,never()).createAiDispatch(anyString(),anyString());
+        verify(usage,never()).reserve(anyString(),anyInt(),anyString(),anyString(),
+                anyString(),isNull(),eq(true));
+    }
+
+    @Test
     void neverStartsPaidInferenceWhenDispatchNotEnabled() {
         ReflectionTestUtils.setField(scheduler,"featureEnabled",true);
         ReflectionTestUtils.setField(scheduler,"dispatchEnabled",false);
@@ -214,7 +252,11 @@ class AiVoiceDispatchSchedulerTest {
         when(rooms.getByPhase("turnIntro",100)).thenReturn(List.of(activeRoom()));
         when(rooms.getByPhase("active",100)).thenReturn(List.of());
         when(rooms.getPlayer(ROOM_ID,HUMAN)).thenReturn(Optional.of(
-                RoomPlayer.builder().uid(HUMAN).roomId(ROOM_ID).isTestBot(false).build()));
+                RoomPlayer.builder().uid(HUMAN).roomId(ROOM_ID)
+                    .teamId(TEAM).isTestBot(false).build()));
+        when(rooms.getPlayer(ROOM_ID,BOT)).thenReturn(Optional.of(
+                RoomPlayer.builder().uid(BOT).roomId(ROOM_ID)
+                    .teamId(TEAM).isTestBot(true).build()));
         when(usage.activeSessions()).thenReturn(List.of(
                 AiVoiceSession.builder().sessionId("ai_existing").status("running").build()));
         scheduler.reconcile();

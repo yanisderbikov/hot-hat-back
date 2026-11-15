@@ -103,6 +103,8 @@ class AiVoiceDuetScoringTest {
         String human="human-teammate";
         f.game().setExplainerUid(human);
         f.game().setRosters(Map.of(TEAM,List.of(human,GUESSER)));
+        // The test must model an actual human seated in this same team.
+        // The voice endpoint still refuses auto-scoring for this human+AI pair.
         // Even the right AI spoken answer must NOT click Угадали for the human.
         for(String guess:List.of("Компас?","Это компас!","Угадали!")) {
             Map<String,Object> result=f.service().guessedByDuetVoice(
