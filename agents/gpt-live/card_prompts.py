@@ -39,6 +39,9 @@ class CardPromptCoordinator:
         self._task: asyncio.Task | None = None
         self._key = None
         self._last_update_at = 0.0
+        # GPT-Live generate_reply can remain pending for 10 seconds. The
+        # coordinator must remember it even if the old card task is cancelled.
+        self._pending_handle = None
 
     @property
     def busy(self) -> bool:
@@ -102,6 +105,14 @@ class CardPromptCoordinator:
         for attempt in range(self.attempts):
             if not self.is_current(key):
                 return
+            if self._pending_handle is not None:
+                if not self._pending_handle.done():
+                    # Native commentary has already updated the card context.
+                    # Never start a competing response before the old reply
+                    # has really ended inside the full-duplex provider.
+                    self.log("card_prompt_yield_pending",attempt,"old_reply_in_flight")
+                    return
+                self._pending_handle = None
             # Give a teammate a SHORT chance to finish a spoken guess.
             # Never discard the prompt just because the peer is speaking,
             # and do not wait 11 seconds in a sixty-second game.
@@ -147,13 +158,21 @@ class CardPromptCoordinator:
                 handle = self.generate(instructions)
                 if handle is None:
                     raise RuntimeError("generate_reply did not return a request")
+                self._pending_handle=handle
+                # The SDK can decline an advisory speech request after TEN
+                # seconds. Short timeout + shield was leaving a live model
+                # request and spawning more competing ones.
                 try:
                     await asyncio.wait_for(asyncio.shield(handle),
                                            timeout=self.response_timeout)
                 except asyncio.TimeoutError:
                     if self.spoke_at() > baseline or self.state()[0] == "speaking":
                         return
-                    raise RuntimeError("model did not start audio within timeout")
+                    self.log("card_prompt_pending",attempt+1,"awaiting_provider")
+                    return
+                finally:
+                    if handle.done() and self._pending_handle is handle:
+                        self._pending_handle=None
                 if handle.exception() is not None:
                     raise RuntimeError(type(handle.exception()).__name__)
                 if self.require_voice and self.spoke_at() <= baseline:
@@ -174,13 +193,19 @@ class CardPromptCoordinator:
                 if self.spoke_at() > baseline or not self.is_current(key):
                     return
                 if attempt + 1 < self.attempts:
-                    # Cancel an orphaned attempt before starting another:
-                    # concurrent generate_reply requests often refuse BOTH.
-                    if self.reset is not None and self.is_current(key):
+                    # Do not interrupt and immediately hammer an autonomous
+                    # full-duplex model. Give it an ordinary commentary nudge,
+                    # then listen for actual voice before a new request.
+                    if self.commentary is not None and self.is_current(key):
                         try:
-                            await asyncio.wait_for(self.reset(),timeout=1.0)
-                        except (asyncio.TimeoutError, RuntimeError):
+                            self.commentary(
+                                "Продолжай СЕЙЧАС короткую конкретную подсказку "
+                                "по текущей карточке. Без вступлений.")
+                        except Exception:
                             pass
-                    await self.sleep(0.15 * (attempt + 1))
+                    for _ in range(10):
+                        if self.spoke_at() > baseline or not self.is_current(key):
+                            return
+                        await self.sleep(0.15)
         if self.is_current(key):
             self.log("card_prompt_exhausted", self.attempts, "no_audio")
