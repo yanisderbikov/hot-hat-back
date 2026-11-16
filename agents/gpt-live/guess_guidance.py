@@ -107,6 +107,44 @@ def partial_compound_guess(secret: str, spoken: str) -> PartialGuess | None:
     return PartialGuess("partial", matched)
 
 
+
+@dataclass
+class CompoundTranscriptWindow:
+    """Combine adjacent completed ASR fragments, never guessing a secret.
+
+    The server still requires a complete exact phrase and a live active card
+    before adding an actual point. Keep only one short partial per card and
+    forget fragments after a few seconds.
+    """
+    card_key: tuple | None = None
+    last_partial: str = ""
+    last_at: float = -1.0
+
+    def offer(self, *, secret: str, card_key: tuple, phrase: str,
+              now: float) -> str | None:
+        if card_key != self.card_key:
+            self.card_key = card_key
+            self.last_partial = ""
+            self.last_at = -1.0
+        partial = partial_compound_guess(secret, phrase)
+        if partial is None or len(words(phrase)) > 5:
+            self.last_partial = ""
+            self.last_at = -1.0
+            return None
+        combined = None
+        if (self.last_partial and 0 <= now-self.last_at <= 3.0 and
+                len(words(self.last_partial)) + len(words(phrase)) <= 8):
+            combined = self.last_partial + " " + phrase
+        self.last_partial = phrase
+        self.last_at = now
+        return combined
+
+    def clear(self) -> None:
+        self.card_key = None
+        self.last_partial = ""
+        self.last_at = -1.0
+
+
 DUET_VOICE_GUESS_TOPIC = "hot-hat.duet.guess.v1"
 
 
