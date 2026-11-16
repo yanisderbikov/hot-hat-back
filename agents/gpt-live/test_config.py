@@ -275,17 +275,33 @@ class SettingsTests(unittest.TestCase):
                     source.index("async def skip_once(",source.index("async def choose_to_explain("))]
         self.assertNotIn("generate_reply(",tool)
 
+    def test_no_spoken_timer_or_deadline_coaching_in_game_prompt_paths(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        prompts=Path(__file__).with_name("card_prompts.py").read_text(
+            encoding="utf-8")
+        from config import VOICE_INSTRUCTIONS, DUET_VOICE_INSTRUCTIONS
+        ast.parse(source)
+        self.assertNotIn("Время уже идёт",source)
+        self.assertNotIn("часы идут",source)
+        self.assertNotIn("Время игры идёт!",prompts)
+        self.assertNotIn("Продолжай СЕЙЧАС короткую",prompts)
+        # Explicitly forbid audible timing/process chatter in both modes.
+        self.assertIn("время капает",VOICE_INSTRUCTIONS)
+        self.assertIn("Никогда не произноси фразы о времени",
+                      DUET_VOICE_INSTRUCTIONS)
+
     def test_score_wakes_next_card_without_forcing_idle_duplex_reset(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
-        self.assertIn('if verified_score:',source)
-        self.assertIn('if state != "speaking":',source)
-        self.assertIn('force=False',source)
+        # GPT-Live owns its turns; even force=False interrupted tool output
+        # and stranded the next clue. No explicit session interrupts survive.
+        self.assertIn('async def stop_stale_explanation(',source)
+        self.assertNotIn('session.interrupt(',source)
         self.assertIn('verified_score=changed_active_card or beginning_explanation',source)
         self.assertIn('attempts=2,',source)
         self.assertIn('response_timeout=10.5,',source)
         self.assertIn('commentary_grace=1.0 if is_duo else 1.2',source)
-        self.assertIn('and time.monotonic()-duet_live.last_activity >= 5.0',source)
+        self.assertIn('async def reset_orphaned_speech():',source)
 
     def test_fast_voice_duet_and_human_ai_guesser_regressions(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
