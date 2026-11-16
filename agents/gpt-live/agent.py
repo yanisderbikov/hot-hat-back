@@ -657,11 +657,22 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         if is_duo and not result.get("turnClosed"):
                             agent.pending_voice_confirmation = _voice_confirmation(
                                 latest, True, len(agent.recent_word_keys))
-                        # Invalidate the old card BEFORE cancelling output:
-                        # no queued retries or watchdog may resurrect its hint.
-                        active_prompt_key = None
-                        await card_prompts.close()
-                        await stop_stale_explanation(verified_score=True)
+                        # The watcher polls /context while the HTTP scoring
+                        # request is in flight. It may ALREADY have seen the
+                        # next card and scheduled its first spoken clue.
+                        # Never cancel that NEW-card audio on completion of an
+                        # OLD-card score: that race caused 40+ seconds silent
+                        # after the first counted word in the Nov 16 recording.
+                        if active_prompt_key == candidate_card_key:
+                            active_prompt_key = None
+                            await card_prompts.close()
+                            await stop_stale_explanation(verified_score=True)
+                            logger.info(
+                                "Scored old card invalidated bot=%s",bot_uid[-6:])
+                        else:
+                            logger.info(
+                                "Scored old card already advanced bot=%s next=%s",
+                                bot_uid[-6:],bool(active_prompt_key))
                         if result.get("turnClosed"):
                             # Last-word grace: the score was committed, but
                             # there is NO next card. Finish voice immediately.
@@ -727,12 +738,13 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                         "дослушай следующую попытку. "
                                         "Никаких комментариев о проверке.")
                                     continue_followup = True
-                                # Only a completed FINAL transcript causes a
-                                # new hint. VAD onset NEVER force-interrupts.
+                                # GPT-Live's native barge-in already yields to
+                                # the real partner. Forcing session.interrupt()
+                                # on every wrong guess aborts the pending reply
+                                # and makes the very next generate_reply refuse.
+                                # Only a CONFIRMED scored card transition may
+                                # interrupt the old audio forcefully.
                                 if continue_followup:
-                                    if str(getattr(session,"agent_state","")) in (
-                                            "speaking","thinking"):
-                                        await stop_stale_explanation()
                                     card_prompts.schedule(candidate_card_key, followup)
                                     logger.info(
                                         "Duet final-guess followup queued bot=%s kind=%s",
@@ -759,9 +771,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                     "загаданного предмета. Без объявления "
                                     "проверки, без повторения прежней подсказки.")
                                 agent.duplex_session.append_thinking(followup)
-                                if str(getattr(session,"agent_state","")) in (
-                                        "speaking","thinking"):
-                                    await stop_stale_explanation()
+                                # Preserve natural interruption when a human
+                                # answers: forcing an extra interrupt leaves
+                                # the realtime model silent after the guess.
                                 card_prompts.schedule(candidate_card_key,followup)
                                 logger.info(
                                     "Solo final-guess followup queued bot=%s partial=%s",
