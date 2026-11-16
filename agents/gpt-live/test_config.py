@@ -249,6 +249,20 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('if not getattr(event, "is_final", False):',snippet)
         self.assertIn('if still_same:',snippet)
 
+    def test_every_gpt_live_role_has_preloaded_vad_for_fast_barge_in(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        docker=Path(__file__).with_name("Dockerfile").read_text(encoding="utf-8")
+        requirements=Path(__file__).with_name("requirements.txt").read_text(
+            encoding="utf-8")
+        ast.parse(source)
+        self.assertIn("from livekit.plugins import silero",source)
+        self.assertIn("server.setup_fnc = _prewarm_vad",source)
+        self.assertIn('vad=ctx.proc.userdata["vad"]',source)
+        self.assertIn("min_speech_duration=0.12",source)
+        self.assertIn("min_silence_duration=0.35",source)
+        self.assertIn("livekit-agents[silero]",requirements)
+        self.assertIn("RUN python agent.py download-files",docker)
+
     def test_human_role_selection_primes_first_card_without_competing_reply(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
