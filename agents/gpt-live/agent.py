@@ -800,8 +800,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         # The point has already changed on the server. Never
                         # continue the old secret in the model's inner state.
                         agent.duplex_session.append_thinking(
-                            "ПРЕДЫДУЩАЯ КАРТОЧКА ЗАКРЫТА. Не объясняй "
-                            "её снова. Ожидай только новую карточку.")
+                            "Уже угаданную загадку больше не объясняй. "
+                            "Следующую подсказку строй исключительно по "
+                            "новому слову, полученному из игрового контекста.")
                         compound_asr.clear()
                         agent.recent_word_keys.add(str(result.get("actionId") or ""))
                         duet_wrong_guesses = 0
