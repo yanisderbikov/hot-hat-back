@@ -487,6 +487,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             max_prompts_without_voice=3 if is_duo else 8,
             fast_duet=is_duo,
             speed_round=True,
+            continuous_explainer=True,
         )
         duet_snapshot = {}
         last_agent_spoke = 0.0
