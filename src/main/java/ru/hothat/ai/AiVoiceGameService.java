@@ -332,6 +332,67 @@ public class AiVoiceGameService {
     }
 
     /**
+     * A human's teammate is allowed to adjudicate the game, just like a
+     * human explainer pressing "Угадали". A short verbal "Да!" is NOT a
+     * score by itself: the trusted worker must submit the actual finalized
+     * HUMAN utterance, a one-shot explicit AI approval, and the EXACT turn
+     * and card revision the explainer was judging.
+     *
+     * This supplements strict ASR matching for equivalent spoken variants.
+     * It never scores from the assistant's own secret or a stale card.
+     */
+    @Transactional
+    public Map<String,Object> assistantApprovesHumanGuess(
+            String sessionId,String speakerUid,String transcript,
+            String approvalText,String expectedTurnId,int expectedRevision,
+            String wordActionId) {
+        Verified valid=verify(sessionId);
+        AiVoiceSession u=valid.usage();
+        if("smalltalk".equals(u.getMode()) ||
+                AiVoiceSeatPolicy.isAi(valid.humanUid()))
+            return Map.of("matched",false,"reason","HUMAN_AI_GAME_ONLY");
+        if(!Objects.equals(valid.humanUid(),speakerUid))
+            return Map.of("matched",false,"reason","OTHER_SPEAKER");
+        if(transcript==null || transcript.isBlank() || transcript.length()>500 ||
+                !explicitVoiceApproval(approvalText))
+            return Map.of("matched",false,"reason","APPROVAL_NOT_EXPLICIT");
+        if(wordActionId==null ||
+                !wordActionId.matches("^[A-Za-z0-9_-]{6,80}$"))
+            throw ApiException.of("AI_WORD_ACTION_ID_INVALID",400);
+        MatchSession txn=matches.open(u.getRoomId());
+        MatchState game=txn.state();
+        if(game.getPhase()!=MatchPhase.ACTIVE || game.isPaused() ||
+                !Objects.equals(game.getTurnId(),expectedTurnId) ||
+                game.getGuessedWords().size()!=expectedRevision ||
+                !Objects.equals(game.getExplainerUid(),u.getBotUid()) ||
+                !Objects.equals(game.getGuesserUid(),speakerUid))
+            return Map.of("matched",false,"reason","WORD_ADVANCED");
+        String teamId=game.getCurrentTeamId();
+        WordResolved resolved=engine.guess(game,game.getTurnId(),wordActionId);
+        if(resolved.outcome()!=WordResolved.Outcome.COUNTED) {
+            if(resolved.outcome()==WordResolved.Outcome.TURN_EXPIRED)txn.commit();
+            return Map.of("matched",false,"reason","NOT_COUNTED",
+                    "turnClosed",resolved.turnClosed());
+        }
+        txn.addTeamScore(teamId,resolved.teamScoreDelta());
+        txn.commit();
+        wordMemory.record(u.getRoomId(),game.getGameNumber(),teamId,
+                game.getTurnId(),wordActionId,resolved.word(),"guessed",true);
+        return Map.of("matched",true,"action","guessed",
+                "turnClosed",resolved.turnClosed());
+    }
+
+    static boolean explicitVoiceApproval(String text) {
+        if(text==null)return false;
+        String normalized=wordsOnly(text);
+        // Deliberately reject "да, но какой?" and other PARTIAL approvals.
+        // Only unequivocal short standalone approvals may click a word.
+        return Set.of("да","верно","точно","правильно","есть",
+                "угадал","угадала","именно","это оно","так и есть")
+                .contains(normalized);
+    }
+
+    /**
      * An authenticated AI's OWN completed spoken answer is authoritative
      * evidence ONLY for a verified two-AI team; in a human+AI team,
      * the explaining HUMAN presses "Угадали" manually.
