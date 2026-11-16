@@ -1,8 +1,9 @@
 """SCRUM-52: real compound-word guesses should produce useful guidance."""
 import unittest
 
-from guess_guidance import (DUET_VOICE_GUESS_TOPIC, guess_signature,
-                            partial_compound_guess, verified_duet_voice_packet)
+from guess_guidance import (CompoundTranscriptWindow, DUET_VOICE_GUESS_TOPIC,
+                            guess_signature, partial_compound_guess,
+                            verified_duet_voice_packet)
 
 
 class GuessGuidanceTests(unittest.TestCase):
@@ -54,6 +55,38 @@ class GuessGuidanceTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertNotIn("огурец", result.instruction().lower())
         self.assertNotIn(guessed, result.instruction())
+
+    def test_snowman_split_during_interruption_can_be_combined_for_scoring(self):
+        window=CompoundTranscriptWindow()
+        card=("turn1","explainer","снежный человек",2,False)
+        self.assertIsNone(window.offer(secret="снежный человек",card_key=card,
+                                       phrase="Снежный?",now=10.0))
+        self.assertEqual("Снежный? человек!",
+                         window.offer(secret="снежный человек",card_key=card,
+                                      phrase="человек!",now=11.2))
+
+    def test_compound_buffer_never_joins_different_cards_or_old_guesses(self):
+        window=CompoundTranscriptWindow()
+        old=("turn","explainer","соленый огурец",1,False)
+        new=("turn","explainer","снежный человек",2,False)
+        window.offer(secret="соленый огурец",card_key=old,phrase="огурец",now=1)
+        self.assertIsNone(window.offer(secret="снежный человек",card_key=new,
+                                       phrase="снежный",now=2))
+        self.assertIsNone(window.offer(secret="снежный человек",card_key=new,
+                                       phrase="человек",now=8))
+        window.clear()
+        self.assertIsNone(window.offer(secret="снежный человек",card_key=new,
+                                       phrase="человек",now=9))
+
+    def test_not_stitching_unrelated_or_already_complete_guesses(self):
+        window=CompoundTranscriptWindow()
+        key=("turn","explainer","снежный человек",2,False)
+        self.assertIsNone(window.offer(secret="снежный человек",card_key=key,
+                                       phrase="море",now=0))
+        self.assertIsNone(window.offer(secret="снежный человек",card_key=key,
+                                       phrase="снежный",now=1))
+        self.assertIsNone(window.offer(secret="снежный человек",card_key=key,
+                                       phrase="снежный человек",now=2))
 
     def test_private_livekit_relay_only_accepts_this_peer_and_card(self):
         import json
