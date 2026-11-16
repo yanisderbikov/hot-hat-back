@@ -20,7 +20,8 @@ class CardPromptCoordinator:
                  commentary: Callable | None = None,
                  reset: Callable[[], Awaitable] | None = None,
                  require_voice: bool = False,
-                 response_timeout: float = 3.0):
+                 response_timeout: float = 3.0,
+                 commentary_grace: float = 1.2):
         self.generate = generate
         self.state = state
         self.is_current = is_current
@@ -32,6 +33,9 @@ class CardPromptCoordinator:
         self.reset = reset
         self.require_voice = require_voice
         self.response_timeout = response_timeout
+        # Keep native real-time commentary first; the optional shorter
+        # SOLO delay gets an explicit reply going before ten seconds pass.
+        self.commentary_grace = max(0.15, min(1.5, commentary_grace))
         self._task: asyncio.Task | None = None
         self._key = None
 
@@ -68,7 +72,7 @@ class CardPromptCoordinator:
             try:
                 self.commentary(instructions)
                 self.log("card_prompt_commentary", 1, "native")
-                for _ in range(8):
+                for _ in range(max(1, round(self.commentary_grace / 0.15))):
                     if not self.is_current(key):
                         return
                     if self.spoke_at() > baseline:
