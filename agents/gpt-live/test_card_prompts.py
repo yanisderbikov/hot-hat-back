@@ -54,18 +54,52 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(prompts,["new"])
         await coord.close()
 
-    async def test_busy_peer_does_not_discard_next_card(self):
+    async def test_busy_peer_does_not_trigger_a_competing_reply_request(self):
         key=("r1","explainer","Арбуз",3,False)
         called=[]
+        peer=["speaking"]
         async def finish():return None
-        coord=CardPromptCoordinator(
-            generate=lambda s:called.append(s) or asyncio.create_task(finish()),
-            state=lambda:("listening","speaking"),
-            is_current=lambda k:k==key,spoke_at=lambda:0.0,
-            sleep=lambda _:asyncio.sleep(0))
+        # Simulate 2.5 seconds of player speech without sleeping in real time.
+        import unittest.mock
+        with unittest.mock.patch("card_prompts.time.monotonic",
+                                  side_effect=[0, 0, 0, 2.6]):
+            coord=CardPromptCoordinator(
+                generate=lambda s:called.append(s) or asyncio.create_task(finish()),
+                state=lambda:("listening",peer[0]),
+                is_current=lambda k:k==key,spoke_at=lambda:0.0,
+                sleep=lambda _:asyncio.sleep(0))
+            coord.schedule(key,"give next hint")
+            await asyncio.wait_for(coord._task,timeout=2)
+        self.assertEqual(called,[], "Never start speech while partner is speaking")
+        peer[0]="listening"
         coord.schedule(key,"give next hint")
-        await asyncio.wait_for(coord._task,timeout=2)
+        await coord._task
         self.assertEqual(called,["give next hint"])
+        await coord.close()
+
+    async def test_final_guess_updates_same_card_without_interrupting_active_generation(self):
+        key=("r1","explainer","Снежный человек",4,False)
+        release=asyncio.Event()
+        started=asyncio.Event()
+        requested=[]
+        commentary=[]
+        async def live_reply():
+            started.set()
+            await release.wait()
+        coord=CardPromptCoordinator(
+            generate=lambda s:requested.append(s) or asyncio.create_task(live_reply()),
+            commentary=lambda s:commentary.append(s),
+            state=lambda:("listening","listening"),
+            is_current=lambda k:k==key,spoke_at=lambda:0.0,
+            sleep=lambda _:asyncio.sleep(0),require_voice=False)
+        coord.schedule(key,"general clue")
+        await asyncio.wait_for(started.wait(),timeout=2)
+        coord.schedule(key,"yes, but what kind?")
+        self.assertEqual(requested,["general clue"])
+        self.assertEqual(commentary,["general clue","yes, but what kind?"])
+        release.set()
+        await coord._task
+        self.assertEqual(requested,["general clue"])
         await coord.close()
 
 
