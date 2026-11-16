@@ -36,6 +36,9 @@ public class AiVoiceWorkerController {
     }
 
     public record SpeechRequest(String speakerUid,String transcript,String actionId) {}
+    public record ExplainerApprovalRequest(
+            String speakerUid,String transcript,String approvalText,
+            String turnId,int cardRevision,String actionId) {}
     public record UsageReport(double voiceSeconds,long backendInputTokens,
                               long backendOutputTokens,boolean finished,String errorCode) {}
 
@@ -60,6 +63,18 @@ public class AiVoiceWorkerController {
         authenticate(secret);
         return ResponseEntity.ok(game.observedSpeech(sessionId,body.speakerUid(),
                 body.transcript(),body.actionId()));
+    }
+
+    @PostMapping("/approve-human-guess")
+    public ResponseEntity<Map<String,Object>> approveHumanGuess(
+            @PathVariable String sessionId,
+            @RequestHeader(value="X-HH-AI-WORKER-KEY",required=false) String secret,
+            @RequestBody ExplainerApprovalRequest body) {
+        authenticate(secret);
+        return ResponseEntity.ok(game.assistantApprovesHumanGuess(
+                sessionId,body.speakerUid(),body.transcript(),
+                body.approvalText(),body.turnId(),body.cardRevision(),
+                body.actionId()));
     }
 
     @PostMapping("/duet-guesser-spoke")
