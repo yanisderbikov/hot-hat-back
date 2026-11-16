@@ -137,6 +137,19 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("duet_wrong_guesses in (2, 4)", source)
         self.assertNotIn('"НОВАЯ КАРТОЧКА: объясни текущее слово"', source)
 
+    def test_verified_guess_must_not_cancel_already_started_next_card(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        ast.parse(source)
+        self.assertIn('if active_prompt_key == candidate_card_key:',source)
+        self.assertIn('Scored old card already advanced',source)
+        start=source.index('if result.get("matched"):',source.index('async def on_heard(event):'))
+        end=source.index('elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:',start)
+        scored=source[start:end]
+        self.assertIn('if active_prompt_key == candidate_card_key:',scored)
+        self.assertIn('await card_prompts.close()',scored)
+        self.assertIn('else:\n                            logger.info(',scored)
+        self.assertNotIn('active_prompt_key = None\n                        await card_prompts.close()',scored)
+
     def test_fast_adaptive_feedback_on_partial_and_interrupted_guesses(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
@@ -210,7 +223,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("async def duet_guesser_spoke(",client)
         self.assertIn('"duet-guesser-spoke"',client)
 
-    def test_final_guess_only_interrupts_after_server_checks_same_card(self):
+    def test_wrong_guess_never_force_interrupts_after_server_checks_same_card(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
         start=source.index('elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:')
@@ -220,7 +233,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('now-last_card_switched_at>=0.9',rejection)
         self.assertIn('current.get("cardRevision")',rejection)
         self.assertIn('if still_same:',rejection)
-        self.assertIn('await stop_stale_explanation()',rejection)
+        self.assertNotIn('await stop_stale_explanation()',rejection)
         self.assertIn('card_prompts.schedule(candidate_card_key,',rejection)
         self.assertNotIn("Ты назвал неверно",rejection)
 
@@ -277,7 +290,7 @@ class SettingsTests(unittest.TestCase):
         self.assertNotIn('session.generate_reply(',rejection)
         self.assertIn('candidate_card_key==active_prompt_key',rejection)
         self.assertIn('if still_same:',rejection)
-        self.assertIn('await stop_stale_explanation()',rejection)
+        self.assertNotIn('await stop_stale_explanation()',rejection)
         self.assertIn('and is_duo:',rejection.splitlines()[0])
 
     def test_two_ai_interrupts_only_on_final_server_verified_same_card(self):
@@ -291,7 +304,7 @@ class SettingsTests(unittest.TestCase):
         end=source.index('            except Exception as exc:',start)
         on_mismatch=source[start:end]
         self.assertIn("if still_same:",on_mismatch)
-        self.assertIn("await stop_stale_explanation()",on_mismatch)
+        self.assertNotIn("await stop_stale_explanation()",on_mismatch)
         self.assertNotIn("session.generate_reply(",on_mismatch)
         self.assertIn("duet_wrong_guesses += 1",on_mismatch)
         self.assertIn("request_duet_reply(instructions: str)",source)
