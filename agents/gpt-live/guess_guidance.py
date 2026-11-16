@@ -39,6 +39,14 @@ def _word_matches(target: str, spoken: str) -> bool:
                  ) if target.endswith("ий") else (
             "ого","ому","ым","ом","ая","ое","ые","ых","ыми","ую","ой")
         return spoken in tuple(stem+end for end in endings)
+    # A correct feminine adjective ("огненной", "огненную") is an
+    # already guessed component, even if ASR split off the noun.
+    if target.endswith(("ая","яя")) and len(target)>4:
+        stem=target[:-2]
+        variants=("юю","ей","ею","ие","их","ими","яя"
+                  ) if target.endswith("яя") else (
+            "ую","ой","ою","ые","ых","ыми","ая")
+        return spoken in tuple(stem+end for end in variants)
     stem = target[:-2] if target.endswith("ец") else target
     if target.endswith("ец"):
         return any(spoken == stem + ending for ending in ("ца", "цу", "цом", "це", "цы"))
