@@ -101,7 +101,7 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await coord.close()
 
 
-    async def test_pending_generate_reply_never_overlaps_next_card(self):
+    async def test_new_card_supersedes_stale_provider_reply_but_same_card_does_not(self):
         old=("turn","explainer","огненная шляпа",0,False)
         new=("turn","explainer","воздушный шар",1,False)
         active=[old]
@@ -124,13 +124,16 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         active[0]=new
         coord.schedule(new,"fresh word")
         await asyncio.wait_for(coord._task,timeout=2)
-        self.assertEqual(sent,["first clue"],
-                         "Must not start a second reply while the old one is pending")
+        self.assertEqual(sent,["first clue","fresh word"],
+                         "New SERVER card supersedes the stale model response")
+        self.assertFalse(waiting.done(),
+                         "Underlying old provider handle remains intact")
         self.assertIn("fresh word",commentary)
-        waiting.set_result(None)
-        coord.schedule(new,"fresh word")
+        # Same-card repeat must not create another competing response.
+        coord.schedule(new,"refine same card")
         await asyncio.wait_for(coord._task,timeout=2)
         self.assertEqual(sent,["first clue","fresh word"])
+        waiting.set_result(None)
         await coord.close()
 
     async def test_pending_provider_never_paraphrases_repeated_clock_nudges(self):
