@@ -65,6 +65,15 @@ class GuessGuidanceTests(unittest.TestCase):
                          window.offer(secret="снежный человек",card_key=card,
                                       phrase="человек!",now=11.2))
 
+    def test_inflected_snowman_fragments_also_form_a_complete_russian_answer(self):
+        window=CompoundTranscriptWindow()
+        key=("turn1","explainer","снежный человек",2,False)
+        self.assertIsNone(window.offer(secret="снежный человек",card_key=key,
+                                       phrase="Снежного",now=10.0))
+        self.assertEqual("Снежного человека",
+                         window.offer(secret="снежный человек",card_key=key,
+                                      phrase="человека",now=11.0))
+
     def test_compound_buffer_never_joins_different_cards_or_old_guesses(self):
         window=CompoundTranscriptWindow()
         old=("turn","explainer","соленый огурец",1,False)
