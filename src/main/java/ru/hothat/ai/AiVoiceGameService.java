@@ -176,6 +176,18 @@ public class AiVoiceGameService {
             }
             if(matched)return true;
         }
+        // Russian descriptive compounds have a natural inverted spoken
+        // order: "огурец солёный" answers the "солёный огурец" card,
+        // "человек снежный" answers "снежный человек".
+        // Require the very same TWO complete adjacent word forms. This is
+        // not fuzzy stemming and never accepts an incomplete noun alone.
+        if(need.length==2) {
+            for(int offset=0;offset+1<spoken.length;offset++) {
+                if(sameSpokenRussianForm(need[1],spoken[offset])
+                        &&sameSpokenRussianForm(need[0],spoken[offset+1]))
+                    return true;
+            }
+        }
         return false;
     }
 
