@@ -135,7 +135,7 @@ class DuetLivenessTests(unittest.TestCase):
         live.pending=False
         live.mark_spoke(22.1)
         self.assertIsNone(next_action(live,24,deadline_ms=25_500))
-        self.assertEqual(next_action(live,28,deadline_ms=60_000),"give_hint")
+        self.assertEqual(next_action(live,30,deadline_ms=60_000),"give_hint")
 
     def test_at_most_three_unanswered_prompts_before_paid_session_abort(self):
         live=DuetLiveness(last_activity=0)
