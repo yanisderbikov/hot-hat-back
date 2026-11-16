@@ -621,7 +621,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         # No phrases/secrets in production logs. See both human
                         # and AI+AI results when a player reports false "Верно".
                         logger.info("Peer voice score: mode=%s bot=%s result=%s",
-                                    "duet",bot_uid[-6:],
+                                    "duet" if is_duo else "solo",bot_uid[-6:],
                                     "MATCH" if result.get("matched")
                                     else str(result.get("reason") or "NO_MATCH")[:32])
                     if is_duo:
