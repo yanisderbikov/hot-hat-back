@@ -249,6 +249,18 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('if not getattr(event, "is_final", False):',snippet)
         self.assertIn('if still_same:',snippet)
 
+    def test_score_wakes_next_card_without_forcing_idle_duplex_reset(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        ast.parse(source)
+        self.assertIn('if verified_score:',source)
+        self.assertIn('if state != "speaking":',source)
+        self.assertIn('force=False',source)
+        self.assertIn('verified_score=changed_active_card or beginning_explanation',source)
+        self.assertIn('attempts=2,',source)
+        self.assertIn('response_timeout=1.3,',source)
+        self.assertIn('commentary_grace=0.45 if is_duo else 0.35',source)
+        self.assertIn('and time.monotonic()-duet_live.last_activity >= 5.0',source)
+
     def test_fast_voice_duet_and_human_ai_guesser_regressions(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         from config import DUET_BACKEND_INSTRUCTIONS, DUET_VOICE_INSTRUCTIONS
@@ -263,7 +275,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('if mode == "game" and not scripted_partner:',source)
         self.assertIn('if mode != "game" or scripted_partner or not is_duo:',source)
         self.assertIn("session.generate_reply(instructions=(",source)
-        self.assertIn('await asyncio.sleep(0.24 if is_duo',source)
+        self.assertIn('await asyncio.sleep(0.22 if role in ("explainer","guesser")',source)
         self.assertIn("ПЕРЕБИВ",DUET_VOICE_INSTRUCTIONS)
         self.assertIn("INTERRUPTS",DUET_BACKEND_INSTRUCTIONS)
         self.assertIn("Peer voice score: mode=",source)
