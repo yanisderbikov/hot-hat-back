@@ -24,7 +24,10 @@ import java.util.stream.Collectors;
 public class AiVoiceUsageService {
     private static final BigDecimal ZERO=BigDecimal.ZERO;
     private static final BigDecimal VOICE_USD_PER_SECOND=new BigDecimal("0.000833333333");
-    private static final BigDecimal SESSION_RESERVATION_USD=new BigDecimal("0.50");
+    // A session is capped at 180s: at $0.000833/s that is $0.15 of voice.
+    // Reserve $0.20 with a buffer, rather than $0.50 (10x a 60s turn),
+    // without changing the operator's actual monthly spend ceiling.
+    private static final BigDecimal SESSION_RESERVATION_USD=new BigDecimal("0.20");
 
     private final AiVoiceSessionRepository sessions;
 
@@ -117,6 +120,51 @@ public class AiVoiceUsageService {
                 .mode(ownerSpeakerUid==null?"game":"smalltalk").speakerUid(ownerSpeakerUid)
                 .status("pending").createdAt(Instant.now()).build();
         return sessions.save(session);
+    }
+
+    /**
+     * Reserve an owner-only AI duet AS A PAIR before dispatching EITHER agent.
+     *
+     * Previously the scheduler reserved and launched bot #1, then discovered
+     * that bot #2 exceeded the monthly cap. The first paid worker had no
+     * teammate and died after a 12-second wait, with no way to play.
+     *
+     * One synchronized, transactional check books both independent cost
+     * reservations or neither. This method never bypasses the monthly cap.
+     */
+    @Transactional
+    public synchronized List<AiVoiceSession> reserveDuo(
+            String roomId,int gameNumber,String teamId,
+            List<String> botUids,List<String> turnKeys) {
+        if(botUids==null || turnKeys==null || botUids.size()!=2 || turnKeys.size()!=2
+                || botUids.get(0)==null || botUids.get(1)==null
+                || Objects.equals(botUids.get(0),botUids.get(1))
+                || Objects.equals(turnKeys.get(0),turnKeys.get(1)))
+            throw ApiException.of("AI_DUET_PAIR_INVALID",400);
+        List<Optional<AiVoiceSession>> prior=new ArrayList<>(2);
+        for(String key:turnKeys)
+            prior.add(sessions.findByRoomIdAndGameNumberAndTurnKey(
+                    roomId,gameNumber,key));
+        if(prior.get(0).isPresent() && prior.get(1).isPresent())
+            return List.of(prior.get(0).get(),prior.get(1).get());
+        if(prior.get(0).isPresent() || prior.get(1).isPresent())
+            throw ApiException.of("AI_DUET_PAIR_INCOMPLETE",409);
+        if(!activeSessions().isEmpty())
+            throw ApiException.of("AI_VOICE_SESSION_ALREADY_RUNNING",409);
+        BigDecimal pairHold=SESSION_RESERVATION_USD.multiply(BigDecimal.valueOf(2));
+        if(reservedPlusSpent(monthRows()).add(pairHold).compareTo(monthlyBudget)>0)
+            throw ApiException.of("AI_MONTHLY_BUDGET_EXHAUSTED",402);
+        List<AiVoiceSession> result=new ArrayList<>(2);
+        for(int i=0;i<2;i++){
+            AiVoiceSession session=AiVoiceSession.builder()
+                    .sessionId("ai_"+UUID.randomUUID().toString().replace("-",""))
+                    .roomId(roomId).gameNumber(gameNumber).teamId(teamId)
+                    .botUid(botUids.get(i)).turnKey(turnKeys.get(i))
+                    .mode("game").status("pending").createdAt(Instant.now())
+                    .build();
+            result.add(sessions.save(session));
+        }
+        return List.copyOf(result);
     }
 
     @Transactional
