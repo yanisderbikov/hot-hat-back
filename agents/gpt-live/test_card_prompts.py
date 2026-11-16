@@ -114,7 +114,8 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             return waiting if len(sent)==1 else second_waiting
         coord=CardPromptCoordinator(
             generate=generate,commentary=commentary.append,
-            state=lambda:("listening","listening"),
+            state=lambda:(("thinking" if active[0]==new else "listening"),
+                          "listening"),
             is_current=lambda key:key==active[0],spoke_at=lambda:0.0,
             response_timeout=0.04,commentary_grace=0.15,attempts=2)
         coord.schedule(old,"first clue")
