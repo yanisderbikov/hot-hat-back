@@ -38,6 +38,7 @@ class CardPromptCoordinator:
         self.commentary_grace = max(0.15, min(1.5, commentary_grace))
         self._task: asyncio.Task | None = None
         self._key = None
+        self._last_update_at = 0.0
 
     @property
     def busy(self) -> bool:
@@ -47,10 +48,25 @@ class CardPromptCoordinator:
         if not self.is_current(key):
             return
         if key == self._key and self.busy:
+            # The same word is still being explained. A finalized guess
+            # changes what the NEXT hint must say, but cancelling an in-flight
+            # realtime reply used to freeze GPT-Live. Deliver the new context
+            # through native commentary WITHOUT a competing generate_reply.
+            if (self.commentary is not None and
+                    time.monotonic() - self._last_update_at >= 0.65):
+                self._last_update_at = time.monotonic()
+                try:
+                    self.commentary(instructions)
+                    self.log("card_prompt_updated", int(key[3]) if len(key)>3 else 0,
+                             "same_card")
+                except Exception as exc:
+                    self.log("card_prompt_update_failed", 0,
+                             type(exc).__name__)
             return
         if self._task is not None and not self._task.done():
             self._task.cancel()
         self._key = key
+        self._last_update_at = 0.0
         # Log numeric revision ONLY; never the secret word in production.
         self.log("card_prompt_queued", int(key[3]) if len(key)>3 else 0,
                  "new_card")
@@ -96,11 +112,35 @@ class CardPromptCoordinator:
                     return  # The model has already begun a valid response.
                 busy_agent = agent_state in ("speaking", "thinking", "initializing")
                 busy_peer = peer_state == "speaking"
-                cap = 1.0 if busy_agent else 0.6
-                if not (busy_agent or busy_peer) or time.monotonic() - waiting_since >= cap:
+                elapsed = time.monotonic() - waiting_since
+                if not (busy_agent or busy_peer):
                     break
+                # Never generate a second response WHILE the teammate is
+                # talking: the old 0.6s cap did exactly that and caused
+                # repeated RuntimeError refusals after barge-in.
+                if busy_peer:
+                    if elapsed >= 2.5:
+                        self.log("card_prompt_yield_peer", 0, "awaiting_silence")
+                        return  # watchdog may retry once the partner pauses
+                    await self.sleep(0.12)
+                    continue
+                # Native model already speaking: no second reply is needed.
+                if agent_state == "speaking":
+                    self.log("card_prompt_yield_voice", 0, "already_speaking")
+                    return
+                # Thinking / initializing can temporarily hold a prior turn.
+                # Avoid overlapping speech requests; liveness can reset an
+                # actually stuck thinking state later.
+                if elapsed >= 2.5:
+                    self.log("card_prompt_yield_busy", 0, agent_state[:24])
+                    return
                 await self.sleep(0.12)
             if not self.is_current(key):
+                return
+            # State can flip between the last poll and this generation.
+            agent_state, peer_state = self.state()
+            if peer_state == "speaking" or agent_state in ("speaking","thinking","initializing"):
+                self.log("card_prompt_yield_busy", 0, "state_changed")
                 return
             try:
                 self.log("card_prompt_request", attempt + 1, "start")
