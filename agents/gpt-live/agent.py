@@ -235,17 +235,46 @@ class HotHatPlayer(Agent):
                             else VOICE_INSTRUCTIONS) + etiquette + smalltalk_rules
                          + " " + _history_prompt(recent_words))
 
+    def prime_first_explainer_hint(self, state: dict) -> bool:
+        """Feed the first card to an already answering GPT-Live model.
+
+        Once choose_to_explain returns, GPT-Live is ALREADY composing its
+        continuation to that tool result. Calling generate_reply in the same
+        instant aborts both replies. Insert the secret as private thinking,
+        give it an immediate clue request as commentary, and let the model
+        continue its current reply naturally. The watcher must NOT issue a
+        competing explicit response for this very first card.
+        """
+        word=state.get("currentWord")
+        if state.get("role")!="explainer" or not word:
+            return False
+        self.duplex_session.append_thinking(
+            "Теперь твоя роль ОБЪЯСНЯТЬ. Текущая карточка: " + str(word)
+            + ". Это секрет: никогда не произноси само слово или его части.")
+        self.duplex_session.append_commentary(
+            "СРАЗУ объясняй этот предмет напарнику коротким признаком. "
+            "Время уже идёт, не жди дополнительной команды. "
+            "Потом внимательно слушай догадку и сразу продолжай. "
+            "Не называй ответ.")
+        return True
+
     @function_tool
     async def choose_to_explain(self, context: RunContext) -> str:
         """Выбрать роль объясняющего и запустить минутный раунд, только
         когда напарник явно просит тебя объяснять слово."""
         if self.duet_role == "guesser":
             return "В ИИ-дуэте тебе назначено УГАДЫВАТЬ. Слушай подсказку!"
+        # Claim the first voice prompt before the watcher can race us.
+        self.suppress_next_word_commentary=True
         try:
-            state = await self.game.choose_explainer()
-            return "Твоя очередь объяснять. Начинай с первой подсказки."
+            await self.game.choose_explainer()
+            state=await self.game.context()
+            if not self.prime_first_explainer_hint(state):
+                self.suppress_next_word_commentary=False
+            return "Роль назначена. Объясняй сразу."
         except Exception:
-            return "Не получилось запустить ход. Возможно, напарник уже начал объяснять."
+            self.suppress_next_word_commentary=False
+            return "Роль могла уже смениться. Продолжай игру."
 
     async def skip_once(self, phrase: str, input_version: int) -> dict:
         # Final ASR and the LLM tool may react to the very same phrase.
@@ -491,15 +520,20 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             or before.get("role") != "unselected"
                             or before.get("isPaused")):
                         return False
+                    agent.suppress_next_word_commentary=True
                     await game.choose_explainer()
                     after = await game.context()
                     if after.get("phase") != "active" or after.get("role") != "explainer":
+                        agent.suppress_next_word_commentary=False
                         return False
+                    if not agent.prime_first_explainer_hint(after):
+                        agent.suppress_next_word_commentary=False
                     role_selection_done = True
                     logger.info("AI role confirmed by server bot=%s reason=%s",
                                 bot_uid[-6:],reason)
                     return True
                 except Exception as error:
+                    agent.suppress_next_word_commentary=False
                     logger.warning("AI role selection deferred bot=%s cause=%s",
                                    bot_uid[-6:],type(error).__name__)
                     return False
