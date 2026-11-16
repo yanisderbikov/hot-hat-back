@@ -101,6 +101,55 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await coord.close()
 
 
+    async def test_pending_generate_reply_never_overlaps_next_card(self):
+        old=("turn","explainer","огненная шляпа",0,False)
+        new=("turn","explainer","воздушный шар",1,False)
+        active=[old]
+        sent=[]
+        commentary=[]
+        waiting=asyncio.get_running_loop().create_future()
+        async def ready():pass
+        def generate(text):
+            sent.append(text)
+            return waiting if len(sent)==1 else asyncio.create_task(ready())
+        coord=CardPromptCoordinator(
+            generate=generate,commentary=commentary.append,
+            state=lambda:("listening","listening"),
+            is_current=lambda key:key==active[0],spoke_at=lambda:0.0,
+            response_timeout=0.04,commentary_grace=0.15,attempts=2)
+        coord.schedule(old,"first clue")
+        await asyncio.wait_for(coord._task,timeout=2)
+        self.assertEqual(sent,["first clue"])
+        self.assertFalse(waiting.done(), "SDK request remains alive after timeout")
+        active[0]=new
+        coord.schedule(new,"fresh word")
+        await asyncio.wait_for(coord._task,timeout=2)
+        self.assertEqual(sent,["first clue"],
+                         "Must not start a second reply while the old one is pending")
+        self.assertIn("fresh word",commentary)
+        waiting.set_result(None)
+        coord.schedule(new,"fresh word")
+        await asyncio.wait_for(coord._task,timeout=2)
+        self.assertEqual(sent,["first clue","fresh word"])
+        await coord.close()
+
+    async def test_no_rapid_retry_when_realtime_reply_is_pending(self):
+        key=("turn","explainer","маяк",1,False)
+        calls=[]
+        pending=asyncio.get_running_loop().create_future()
+        coord=CardPromptCoordinator(generate=lambda text:calls.append(text) or pending,
+            state=lambda:("listening","listening"),is_current=lambda k:k==key,
+            spoke_at=lambda:0.0,attempts=3,response_timeout=0.04)
+        coord.schedule(key,"say hint")
+        await asyncio.wait_for(coord._task,timeout=2)
+        self.assertEqual(len(calls),1)
+        self.assertFalse(pending.done())
+        coord.schedule(key,"another hint")
+        await asyncio.wait_for(coord._task,timeout=2)
+        self.assertEqual(len(calls),1)
+        pending.set_result(None)
+        await coord.close()
+
     async def test_native_gpt_live_commentary_starts_voice_without_second_request(self):
         key=("r1","explainer","Пингвин",1,False)
         spoke=[0.0]
