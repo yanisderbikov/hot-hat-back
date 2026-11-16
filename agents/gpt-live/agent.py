@@ -716,8 +716,13 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             if solo_explainer and candidate_card_key:
                 human_guess = {
                     "key": candidate_card_key, "phrase": phrase,
-                    "at": time.monotonic(), "status": "pending",
-                    "approval_requested": False,
+                    "at": time.monotonic(),
+                    # The model may begin saying "Да" BEFORE the final ASR
+                    # transcript arrives. The real VAD speech-onset time
+                    # is the correct temporal boundary, not ASR end time.
+                    "speech_started_at": (duet_live.last_peer_voice
+                                          or time.monotonic()-2.0),
+                    "status": "pending", "approval_requested": False,
                 }
                 pending_human_guess = human_guess
             if is_duo and candidate_card_key:
@@ -1090,7 +1095,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             candidate=guess["key"]
             if (candidate != active_prompt_key or
                     time.monotonic()-guess["at"] > 8.0 or
-                    last_agent_spoke < guess["at"]-0.3):
+                    last_agent_spoke < guess["speech_started_at"]-0.3):
                 return
             guess["approval_requested"]=True
             try:
