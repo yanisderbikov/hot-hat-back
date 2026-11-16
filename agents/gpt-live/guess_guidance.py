@@ -7,6 +7,7 @@ Never log the returned clue, transcript, or the secret.
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass
 
 _WORDS = re.compile(r"[^\W_]+", re.UNICODE)
@@ -104,3 +105,34 @@ def partial_compound_guess(secret: str, spoken: str) -> PartialGuess | None:
     if matched == (0,):
         return PartialGuess("missing_object", matched)
     return PartialGuess("partial", matched)
+
+
+DUET_VOICE_GUESS_TOPIC = "hot-hat.duet.guess.v1"
+
+
+def verified_duet_voice_packet(payload: bytes, *, topic: str,
+                              sender: str, expected_peer: str,
+                              turn_id: str, revision: int) -> str | None:
+    """Accept an own-voice transcript only from the authorized linked AI.
+
+    The relay has NO secret and is not scoring authority; the explainer must
+    still send the candidate through the authenticated backend's exact matcher.
+    """
+    if (topic != DUET_VOICE_GUESS_TOPIC or not expected_peer
+            or sender != expected_peer or not turn_id
+            or not isinstance(payload, bytes) or len(payload) > 800):
+        return None
+    try:
+        row = json.loads(payload.decode("utf-8"))
+        if (not isinstance(row, dict) or row.get("v") != 1 or
+                row.get("turnId") != turn_id or
+                type(row.get("cardRevision")) is not int or
+                row.get("cardRevision") != revision):
+            return None
+        phrase = row.get("phrase")
+        if (not isinstance(phrase, str) or len(phrase) > 180
+                or not guess_signature(phrase)):
+            return None
+        return phrase.strip() or None
+    except (ValueError, UnicodeError, TypeError):
+        return None
