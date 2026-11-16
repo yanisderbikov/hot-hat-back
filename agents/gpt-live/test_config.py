@@ -162,7 +162,8 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('partial_compound_guess(candidate_card_key[2], phrase)',source)
         self.assertIn('candidate_card_key==active_prompt_key',source)
         self.assertIn('current.get("cardRevision")',source)
-        self.assertIn('followup = partial.instruction(',source)
+        self.assertIn('already_spoken_component_hint(',source)
+        self.assertIn('partial.instruction(',source)
         self.assertIn('card_prompts.schedule(candidate_card_key, followup)',source)
         # In human+AI the same clarification is active, not only in AI+AI.
         self.assertIn('and solo_explainer:',source)
