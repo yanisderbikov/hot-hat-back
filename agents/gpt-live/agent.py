@@ -740,6 +740,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 )):
                     result = await agent.skip_once(phrase, input_version)
                     if result.get("skipped"):
+                        if pending_human_guess is human_guess:
+                            pending_human_guess=None
                         # Only a new authoritative card can issue its hint;
                         # no competing immediate generation from the old card.
                         await stop_stale_explanation()
@@ -1063,18 +1065,81 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             if _ai_committed_to_explaining(getattr(item,"text_content","")):
                 await ensure_server_started_for_bot("bot_committed")
 
+        async def on_assistant_spoken_approval(event):
+            """Turn an EXPLICIT assistant 'Да!' into a real guessed action.
+
+            The legacy realtime model could say 'Да!' on a correct human
+            guess but the strict ASR matcher returned FORM_NOT_EXACT.
+            Conversely, a partial 'Да, но какой?' MUST NOT click a word.
+            The backend makes the final, identity-bound and version-bound
+            decision, exactly like a human explainer's UI action.
+            """
+            nonlocal pending_human_guess, active_prompt_key
+            if not solo_explainer or latest != "explainer" or stop.is_set():
+                return
+            item=getattr(event,"item",None)
+            if (getattr(item,"role","") != "assistant" or
+                    getattr(item,"interrupted",False)):
+                return
+            approval=_standalone_voice_approval(getattr(item,"text_content",""))
+            if not approval:
+                return
+            guess=pending_human_guess
+            if not guess or guess.get("approval_requested"):
+                return
+            candidate=guess["key"]
+            if (candidate != active_prompt_key or
+                    time.monotonic()-guess["at"] > 8.0 or
+                    last_agent_spoke < guess["at"]-0.3):
+                return
+            guess["approval_requested"]=True
+            try:
+                async with score_lock:
+                    if (guess["status"] != "unmatched" or
+                            candidate != active_prompt_key):
+                        return
+                    result=await game.approve_human_guess(
+                        human_uid,guess["phrase"],approval,
+                        str(candidate[0]),int(candidate[3]))
+                logger.info("AI explainer verbal approval: bot=%s scored=%s",
+                            bot_uid[-6:],bool(result.get("matched")))
+                if not result.get("matched"):
+                    return
+                if pending_human_guess is guess:
+                    pending_human_guess=None
+                compound_asr.clear()
+                agent.recent_word_keys.add(str(result.get("actionId") or ""))
+                agent.duplex_session.append_thinking(
+                    "Только что подтверждённое слово ЗАСЧИТАНО. "
+                    "Прежняя карточка закрыта навсегда. "
+                    "Не описывай её больше. Следующая придёт с сервера.")
+                if active_prompt_key == candidate:
+                    active_prompt_key=None
+                    await card_prompts.close()
+                    await stop_stale_explanation(verified_score=True)
+                if result.get("turnClosed"):
+                    stop.set()
+            except Exception as exc:
+                logger.warning("AI verbal approval not committed bot=%s error=%s",
+                               bot_uid[-6:],type(exc).__name__)
+
+        async def on_solo_assistant_item(event):
+            await on_assistant_role_commitment(event)
+            await on_assistant_spoken_approval(event)
+
         if mode == "game" and not scripted_partner:
             if is_duo:
                 session.on("conversation_item_added",
                            lambda event: asyncio.create_task(on_guesser_own_voice(event)))
             else:
                 session.on("conversation_item_added",
-                           lambda event: asyncio.create_task(on_assistant_role_commitment(event)))
+                           lambda event: asyncio.create_task(on_solo_assistant_item(event)))
 
         async def follow_game_state():
             nonlocal latest, duet_wrong_guesses, active_prompt_key
             nonlocal last_card_switched_at, duet_partial_key, duet_partial_repeats
             nonlocal duet_guesser_last_key, duet_guesser_repeat_count
+            nonlocal pending_human_guess
             previous = None
             pending_duet_ack = None
             while not stop.is_set():
@@ -1135,6 +1200,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 # The server may advance the card while the speech-match
                 # HTTP request is still resolving. Let its explainer finish
                 # selecting the acknowledgement before new-word commentary.
+                if (pending_human_guess is not None and
+                        pending_human_guess["key"] != key):
+                    # A delayed assistant 'yes' from the PREVIOUS word must
+                    # not grant the NEXT word a point.
+                    pending_human_guess=None
                 if key != previous and not (
                         is_duo and duet_guess_verification_pending):
                     # Switching cards is an actual gameplay transition, not
