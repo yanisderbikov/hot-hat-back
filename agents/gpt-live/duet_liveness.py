@@ -24,6 +24,9 @@ class DuetLiveness:
     # Opt-in fast cadence for LIVE 60-second match. Historical default
     # remains unchanged for replay compatibility and standalone tests.
     speed_round: bool = False
+    # Production-only explainer initiative. Tests and ordinary listening
+    # modes retain their historic delays unless explicitly opted in.
+    continuous_explainer: bool = False
 
     def mark_spoke(self, now: float) -> None:
         self.last_voice = now
@@ -94,6 +97,13 @@ class DuetLiveness:
                      ) if role == "explainer" else 7.5
             thinking_delay = 12.0
             cooldown = 7.5
+        if self.continuous_explainer and role == "explainer":
+            # In a 60-second word race, 3.2s solo idle + 1.35s tick is
+            # a painful multi-second pause after EACH clue. Keep offering
+            # new hints when the partner is silent, but never while either
+            # participant is actually speaking (guards above).
+            delay = 0.9 if self.last_peer_voice > self.last_voice else 1.7
+            cooldown = 2.2 if self.fast_duet else 2.5
         # Only reset an actually stuck thinking state, not speaking audio.
         if agent_state == "thinking":
             delay = max(delay, thinking_delay)
