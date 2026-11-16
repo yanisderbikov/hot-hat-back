@@ -49,6 +49,20 @@ class GameClient:
         })
         return {**result, "actionId": action_id}
 
+    async def approve_human_guess(
+            self, human_uid: str, transcript: str, approval: str,
+            turn_id: str, card_revision: int) -> dict:
+        # A human+AI explainer's short verbal confirmation is game
+        # adjudication, not a harmless sound effect. Server validates the
+        # linked human speaker and SAME active card before awarding points.
+        action_id = "aia_" + uuid.uuid4().hex
+        result = await self.request("POST", "approve-human-guess", {
+            "speakerUid": human_uid, "transcript": transcript[:500],
+            "approvalText": approval, "turnId": turn_id,
+            "cardRevision": card_revision, "actionId": action_id,
+        })
+        return {**result, "actionId": action_id}
+
     async def duet_guesser_spoke(self, transcript: str) -> dict:
         # Worker-only identity is the authenticated AI session, never a
         # browser-provided speakerUid. The server checks the actual GUESSER.
