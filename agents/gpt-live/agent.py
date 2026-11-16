@@ -482,8 +482,21 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         last_immediate_hint = 0.0
         last_duet_reply_requested = 0.0
         active_prompt_key = None
+        async def reset_orphaned_speech():
+            # Reset only failed output, never cut off a real active voice.
+            if (str(getattr(session,"agent_state","")) != "speaking"
+                    and str(getattr(session,"user_state","")) != "speaking"):
+                try:
+                    await session.interrupt(force=True)
+                except RuntimeError:
+                    pass
+
         card_prompts = CardPromptCoordinator(
             generate=lambda text: session.generate_reply(instructions=text),
+            commentary=lambda text: agent.duplex_session.append_commentary(text),
+            reset=reset_orphaned_speech,
+            require_voice=True,
+            response_timeout=2.6,
             state=lambda: (str(getattr(session,"agent_state","")),
                            str(getattr(session,"user_state",""))),
             is_current=lambda key: (not stop.is_set()
@@ -786,16 +799,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         if changed_active_card or beginning_explanation:
                             # Old audio cannot continue after a NEW server card.
                             await stop_stale_explanation()
-                        agent.duplex_session.append_instructions(
-                            "ПРЕДЫДУЩАЯ КАРТОЧКА ЗАКРЫТА. Не возвращайся к ней. "
-                            "ТВОЯ РОЛЬ: ОБЪЯСНЯЮЩИЙ. Текущее секретное слово: "
-                            + str(word) +
-                            ". Живо объясняй его человеку, не произнося "
-                            "само слово или однокоренные формы. "
-                            "Подбирай разные ассоциации и примеры, пока "
-                            "напарник не догадается. Если это всё ещё "
-                            "текущая карточка — продолжай подсказки. "
-                            "О системе проверки и очках вслух не говори."
+                        # A word is ephemeral private thinking, NOT a
+                        # permanent instruction: older standing secrets were
+                        # pulling Rublisha back to Museum after Penguin.
+                        agent.duplex_session.append_thinking(
+                            "Текущий игровой контекст. Ты объясняешь. "
+                            "Загадано сейчас слово №" + str(key[3]) + ": "
+                            + str(word) + ". Все прежние загадки закрыты. "
+                            "Не произноси само слово или его корни. "
+                            "Говори только игровую подсказку."
                         )
                         skip_second_prompt=agent.suppress_next_word_commentary
                         agent.suppress_next_word_commentary=False
@@ -809,26 +821,20 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             # NOT reliably start a new spoken answer while
                             # the duplex model is working. A real score gets
                             # an explicit response with the NEW secret word.
+                            # Only normal game speech: NEVER prompt the
+                            # model with meta phrases like NEW CARD or SERVER.
                             reply_instruction=(
-                                ("Сервер засчитал голосовой ответ. "
-                                 "Только ты, ОБЪЯСНЯЮЩИЙ, коротко скажи "
+                                ("Скажи одно краткое «"
                                  + pending_duet_ack
-                                 + ". СРАЗУ начни ОДНУ новую подсказку "
-                                   "к ТЕКУЩЕМУ секретному слову, 3–8 слов. "
-                                   "Не называй его и не обсуждай очки.")
+                                 + "» и сразу дай другой признак "
+                                   "загаданного предмета, не раскрывая его.")
                                 if is_duo and pending_duet_ack else
-                                ("НОВАЯ КАРТОЧКА: объясни текущее слово "
-                                 "одной конкретной подсказкой 3–8 слов. "
-                                 "Дай угадывающему возможность ответить "
-                                 "ДАЖЕ ЕСЛИ он перебьёт тебя. Без вступлений."
-                                 if is_duo else
-                                 "НОВАЯ подтверждённая карточка: немедленно "
-                                 "дай подсказку только к ней. Прошлую карточку "
-                                 "не повторяй, новое секретное слово не произноси.")
+                                "Немедленно произнеси короткую конкретную "
+                                "подсказку к загаданному предмету (3–8 слов). "
+                                "Без объявления действий, заголовков, "
+                                "метакомментариев и вступлений. "
+                                "Не называй ответ. Слушай догадки напарника."
                             )
-                            # When the model is busy this request is queued,
-                            # retried after refusal and cancelled if the next
-                            # server card supersedes it. Never silently drop.
                             card_prompts.schedule(key, reply_instruction)
                             pending_duet_ack = None
                             agent.pending_voice_confirmation = None

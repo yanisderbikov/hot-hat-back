@@ -323,3 +323,21 @@ class TurnStateRegressions(unittest.TestCase):
         self.assertIn('if changed_active_card or beginning_explanation:',source)
         self.assertIn('await stop_stale_explanation()',source)
         self.assertIn('agent.suppress_next_word_commentary = False',source)
+
+
+class NaturalClueContractRegressions(unittest.TestCase):
+    def test_secret_is_ephemeral_private_context(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        self.assertIn('agent.duplex_session.append_thinking(',source)
+        self.assertNotIn('"ПРЕДЫДУЩАЯ КАРТОЧКА ЗАКРЫТА.',source)
+        self.assertIn('commentary=lambda text: agent.duplex_session.append_commentary(text)',source)
+        self.assertIn('require_voice=True',source)
+        self.assertIn('reset=reset_orphaned_speech',source)
+    def test_speech_request_has_no_meta_headings(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        begin=source.index('reply_instruction=(\n')
+        end=source.index('card_prompts.schedule(key, reply_instruction)',begin)
+        block=source[begin:end]
+        self.assertNotIn('"НОВАЯ КАРТОЧКА:',block)
+        self.assertNotIn('"Сервер засчитал голосовой ответ.',block)
+        self.assertIn('Немедленно произнеси короткую конкретную',block)
