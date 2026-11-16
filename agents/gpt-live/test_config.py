@@ -137,6 +137,27 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("duet_wrong_guesses in (2, 4)", source)
         self.assertNotIn('"НОВАЯ КАРТОЧКА: объясни текущее слово"', source)
 
+    def test_fast_adaptive_feedback_on_partial_and_interrupted_guesses(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        ast.parse(source)
+        self.assertIn("from guess_guidance import guess_signature, partial_compound_guess",source)
+        # Server scoring remains separate; only a finalized, authenticated
+        # peer transcript can invoke the prompt coordinator.
+        self.assertIn('if not getattr(event, "is_final", False):',source)
+        self.assertIn('result = await game.heard(human_uid, phrase)',source)
+        self.assertIn('partial_compound_guess(candidate_card_key[2], phrase)',source)
+        self.assertIn('candidate_card_key==active_prompt_key',source)
+        self.assertIn('current.get("cardRevision")',source)
+        self.assertIn('followup = partial.instruction(',source)
+        self.assertIn('card_prompts.schedule(candidate_card_key, followup)',source)
+        # In human+AI the same clarification is active, not only in AI+AI.
+        self.assertIn('and solo_explainer:',source)
+        self.assertIn('partial_compound_guess(\n',source)
+        # No watchdog direct generate_reply races with new-card speech.
+        self.assertIn('if base_action == "give_hint":',source)
+        self.assertIn('card_prompts.schedule(active_prompt_key,phrase)',source)
+        self.assertIn('duet_guesser_repeat_count in (2, 4, 7)',source)
+
     def test_duet_backend_prompts_speak_guesses_without_tools(self):
         from config import DUET_VOICE_INSTRUCTIONS, DUET_BACKEND_INSTRUCTIONS
         self.assertIn("НЕ требуется никакой игровой инструмент", DUET_VOICE_INSTRUCTIONS)
