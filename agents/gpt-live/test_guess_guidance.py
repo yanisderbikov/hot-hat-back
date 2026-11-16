@@ -2,8 +2,8 @@
 import unittest
 
 from guess_guidance import (CompoundTranscriptWindow, DUET_VOICE_GUESS_TOPIC,
-                            guess_signature, partial_compound_guess,
-                            verified_duet_voice_packet)
+                            already_spoken_component_hint, guess_signature,
+                            partial_compound_guess, verified_duet_voice_packet)
 
 
 class GuessGuidanceTests(unittest.TestCase):
@@ -96,6 +96,18 @@ class GuessGuidanceTests(unittest.TestCase):
                                        phrase="снежный",now=1))
         self.assertIsNone(window.offer(secret="снежный человек",card_key=key,
                                        phrase="снежный человек",now=2))
+
+    def test_partial_hint_repeats_only_component_the_player_already_guessed(self):
+        partial = partial_compound_guess("соленый огурец", "огурец")
+        hint = already_spoken_component_hint("соленый огурец",partial)
+        self.assertIn("огурец",hint)
+        self.assertNotIn("соленый",hint)
+        self.assertIn("НЕ произноси остальные",hint)
+        # If only the adjective was identified, the noun remains secret.
+        other = partial_compound_guess("снежный человек","снежный")
+        clue = already_spoken_component_hint("снежный человек",other)
+        self.assertIn("снежный",clue)
+        self.assertNotIn("человек",clue)
 
     def test_private_livekit_relay_only_accepts_this_peer_and_card(self):
         import json
