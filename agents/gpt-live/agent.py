@@ -59,6 +59,22 @@ def _prewarm_vad(proc):
 server.setup_fnc = _prewarm_vad
 
 
+def _standalone_voice_approval(text: str) -> str | None:
+    """Only unmistakable FINAL one-phrase spoken approvals can click a word.
+
+    "Да, но какой?" acknowledges a partial answer and MUST NEVER score.
+    The model's own spoken approval is still subject to the server's
+    identity, card revision and game-turn validation.
+    """
+    import re as _re
+    normalized = _re.sub(r"[^а-яa-z0-9 ]+", " ", str(text or "").lower().replace("ё", "е"))
+    normalized = " ".join(normalized.split())
+    return normalized if normalized in (
+        "да", "верно", "точно", "правильно", "есть",
+        "угадал", "угадала", "именно", "это оно", "так и есть",
+    ) else None
+
+
 def _is_voice_confirmed_guess(row: dict) -> bool:
     """Only a server-confirmed voice recognition may cause a verbal 'Есть!'.
 
@@ -525,6 +541,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         # explainer receives both peer ASR and the reliable LiveKit relay.
         duet_recent_guess_keys: dict[tuple, float] = {}
         compound_asr = CompoundTranscriptWindow()
+        # Only the immediately preceding FINAL spoken HUMAN guess may be
+        # approved by a short verbal "Да!" from an AI explainer.
+        pending_human_guess = None
+        score_lock = asyncio.Lock()
         role_selection_lock = asyncio.Lock()
         role_selection_done = False
 
@@ -625,13 +645,18 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             return session.generate_reply(instructions=instructions)
 
         async def stop_stale_explanation(*, verified_score: bool = False):
-            # GPT-Live generates SERVER-side and cannot have its actual
-            # response cancelled/truncated. LiveKit interruption cuts only
-            # LOCAL playback and can strand an in-flight delegated tool.
-            # We must never interrupt() on score or card change. The
-            # watcher installs the new secret as private thinking, and
-            # the model transitions naturally at the next speech boundary.
-            return
+            # In this recording the model KEPT AUDIBLY EXPLAINING the old
+            # answer after a verified MATCH. A full-duplex GPT-Live model
+            # continues thinking internally after an interrupt, but LiveKit
+            # can stop its LOCAL playout. Do this only on a real server
+            # score/card change, never on VAD or an incorrect guess.
+            if not verified_score or str(getattr(session,"agent_state","")) != "speaking":
+                return
+            try:
+                await asyncio.wait_for(session.interrupt(force=False),timeout=0.65)
+                logger.info("GPT-Live stale_card_playout_stopped bot=%s",bot_uid[-6:])
+            except (RuntimeError,asyncio.TimeoutError):
+                logger.info("GPT-Live stale_card_playout_not_stopped bot=%s",bot_uid[-6:])
 
         def duet_agent_speech(event):
             nonlocal last_agent_spoke, last_logged_voice_key
@@ -685,7 +710,16 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             nonlocal duet_wrong_guesses, duet_guess_verification_pending
             nonlocal last_immediate_hint, last_duet_wrong_nudge, active_prompt_key
             nonlocal duet_partial_key, duet_partial_repeats
+            nonlocal pending_human_guess
             candidate_card_key = active_prompt_key
+            human_guess = None
+            if solo_explainer and candidate_card_key:
+                human_guess = {
+                    "key": candidate_card_key, "phrase": phrase,
+                    "at": time.monotonic(), "status": "pending",
+                    "approval_requested": False,
+                }
+                pending_human_guess = human_guess
             if is_duo and candidate_card_key:
                 dedup_key=(candidate_card_key,guess_signature(phrase))
                 received_at=time.monotonic()
@@ -725,15 +759,23 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         if candidate_card_key and candidate_card_key[2]
                         else None
                     )
-                    result = await game.heard(human_uid, phrase)
-                    if (not result.get("matched") and stitched and
-                            result.get("reason") == "FORM_NOT_EXACT"):
-                        composed = await game.heard(human_uid,stitched)
-                        if composed.get("matched"):
-                            result=composed
-                            logger.info(
-                                "Compound ASR fragments voice-scored bot=%s",
-                                bot_uid[-6:])
+                    async with score_lock:
+                        result = await game.heard(human_uid, phrase)
+                        if (not result.get("matched") and stitched and
+                                result.get("reason") == "FORM_NOT_EXACT"):
+                            composed = await game.heard(human_uid,stitched)
+                            if composed.get("matched"):
+                                result=composed
+                                logger.info(
+                                    "Compound ASR fragments voice-scored bot=%s",
+                                    bot_uid[-6:])
+                        if human_guess is not None:
+                            if result.get("matched"):
+                                human_guess["status"]="matched"
+                                if pending_human_guess is human_guess:
+                                    pending_human_guess=None
+                            else:
+                                human_guess["status"]="unmatched"
                     if mode == "game":
                         # No phrases/secrets in production logs. See both human
                         # and AI+AI results when a player reports false "Верно".
@@ -748,6 +790,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                     bot_uid[-6:], "MATCH" if result.get("matched")
                                     else str(result.get("reason") or "NO_MATCH")[:32])
                     if result.get("matched"):
+                        # The point has already changed on the server. Never
+                        # continue the old secret in the model's inner state.
+                        agent.duplex_session.append_thinking(
+                            "ПРЕДЫДУЩАЯ КАРТОЧКА ЗАКРЫТА. Не объясняй "
+                            "её снова. Ожидай только новую карточку.")
                         compound_asr.clear()
                         agent.recent_word_keys.add(str(result.get("actionId") or ""))
                         duet_wrong_guesses = 0
