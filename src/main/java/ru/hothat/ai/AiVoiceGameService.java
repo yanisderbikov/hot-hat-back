@@ -188,6 +188,36 @@ public class AiVoiceGameService {
                     return true;
             }
         }
+        // A natural spoken answer may include a brief hesitation between
+        // both FULL components: "огненная, ну, шляпа". ASR retains "ну",
+        // which formerly made the otherwise complete answer FORM_NOT_EXACT.
+        // Permit ONLY a tiny fixed set of discourse fillers in the gap.
+        // Never skip a meaningful noun, adjective or negation.
+        if(need.length==2) {
+            if(twoWordPartsWithFillers(need,spoken,0,1)
+                    ||twoWordPartsWithFillers(need,spoken,1,0))
+                return true;
+        }
+        return false;
+    }
+
+    private static boolean twoWordPartsWithFillers(
+            String[] need,String[] spoken,int first,int second) {
+        Set<String> fillers=Set.of("ну","это","вот","же","да","а","эм","ээ");
+        for(int start=0;start<spoken.length;start++) {
+            if(!sameSpokenRussianForm(need[first],spoken[start]))continue;
+            for(int end=start+2;end<spoken.length && end<=start+3;end++) {
+                if(!sameSpokenRussianForm(need[second],spoken[end]))continue;
+                boolean onlyFillers=true;
+                for(int between=start+1;between<end;between++) {
+                    if(!fillers.contains(spoken[between])) {
+                        onlyFillers=false;
+                        break;
+                    }
+                }
+                if(onlyFillers)return true;
+            }
+        }
         return false;
     }
 
