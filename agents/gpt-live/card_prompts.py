@@ -159,22 +159,42 @@ class CardPromptCoordinator:
                 if handle is None:
                     raise RuntimeError("generate_reply did not return a request")
                 self._pending_handle=handle
-                # The SDK can decline an advisory speech request after TEN
-                # seconds. Short timeout + shield was leaving a live model
-                # request and spawning more competing ones.
+                # An advisory generate_reply can stay pending for ten seconds
+                # even while the native model is deciding whether to speak.
+                # During this interval DON'T let the game go silent: keep
+                # refreshing commentary every ~1.8s, without creating another
+                # concurrent response or talking over the teammate.
                 try:
-                    await asyncio.wait_for(asyncio.shield(handle),
-                                           timeout=self.response_timeout)
-                except asyncio.TimeoutError:
-                    if self.spoke_at() > baseline or self.state()[0] == "speaking":
+                    deadline=time.monotonic()+self.response_timeout
+                    next_nudge=time.monotonic()+1.8
+                    while not handle.done() and self.is_current(key):
+                        if (self.spoke_at() > baseline or
+                                self.state()[0] == "speaking"):
+                            return
+                        now=time.monotonic()
+                        if now >= deadline:
+                            self.log("card_prompt_pending",attempt+1,
+                                     "provider_not_finished")
+                            return
+                        if (now >= next_nudge and self.commentary is not None
+                                and self.state()[1] != "speaking"):
+                            self.commentary(
+                                "Время игры идёт! Продолжай коротко объяснять "
+                                "ТЕКУЩЕЕ слово новым конкретным признаком, "
+                                "не называя ответ.")
+                            self.log("card_prompt_live_nudge",attempt+1,
+                                     "still_silent")
+                            next_nudge=now+1.8
+                        await self.sleep(0.15)
+                    if not self.is_current(key):
                         return
-                    self.log("card_prompt_pending",attempt+1,"awaiting_provider")
-                    return
+                    if handle.done():
+                        await handle
+                        if handle.exception() is not None:
+                            raise RuntimeError(type(handle.exception()).__name__)
                 finally:
                     if handle.done() and self._pending_handle is handle:
                         self._pending_handle=None
-                if handle.exception() is not None:
-                    raise RuntimeError(type(handle.exception()).__name__)
                 if self.require_voice and self.spoke_at() <= baseline:
                     # A successful handle is not evidence that the full-duplex
                     # model actually produced any sound. Wait for an event.
