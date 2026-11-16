@@ -290,13 +290,34 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("Никогда не произноси фразы о времени",
                       DUET_VOICE_INSTRUCTIONS)
 
+    def test_AI_spoken_yes_is_a_server_scoring_action_not_a_sound_effect(self):
+        from agent import _standalone_voice_approval
+        for text in ("Да!", "Верно.", "Точно!", "Правильно", "Это оно",
+                     "Угадал!", "Так и есть"):
+            self.assertIsNotNone(_standalone_voice_approval(text),text)
+        for text in ("да, но какой?", "да, близко", "да нет",
+                     "давай дальше", "да это предмет?", "да! но не такой",
+                     "возможно", ""):
+            self.assertIsNone(_standalone_voice_approval(text),text)
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        client=Path(__file__).with_name("game_client.py").read_text(
+            encoding="utf-8")
+        self.assertIn('async def on_assistant_spoken_approval(event):',source)
+        self.assertIn('await game.approve_human_guess(',source)
+        self.assertIn('if not result.get("matched"):',source)
+        self.assertIn('pending_human_guess["key"] != key',source)
+        self.assertIn('"approve-human-guess"',client)
+        self.assertIn('async with score_lock:',source)
+
     def test_score_wakes_next_card_without_forcing_idle_duplex_reset(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
-        # GPT-Live owns its turns; even force=False interrupted tool output
-        # and stranded the next clue. No explicit session interrupts survive.
+        # Never interrupt on unverified speech. Stop only stale local
+        # playback when the authoritative server has counted a word.
         self.assertIn('async def stop_stale_explanation(',source)
-        self.assertNotIn('await session.interrupt(',source)
+        self.assertIn('if not verified_score or',source)
+        self.assertIn('session.interrupt(force=False)',source)
+        self.assertNotIn('session.interrupt(force=True)',source)
         self.assertIn('verified_score=changed_active_card or beginning_explanation',source)
         self.assertIn('attempts=2,',source)
         self.assertIn('response_timeout=10.5,',source)
