@@ -79,11 +79,11 @@ def _standalone_voice_approval(text: str) -> str | None:
     # item. Treat the unequivocal first sentence as the approval, but
     # NEVER accept corrections like "Да! Но какой именно?".
     leading=_re.match(
-        r"^\\s*(да|верно|точно|правильно|есть|угадал|угадала|именно)"
-        r"\\s*[!.]\\s+(.+)$",
+        r"^\s*(да|верно|точно|правильно|есть|угадал|угадала|именно)"
+        r"\s*[!.]\s+(.+)$",
         str(text or "").lower().replace("ё","е").strip())
     if leading and not _re.match(
-            r"^(но|почти|близко|не|какой|что|скорее|может|возможно)\\b",
+            r"^(но|почти|близко|не|какой|что|скорее|может|возможно)\b",
             leading.group(2).strip()):
         return leading.group(1)
     return None
