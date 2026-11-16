@@ -53,7 +53,10 @@ class DuetLiveness:
         # Strictly no voice or LLM requests outside an ACTIVE, paid game turn.
         if phase != "active" or paused or role not in ("explainer", "guesser"):
             return None
-        if deadline_ms <= epoch_ms + 5500:
+        # A 60-second round is not finished with five seconds left.
+        # Keep responding until the final ~2 seconds; the old 5.5s guard
+        # silenced bots during exactly the window users need a final hint.
+        if deadline_ms <= epoch_ms + 2000:
             return None
         if role == "explainer" and not word:
             return None
