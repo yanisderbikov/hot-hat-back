@@ -133,7 +133,7 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent,["first clue","fresh word"])
         await coord.close()
 
-    async def test_pending_provider_receives_quick_nudges_not_second_speech_request(self):
+    async def test_pending_provider_never_paraphrases_repeated_clock_nudges(self):
         key=("turn","explainer","огненная шляпа",2,False)
         pending=asyncio.get_running_loop().create_future()
         generated=[]
@@ -147,8 +147,8 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         coord.schedule(key,"first clue")
         await asyncio.wait_for(coord._task,timeout=3)
         self.assertEqual(generated,["first clue"])
-        self.assertGreaterEqual(len(commentary),2,
-            "Do not wait in silence while the full-duplex model holds a response")
+        self.assertEqual(commentary,["first clue"],
+            "Commentary is AUDIBLE; never inject countdown or repeated coaching")
         self.assertFalse(pending.done())
         pending.set_result(None)
         await coord.close()
