@@ -135,12 +135,14 @@ class AiVoiceDispatchSchedulerTest {
                 .botUid(BOT).mode("game").status("failed")
                 .errorCode("DUET_DEADLOCK").turnKey(base+BOT).build()
         ));
-        for(String uid:List.of(BOT,second)){
-            when(usage.reserve(eq(ROOM_ID),eq(1),eq(TEAM),eq(uid),
-                    eq(base+uid+":recovery1"),isNull(),eq(true)))
-                .thenReturn(AiVoiceSession.builder().sessionId("ai_retry_"+uid)
-                    .status("pending").build());
-        }
+        when(usage.reserveDuo(eq(ROOM_ID),eq(1),eq(TEAM),
+                eq(List.of(BOT,second)),eq(List.of(base+BOT+":recovery1",
+                        base+second+":recovery1"))))
+                .thenReturn(List.of(
+                    AiVoiceSession.builder().sessionId("ai_retry_"+BOT)
+                            .botUid(BOT).status("pending").build(),
+                    AiVoiceSession.builder().sessionId("ai_retry_"+second)
+                            .botUid(second).status("pending").build()));
         when(livekit.createAiDispatch(eq(ROOM_ID),anyString()))
                 .thenReturn(Map.of("id","retry-dispatch"));
 
@@ -174,11 +176,78 @@ class AiVoiceDispatchSchedulerTest {
                 .botUid(BOT).mode("game").status("failed")
                 .errorCode("DUET_DEADLOCK").turnKey(base+BOT).build()
         ));
-        when(usage.reserve(eq(ROOM_ID),eq(1),eq(TEAM),anyString(),
-                anyString(),isNull(),eq(true))).thenReturn(
-                AiVoiceSession.builder().status("failed").build());
+        when(usage.reserveDuo(eq(ROOM_ID),eq(1),eq(TEAM),
+                eq(List.of(BOT,second)),anyList())).thenReturn(List.of(
+                AiVoiceSession.builder().status("failed").build(),
+                AiVoiceSession.builder().status("failed").build()));
         scheduler.reconcile();
         verify(livekit,never()).createAiDispatch(anyString(),anyString());
+    }
+
+    @Test
+    void duetReservesBothBeforeDispatchingFirstPaidParticipant() {
+        enable();
+        String second="ai-gpt-live-bbbbbbbbbbbbbbbbbb";
+        Room room=activeRoom();
+        room.setTeamRosters(Map.of(TEAM,List.of(BOT,second)));
+        when(rooms.getByPhase("turnIntro",100)).thenReturn(List.of(room));
+        when(rooms.getByPhase("active",100)).thenReturn(List.of());
+        for(String uid:List.of(BOT,second)){
+            when(rooms.getPlayer(ROOM_ID,uid)).thenReturn(Optional.of(
+                    RoomPlayer.builder().roomId(ROOM_ID).uid(uid)
+                            .teamId(TEAM).isTestBot(true).build()));
+        }
+        when(usage.activeSessions()).thenReturn(List.of());
+        when(usage.gameSessions(ROOM_ID,1)).thenReturn(List.of());
+        when(usage.reserveDuo(eq(ROOM_ID),eq(1),eq(TEAM),
+                eq(List.of(BOT,second)),anyList())).thenReturn(List.of(
+                AiVoiceSession.builder().sessionId("ai_pair_1")
+                        .botUid(BOT).status("pending").build(),
+                AiVoiceSession.builder().sessionId("ai_pair_2")
+                        .botUid(second).status("pending").build()));
+        when(livekit.createAiDispatch(eq(ROOM_ID),anyString())).thenReturn(
+                Map.of("id","dispatch-one"),Map.of("id","dispatch-two"));
+
+        scheduler.reconcile();
+
+        org.mockito.InOrder order=inOrder(usage,livekit);
+        order.verify(usage).reserveDuo(eq(ROOM_ID),eq(1),eq(TEAM),
+                eq(List.of(BOT,second)),anyList());
+        order.verify(livekit).createAiDispatch(eq(ROOM_ID),anyString());
+        verify(livekit,times(2)).createAiDispatch(eq(ROOM_ID),anyString());
+        verify(usage).markDispatched("ai_pair_1","dispatch-one");
+        verify(usage).markDispatched("ai_pair_2","dispatch-two");
+    }
+
+    @Test
+    void failedSecondDuetDispatchStopsOrphanedFirstImmediately() {
+        enable();
+        String second="ai-gpt-live-bbbbbbbbbbbbbbbbbb";
+        Room room=activeRoom();
+        room.setTeamRosters(Map.of(TEAM,List.of(BOT,second)));
+        when(rooms.getByPhase("turnIntro",100)).thenReturn(List.of(room));
+        when(rooms.getByPhase("active",100)).thenReturn(List.of());
+        for(String uid:List.of(BOT,second))
+            when(rooms.getPlayer(ROOM_ID,uid)).thenReturn(Optional.of(
+                    RoomPlayer.builder().roomId(ROOM_ID).uid(uid)
+                            .teamId(TEAM).isTestBot(true).build()));
+        when(usage.activeSessions()).thenReturn(List.of());
+        when(usage.gameSessions(ROOM_ID,1)).thenReturn(List.of());
+        when(usage.reserveDuo(eq(ROOM_ID),eq(1),eq(TEAM),
+                eq(List.of(BOT,second)),anyList())).thenReturn(List.of(
+                AiVoiceSession.builder().sessionId("ai_pair_1")
+                        .botUid(BOT).status("pending").build(),
+                AiVoiceSession.builder().sessionId("ai_pair_2")
+                        .botUid(second).status("pending").build()));
+        when(livekit.createAiDispatch(eq(ROOM_ID),anyString())).thenReturn(
+                Map.of("id","dispatch-one"))
+                .thenThrow(new RuntimeException("dispatch failed"));
+
+        scheduler.reconcile();
+
+        verify(usage).failDispatch("ai_pair_2","DUET_DISPATCH_FAILED");
+        verify(livekit).deleteAiDispatch(ROOM_ID,"dispatch-one");
+        verify(usage).beginStopping("ai_pair_1");
     }
 
     @Test
