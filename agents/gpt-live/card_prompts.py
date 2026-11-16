@@ -68,6 +68,15 @@ class CardPromptCoordinator:
             return
         if self._task is not None and not self._task.done():
             self._task.cancel()
+        if key != self._key and self._pending_handle is not None:
+            # GPT-Live explicitly supports superseding an unfinished
+            # generate_reply with a NEW request. Keeping the old handle
+            # blocked all next-card speech for up to 10 seconds.
+            # Only an AUTHORITATIVE card change can supersede a request:
+            # same-card repeated guesses remain serialized.
+            self.log("card_prompt_supersede", int(key[3]) if len(key)>3 else 0,
+                     "new_authoritative_card")
+            self._pending_handle = None
         self._key = key
         self._last_update_at = 0.0
         # Log numeric revision ONLY; never the secret word in production.
