@@ -158,6 +158,24 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('card_prompts.schedule(active_prompt_key,phrase)',source)
         self.assertIn('duet_guesser_repeat_count in (2, 4, 7)',source)
 
+    def test_duet_reliable_own_voice_relay_is_tied_to_authenticated_peer(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        ast.parse(source)
+        self.assertIn('ctx.room.on("data_received",on_duet_guess_packet)',source)
+        self.assertIn("verified_duet_voice_packet(",source)
+        self.assertIn('sender=sender,expected_peer=human_uid,',source)
+        self.assertIn('revision=int(active_prompt_key[3] or 0)',source)
+        self.assertIn('destination_identities=[human_uid]',source)
+        self.assertIn("topic=DUET_VOICE_GUESS_TOPIC",source)
+        self.assertIn('result.get("reason") == "FORM_NOT_EXACT"',source)
+        self.assertIn('SimpleNamespace(is_final=True,transcript=candidate)',source)
+        self.assertIn('if received_at-duet_recent_guess_keys.get(dedup_key,-100.0)<1.6:',source)
+        # The relay never transmits a secret; only what the guesser said.
+        begin=source.index('await ctx.room.local_participant.publish_data(')
+        end=source.index('logger.info("Duet own-voice relay sent',begin)
+        self.assertNotIn('currentWord',source[begin:end])
+        self.assertNotIn('secret',source[begin:end])
+
     def test_duet_backend_prompts_speak_guesses_without_tools(self):
         from config import DUET_VOICE_INSTRUCTIONS, DUET_BACKEND_INSTRUCTIONS
         self.assertIn("НЕ требуется никакой игровой инструмент", DUET_VOICE_INSTRUCTIONS)
