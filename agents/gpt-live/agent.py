@@ -271,8 +271,8 @@ class HotHatPlayer(Agent):
             + ". Это секрет: никогда не произноси само слово или его части.")
         self.duplex_session.append_commentary(
             "СРАЗУ объясняй этот предмет напарнику коротким признаком. "
-            "Время уже идёт, не жди дополнительной команды. "
-            "Потом внимательно слушай догадку и сразу продолжай. "
+            "После первой подсказки внимательно слушай догадку "
+            "и сразу объясняй дальше новым конкретным признаком. "
             "Не называй ответ.")
         return True
 
@@ -567,17 +567,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         last_card_switched_at = 0.0
         active_prompt_key = None
         async def reset_orphaned_speech():
-            # The Nov 16 recording proved that forced interrupts of an
-            # otherwise LISTENING GPT-Live model made the *next* three
-            # generate_reply calls fail. Never reset healthy listening state.
-            # Only a genuinely stuck thinking state may be interrupted.
-            if (str(getattr(session,"agent_state","")) == "thinking"
-                    and str(getattr(session,"user_state","")) != "speaking"
-                    and time.monotonic()-duet_live.last_activity >= 5.0):
-                try:
-                    await session.interrupt(force=False)
-                except RuntimeError:
-                    pass
+            # GPT-Live is server-driven: even force=False may break an
+            # outstanding delegated tool result and leave the model SILENT.
+            # No interruption is a valid recovery mechanism for this model.
+            # The coordinator can emit native private guidance while the
+            # existing model decides when to speak.
+            return
 
         card_prompts = CardPromptCoordinator(
             generate=lambda text: session.generate_reply(instructions=text),
@@ -629,24 +624,13 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             return session.generate_reply(instructions=instructions)
 
         async def stop_stale_explanation(*, verified_score: bool = False):
-            # GPT-Live already handles real barge-in naturally. Forcing a
-            # model interrupt while it reports "listening" (or while its
-            # next reply is preparing) caused minutes of refused voice starts.
-            # After a server-verified score, gently stop ONLY audible old
-            # speech. Do not reset idle/thinking model internals.
-            state=str(getattr(session, "agent_state", ""))
-            if verified_score:
-                if state != "speaking":
-                    return
-                force=False
-            else:
-                if state not in ("speaking","thinking"):
-                    return
-                force=(state=="thinking")
-            try:
-                await asyncio.wait_for(session.interrupt(force=force),timeout=0.85)
-            except (RuntimeError, asyncio.TimeoutError):
-                pass
+            # GPT-Live generates SERVER-side and cannot have its actual
+            # response cancelled/truncated. LiveKit interruption cuts only
+            # LOCAL playback and can strand an in-flight delegated tool.
+            # We must never interrupt() on score or card change. The
+            # watcher installs the new secret as private thinking, and
+            # the model transitions naturally at the next speech boundary.
+            return
 
         def duet_agent_speech(event):
             nonlocal last_agent_spoke
@@ -1241,18 +1225,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     if card_prompts.busy:
                         duet_live.pending=False
                         continue
+                    # No session.interrupt() from watchdog: native GPT-Live
+                    # barge-in already yields to real partner speech. Forced
+                    # resets were precisely what stranded delegated tools.
                     recover_thinking=action.startswith("reset_")
-                    if recover_thinking:
-                        # GPT-Live owns its own voice turns. Forcibly cutting
-                        # model output in a thinking state caused subsequent
-                        # hints to be rejected. A gentle interrupt is only
-                        # advisory; the queued commentary below remains the
-                        # primary recovery path.
-                        try:
-                            await asyncio.wait_for(session.interrupt(force=False),
-                                                   timeout=0.8)
-                        except (RuntimeError,asyncio.TimeoutError):
-                            pass
                     # A new card may have just requested a response; do
                     # not race a second generate_reply with that request.
                     if is_duo and time.monotonic()-last_duet_reply_requested < 1.75:
@@ -1262,8 +1238,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     phrase={
                         "give_hint": (
                             "Твоя очередь ОБЪЯСНЯТЬ. Не называй тайное слово. "
-                            "Немедленно дай ОДНУ новую короткую подсказку. "
-                            "Не жди, пока тебя попросят, часы идут!"
+                            "Дай другой конкретный признак текущего предмета. "
+                            "Не повторяй прежнюю подсказку и не говори о ходе игры."
                         ),
                         "make_guess": (
                             "Твоя очередь УГАДЫВАТЬ по уже услышанной подсказке. "
@@ -1302,13 +1278,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     except asyncio.TimeoutError:
                         logger.warning("Duet recovery response timed out: bot=%s",
                                        bot_uid[-6:])
-                        # Only interrupt an orphaned generation, not real audio.
-                        if str(getattr(session, "agent_state", "")) != "speaking":
-                            try:
-                                await asyncio.wait_for(
-                                    session.interrupt(force=True),timeout=2)
-                            except (RuntimeError,asyncio.TimeoutError):
-                                pass
+                        # Do not interrupt: this GPT-Live response continues
+                        # running on the provider side even after the
+                        # framework timeout; killing playout won't fix it.
                     finally:
                         duet_live.pending=False
                 except Exception as exc:
