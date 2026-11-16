@@ -119,6 +119,27 @@ def partial_compound_guess(secret: str, spoken: str) -> PartialGuess | None:
 
 
 
+
+def already_spoken_component_hint(secret: str, partial: PartialGuess) -> str:
+    """Echo ONLY the component the teammate already spoke, never missing words.
+
+    This context goes privately to the EXPLAINER. It does not reveal a new
+    answer fragment to the GUESSER or override authoritative server scoring.
+    """
+    tokens=words(secret)
+    confirmed=tuple(tokens[i] for i in partial.matched_indices if i<len(tokens))
+    if not confirmed:
+        return ""
+    return (
+        "Напарник УЖЕ назвал часть составного ответа: «" +
+        " ".join(confirmed) +
+        "». Разрешено повторить ТОЛЬКО эту уже названную часть, "
+        "сразу добавив вопрос о недостающем уточнении. "
+        "НЕ произноси остальные части или весь секрет. "
+        "Не говори просто «Да!» как при полном зачёте. "
+    )
+
+
 @dataclass
 class CompoundTranscriptWindow:
     """Combine adjacent completed ASR fragments, never guessing a secret.
