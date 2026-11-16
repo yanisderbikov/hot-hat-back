@@ -17,6 +17,7 @@ import time
 from types import SimpleNamespace
 
 from livekit import rtc
+from livekit.plugins import silero
 from livekit.agents import (
     Agent, AgentServer, AgentSession, JobContext, room_io,
     RunContext, cli, inference,
@@ -39,6 +40,23 @@ from guess_guidance import (
 
 logger = logging.getLogger("hot-hat-gpt-live")
 server = AgentServer()
+
+
+def _prewarm_vad(proc):
+    """Preload local VAD before any time-limited game job starts.
+
+    GPT-Live owns its turns. Without an explicit VAD, LiveKit cannot
+    interrupt its audio playback as soon as the teammate starts speaking.
+    Reusing a prewarmed model avoids startup latency on each new turn.
+    """
+    proc.userdata["vad"] = silero.VAD.load(
+        min_speech_duration=0.12,
+        min_silence_duration=0.35,
+        activation_threshold=0.55,
+    )
+
+
+server.setup_fnc = _prewarm_vad
 
 
 def _is_voice_confirmed_guess(row: dict) -> bool:
@@ -461,6 +479,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         } if is_duo else {})
         session = AgentSession(
             **duet_turn_settings,
+            # GPT-Live controls its own model output, but framework VAD
+            # immediately cuts LOCAL playback on real teammate speech.
+            # Otherwise completed guesses are masked by the explainer.
+            vad=ctx.proc.userdata["vad"],
             llm=inference.DuplexModel(
             model=MODEL_ID,
             voice=voice,
