@@ -565,6 +565,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         last_duet_reply_requested = 0.0
         last_duet_wrong_nudge = 0.0
         last_card_switched_at = 0.0
+        last_logged_voice_key = None
         active_prompt_key = None
         async def reset_orphaned_speech():
             # GPT-Live is server-driven: even force=False may break an
@@ -633,10 +634,22 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             return
 
         def duet_agent_speech(event):
-            nonlocal last_agent_spoke
+            nonlocal last_agent_spoke, last_logged_voice_key
             if watch_game_speech and str(getattr(event, "new_state", "")) == "speaking":
                 last_agent_spoke = time.monotonic()
                 duet_live.mark_spoke(last_agent_spoke)
+                # Measure ACTUAL first audio after a card update, not when
+                # the scheduler accepted a command. This exposes 10-20s
+                # dead air without leaking secrets or user transcripts.
+                if (active_prompt_key is not None and
+                        active_prompt_key != last_logged_voice_key and
+                        last_card_switched_at > 0):
+                    logger.info(
+                        "GPT-Live first_clue_audio bot=%s role=explainer "
+                        "card_rev=%d latency_ms=%d",
+                        bot_uid[-6:],active_prompt_key[3],
+                        max(0,int((last_agent_spoke-last_card_switched_at)*1000)))
+                    last_logged_voice_key=active_prompt_key
 
         def duet_partner_speech(event):
             if watch_game_speech and str(getattr(event, "new_state", "")) == "speaking":
