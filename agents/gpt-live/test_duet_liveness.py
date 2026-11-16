@@ -15,6 +15,34 @@ def next_action(live, now, *, role="explainer", word="Секрет",
 
 
 class DuetLivenessTests(unittest.TestCase):
+    def test_production_continuous_explainer_provides_hints_within_two_seconds(self):
+        live=DuetLiveness(last_activity=0,speed_round=True,
+                          continuous_explainer=True)
+        live.card_changed("turn","explainer","огненная шляпа",0)
+        self.assertIsNone(next_action(live,1.6,word="огненная шляпа"))
+        self.assertEqual(next_action(live,1.8,word="огненная шляпа"),"give_hint")
+        live.pending=False
+        live.mark_spoke(2.0)
+        # Never talk over the guessing teammate, including mid-utterance.
+        self.assertIsNone(next_action(live,4.0,word="огненная шляпа",
+                                      user_state="speaking"))
+        live.mark_heard(4.1)
+        self.assertIsNone(next_action(live,4.8,word="огненная шляпа"))
+        self.assertEqual(next_action(live,5.6,word="огненная шляпа"),"give_hint")
+
+    def test_production_duet_explainer_yields_during_peer_speech_then_resumes(self):
+        live=DuetLiveness(last_activity=0,speed_round=True,fast_duet=True,
+                          continuous_explainer=True)
+        live.card_changed("turn","explainer","маяк",0)
+        self.assertIsNone(next_action(live,2.0,word="маяк",
+                                      user_state="speaking"))
+        self.assertEqual(next_action(live,2.0,word="маяк"),"give_hint")
+        live.pending=False
+        live.mark_spoke(2.3)
+        live.mark_heard(5.0)
+        self.assertIsNone(next_action(live,5.3,word="маяк"))
+        self.assertEqual(next_action(live,6.0,word="маяк"),"give_hint")
+
     def test_explainer_restarts_hint_after_five_and_half_seconds_of_silence(self):
         live=DuetLiveness(last_activity=0)
         live.card_changed("turn-1","explainer","Метеорит",0)
