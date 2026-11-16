@@ -137,7 +137,7 @@ class AiVoiceDuetScoringTest {
 
     @Test void explainerCannotSubmitHisOwnSecretAsGuesser() {
         Fixture f=make(EXPLAINER);
-        assertEquals("DUET_GUESSER_ONLY",f.service().guessedByDuetVoice(
+        assertEquals("AI_GUESSER_ONLY",f.service().guessedByDuetVoice(
             "ai_voice","Компас","aig_123456789012345678").get("reason"));
         verify(f.engine(),never()).guess(any(),anyString(),anyString());
         verify(f.transaction(),never()).commit();
