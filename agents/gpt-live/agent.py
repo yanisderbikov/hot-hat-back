@@ -32,8 +32,8 @@ from game_client import GameClient
 from duet_liveness import DuetLiveness
 from card_prompts import CardPromptCoordinator
 from guess_guidance import (
-    DUET_VOICE_GUESS_TOPIC, guess_signature, partial_compound_guess,
-    verified_duet_voice_packet,
+    CompoundTranscriptWindow, DUET_VOICE_GUESS_TOPIC,
+    guess_signature, partial_compound_guess, verified_duet_voice_packet,
 )
 
 logger = logging.getLogger("hot-hat-gpt-live")
@@ -464,6 +464,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         # Single accepted reaction per actual utterance even when the
         # explainer receives both peer ASR and the reliable LiveKit relay.
         duet_recent_guess_keys: dict[tuple, float] = {}
+        compound_asr = CompoundTranscriptWindow()
         role_selection_lock = asyncio.Lock()
         role_selection_done = False
 
@@ -633,7 +634,28 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 else:
                     if is_duo:
                         duet_guess_verification_pending = True
+                    # Realtime ASR may finalize "снежный" and "человек"
+                    # separately when the player INTERRUPTS our voice.
+                    # Stitch only two recent partial fragments from the
+                    # SAME authoritative secret card. The backend still
+                    # verifies exact words before a score is awarded.
+                    stitched = (
+                        compound_asr.offer(
+                            secret=candidate_card_key[2],
+                            card_key=candidate_card_key,phrase=phrase,
+                            now=time.monotonic())
+                        if candidate_card_key and candidate_card_key[2]
+                        else None
+                    )
                     result = await game.heard(human_uid, phrase)
+                    if (not result.get("matched") and stitched and
+                            result.get("reason") == "FORM_NOT_EXACT"):
+                        composed = await game.heard(human_uid,stitched)
+                        if composed.get("matched"):
+                            result=composed
+                            logger.info(
+                                "Compound ASR fragments voice-scored bot=%s",
+                                bot_uid[-6:])
                     if mode == "game":
                         # No phrases/secrets in production logs. See both human
                         # and AI+AI results when a player reports false "Верно".
@@ -648,6 +670,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                     bot_uid[-6:], "MATCH" if result.get("matched")
                                     else str(result.get("reason") or "NO_MATCH")[:32])
                     if result.get("matched"):
+                        compound_asr.clear()
                         agent.recent_word_keys.add(str(result.get("actionId") or ""))
                         duet_wrong_guesses = 0
                         # The server already advanced the card. Do not ask
