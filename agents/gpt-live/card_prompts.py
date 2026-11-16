@@ -42,6 +42,7 @@ class CardPromptCoordinator:
         # GPT-Live generate_reply can remain pending for 10 seconds. The
         # coordinator must remember it even if the old card task is cancelled.
         self._pending_handle = None
+        self._superseding_key = None
 
     @property
     def busy(self) -> bool:
@@ -77,6 +78,9 @@ class CardPromptCoordinator:
             self.log("card_prompt_supersede", int(key[3]) if len(key)>3 else 0,
                      "new_authoritative_card")
             self._pending_handle = None
+            self._superseding_key = key
+        else:
+            self._superseding_key = None
         self._key = key
         self._last_update_at = 0.0
         # Log numeric revision ONLY; never the secret word in production.
@@ -136,6 +140,12 @@ class CardPromptCoordinator:
                 elapsed = time.monotonic() - waiting_since
                 if not (busy_agent or busy_peer):
                     break
+                if (agent_state == "thinking" and not busy_peer
+                        and key == self._superseding_key):
+                    # Unlike a repeated same-card retry, a NEW server card
+                    # may replace an old pending GPT-Live answer. The SDK
+                    # explicitly ends the old request on a newer request.
+                    break
                 # Never generate a second response WHILE the teammate is
                 # talking: the old 0.6s cap did exactly that and caused
                 # repeated RuntimeError refusals after barge-in.
@@ -160,7 +170,9 @@ class CardPromptCoordinator:
                 return
             # State can flip between the last poll and this generation.
             agent_state, peer_state = self.state()
-            if peer_state == "speaking" or agent_state in ("speaking","thinking","initializing"):
+            if (peer_state == "speaking" or
+                    agent_state in ("speaking","initializing") or
+                    (agent_state == "thinking" and key != self._superseding_key)):
                 self.log("card_prompt_yield_busy", 0, "state_changed")
                 return
             try:
@@ -169,6 +181,8 @@ class CardPromptCoordinator:
                 if handle is None:
                     raise RuntimeError("generate_reply did not return a request")
                 self._pending_handle=handle
+                if self._superseding_key == key:
+                    self._superseding_key = None
                 # An advisory generate_reply can stay pending for ten seconds
                 # even while the native model is deciding whether to speak.
                 # During this interval DON'T let the game go silent: keep
