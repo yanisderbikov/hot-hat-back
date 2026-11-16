@@ -59,17 +59,15 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         called=[]
         peer=["speaking"]
         async def finish():return None
-        # Simulate 2.5 seconds of player speech without sleeping in real time.
-        import unittest.mock
-        with unittest.mock.patch("card_prompts.time.monotonic",
-                                  side_effect=[0, 0, 0, 2.6]):
-            coord=CardPromptCoordinator(
-                generate=lambda s:called.append(s) or asyncio.create_task(finish()),
-                state=lambda:("listening",peer[0]),
-                is_current=lambda k:k==key,spoke_at=lambda:0.0,
-                sleep=lambda _:asyncio.sleep(0))
-            coord.schedule(key,"give next hint")
-            await asyncio.wait_for(coord._task,timeout=2)
+        # Wait out the real 2.5-second maximum peer-speech yield.
+        # Do not monkeypatch time.monotonic: asyncio shares that clock.
+        coord=CardPromptCoordinator(
+            generate=lambda s:called.append(s) or asyncio.create_task(finish()),
+            state=lambda:("listening",peer[0]),
+            is_current=lambda k:k==key,spoke_at=lambda:0.0,
+            sleep=asyncio.sleep)
+        coord.schedule(key,"give next hint")
+        await asyncio.wait_for(coord._task,timeout=4)
         self.assertEqual(called,[], "Never start speech while partner is speaking")
         peer[0]="listening"
         coord.schedule(key,"give next hint")
