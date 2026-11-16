@@ -510,11 +510,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         last_card_switched_at = 0.0
         active_prompt_key = None
         async def reset_orphaned_speech():
-            # Reset only failed output, never cut off a real active voice.
-            if (str(getattr(session,"agent_state","")) != "speaking"
-                    and str(getattr(session,"user_state","")) != "speaking"):
+            # The Nov 16 recording proved that forced interrupts of an
+            # otherwise LISTENING GPT-Live model made the *next* three
+            # generate_reply calls fail. Never reset healthy listening state.
+            # Only a genuinely stuck thinking state may be interrupted.
+            if (str(getattr(session,"agent_state","")) == "thinking"
+                    and str(getattr(session,"user_state","")) != "speaking"
+                    and time.monotonic()-duet_live.last_activity >= 5.0):
                 try:
-                    await session.interrupt(force=True)
+                    await session.interrupt(force=False)
                 except RuntimeError:
                     pass
 
@@ -523,8 +527,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             commentary=lambda text: agent.duplex_session.append_commentary(text),
             reset=reset_orphaned_speech,
             require_voice=True,
-            response_timeout=2.0,
-            commentary_grace=1.1 if is_duo else 0.75,
+            attempts=2,
+            response_timeout=1.3,
+            commentary_grace=0.45 if is_duo else 0.35,
             state=lambda: (str(getattr(session,"agent_state","")),
                            str(getattr(session,"user_state",""))),
             is_current=lambda key: (not stop.is_set()
@@ -562,16 +567,22 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             return session.generate_reply(instructions=instructions)
 
         async def stop_stale_explanation(*, verified_score: bool = False):
-            # On an authoritative MATCH a pending generation can still hold
-            # old-card audio even while the agent reports "listening".
-            # A forced interruption is safe AFTER the server has counted the
-            # completed human guess; never force one from noisy VAD fragments.
-            if (not verified_score and
-                    str(getattr(session, "agent_state", "")) not in (
-                        "speaking", "thinking")):
-                return
+            # GPT-Live already handles real barge-in naturally. Forcing a
+            # model interrupt while it reports "listening" (or while its
+            # next reply is preparing) caused minutes of refused voice starts.
+            # After a server-verified score, gently stop ONLY audible old
+            # speech. Do not reset idle/thinking model internals.
+            state=str(getattr(session, "agent_state", ""))
+            if verified_score:
+                if state != "speaking":
+                    return
+                force=False
+            else:
+                if state not in ("speaking","thinking"):
+                    return
+                force=(state=="thinking")
             try:
-                await asyncio.wait_for(session.interrupt(force=True), timeout=1.6)
+                await asyncio.wait_for(session.interrupt(force=force),timeout=0.85)
             except (RuntimeError, asyncio.TimeoutError):
                 pass
 
@@ -1043,7 +1054,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             # Any unfinished greeting or old-card generation
                             # must yield to the server's first playable word.
                             await stop_stale_explanation(
-                                verified_score=beginning_explanation and not is_duo)
+                                verified_score=changed_active_card or beginning_explanation)
                         # A word is ephemeral private thinking, NOT a
                         # permanent instruction: older standing secrets were
                         # pulling Rublisha back to Museum after Penguin.
@@ -1118,7 +1129,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 # A voice-scored AI answer should reach the explainer before
                 # another multi-second clue starts. Poll more frequently only
                 # for short live two-AI rounds (not for smalltalk).
-                await asyncio.sleep(0.24 if is_duo and role in ("explainer", "guesser")
+                # Observe the next card within ~250ms after a confirmed
+                # spoken score, not after a 700ms poll. This is still
+                # low-rate compared with audio/event traffic.
+                await asyncio.sleep(0.22 if role in ("explainer","guesser")
                                     else 0.7)
 
         async def duet_liveness_watchdog():
