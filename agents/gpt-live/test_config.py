@@ -293,10 +293,12 @@ class SettingsTests(unittest.TestCase):
     def test_AI_spoken_yes_is_a_server_scoring_action_not_a_sound_effect(self):
         from agent import _standalone_voice_approval
         for text in ("Да!", "Верно.", "Точно!", "Правильно", "Это оно",
-                     "Угадал!", "Так и есть"):
+                     "Угадал!", "Так и есть", "Да! Ещё один признак.",
+                     "Верно. Следующая загадка."):
             self.assertIsNotNone(_standalone_voice_approval(text),text)
         for text in ("да, но какой?", "да, близко", "да нет",
                      "давай дальше", "да это предмет?", "да! но не такой",
+                     "Да! Почти, но другой.", "Верно! Но нет, другой.",
                      "возможно", ""):
             self.assertIsNone(_standalone_voice_approval(text),text)
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
