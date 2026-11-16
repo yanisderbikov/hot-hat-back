@@ -108,10 +108,10 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         sent=[]
         commentary=[]
         waiting=asyncio.get_running_loop().create_future()
-        async def ready():pass
+        second_waiting=asyncio.get_running_loop().create_future()
         def generate(text):
             sent.append(text)
-            return waiting if len(sent)==1 else asyncio.create_task(ready())
+            return waiting if len(sent)==1 else second_waiting
         coord=CardPromptCoordinator(
             generate=generate,commentary=commentary.append,
             state=lambda:("listening","listening"),
@@ -134,6 +134,7 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(coord._task,timeout=2)
         self.assertEqual(sent,["first clue","fresh word"])
         waiting.set_result(None)
+        second_waiting.set_result(None)
         await coord.close()
 
     async def test_pending_provider_never_paraphrases_repeated_clock_nudges(self):
