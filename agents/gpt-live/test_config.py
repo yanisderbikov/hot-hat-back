@@ -232,11 +232,12 @@ class SettingsTests(unittest.TestCase):
         self.assertNotIn('Ответ НЕ засчитан сервером',rejection)
         self.assertNotIn('СЕРВЕР НЕ ЗАСЧИТАЛ',rejection)
         self.assertNotIn('session.generate_reply(',rejection)
-        self.assertNotIn('await stop_stale_explanation()',rejection)
-        self.assertIn('the full-duplex explainer hears the answer naturally',rejection)
+        self.assertIn('candidate_card_key==active_prompt_key',rejection)
+        self.assertIn('if still_same:',rejection)
+        self.assertIn('await stop_stale_explanation()',rejection)
         self.assertIn('and is_duo:',rejection.splitlines()[0])
 
-    def test_two_ai_never_interrupts_on_vad_or_rejected_asr_fragment(self):
+    def test_two_ai_interrupts_only_on_final_server_verified_same_card(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         start=source.index("def duet_partner_speech(event):")
         end=source.index('session.on("agent_state_changed"',start)
@@ -246,8 +247,9 @@ class SettingsTests(unittest.TestCase):
         start=source.index('elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:')
         end=source.index('            except Exception as exc:',start)
         on_mismatch=source[start:end]
-        self.assertNotIn("stop_stale_explanation()",on_mismatch)
-        self.assertNotIn("generate_reply(",on_mismatch)
+        self.assertIn("if still_same:",on_mismatch)
+        self.assertIn("await stop_stale_explanation()",on_mismatch)
+        self.assertNotIn("session.generate_reply(",on_mismatch)
         self.assertIn("duet_wrong_guesses += 1",on_mismatch)
         self.assertIn("request_duet_reply(instructions: str)",source)
         self.assertIn('peer_state == "speaking"',source)
