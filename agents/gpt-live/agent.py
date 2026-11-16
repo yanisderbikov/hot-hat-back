@@ -507,7 +507,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             commentary=lambda text: agent.duplex_session.append_commentary(text),
             reset=reset_orphaned_speech,
             require_voice=True,
-            response_timeout=2.6,
+            response_timeout=2.0,
+            commentary_grace=1.1 if is_duo else 0.75,
             state=lambda: (str(getattr(session,"agent_state","")),
                            str(getattr(session,"user_state",""))),
             is_current=lambda key: (not stop.is_set()
@@ -720,6 +721,34 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                         "Duet final-guess followup queued bot=%s kind=%s",
                                         bot_uid[-6:],
                                         partial.kind if partial else "different")
+                    elif result.get("reason") == "FORM_NOT_EXACT" and solo_explainer:
+                        # The HUMAN's finalized guess also deserves a prompt
+                        # response. Never react to raw microphone VAD.
+                        if candidate_card_key and candidate_card_key==active_prompt_key:
+                            current=await game.context()
+                            still_same=(
+                                current.get("role")=="explainer" and
+                                current.get("phase")=="active" and
+                                current.get("currentWord")==candidate_card_key[2] and
+                                int(current.get("cardRevision") or 0)==candidate_card_key[3]
+                            )
+                            if still_same:
+                                partial=partial_compound_guess(
+                                    candidate_card_key[2],phrase)
+                                followup=(partial.instruction() if partial else
+                                    "Напарник только что предложил вариант. "
+                                    "Коротко отзовись по смыслу, а затем "
+                                    "дай один НОВЫЙ конкретный признак "
+                                    "загаданного предмета. Без объявления "
+                                    "проверки, без повторения прежней подсказки.")
+                                agent.duplex_session.append_thinking(followup)
+                                if str(getattr(session,"agent_state","")) in (
+                                        "speaking","thinking"):
+                                    await stop_stale_explanation()
+                                card_prompts.schedule(candidate_card_key,followup)
+                                logger.info(
+                                    "Solo final-guess followup queued bot=%s partial=%s",
+                                    bot_uid[-6:], bool(partial))
             except Exception as exc:
                 logger.debug("No game action for transcribed utterance: %s", exc)
             finally:
@@ -888,8 +917,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     changed_active_card=(previous is not None
                         and previous[1] == "explainer"
                         and (previous[2] != word or previous[3] != key[3]))
-                    beginning_explanation=(previous is not None
+                    beginning_explanation=((previous is not None
                         and previous[1] == "unselected" and role == "explainer")
+                        or (previous is None and role == "explainer" and not is_duo))
                     if changed_active_card or beginning_explanation:
                         last_card_switched_at=time.monotonic()
                     previous = key
@@ -901,8 +931,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         # Only the explaining AI receives the word through
                         # authenticated server context. No word in room metadata.
                         if changed_active_card or beginning_explanation:
-                            # Old audio cannot continue after a NEW server card.
-                            await stop_stale_explanation()
+                            # Any unfinished greeting or old-card generation
+                            # must yield to the server's first playable word.
+                            await stop_stale_explanation(
+                                verified_score=beginning_explanation and not is_duo)
                         # A word is ephemeral private thinking, NOT a
                         # permanent instruction: older standing secrets were
                         # pulling Rublisha back to Museum after Penguin.
