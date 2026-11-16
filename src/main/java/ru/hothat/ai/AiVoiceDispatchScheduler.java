@@ -142,13 +142,90 @@ public class AiVoiceDispatchScheduler {
                 : List.of();
         boolean stalledDuet=duet && turnSessions.stream().anyMatch(s->
                 "failed".equals(s.getStatus()) && List.of(
-                        "DUET_DEADLOCK","DUET_OPENING_FAILED","DUET_OPENING_SILENT"
+                        "DUET_DEADLOCK","DUET_OPENING_FAILED","DUET_OPENING_SILENT",
+                        "DUET_DISPATCH_FAILED","DUET_PARTNER_UNAVAILABLE"
                 ).contains(s.getErrorCode()));
         long deadline=GameRules.currentTurnDeadline(room);
         boolean enoughTime="turnIntro".equals(room.getPhase())
                 || ("active".equals(room.getPhase())
                     && deadline>System.currentTimeMillis()+16000L);
         boolean oneRecovery=stalledDuet && enoughTime;
+        if(duet){
+            // Reserve BOTH seats and BOTH budget holds atomically BEFORE
+            // dispatching either. Never start a lone paid worker when the
+            // second worker would exceed the monthly cap.
+            List<AiVoiceSession> current=usage.activeSessions();
+            if(!current.isEmpty()){
+                // Both seats were already launched on a prior reconcile.
+                if(current.size()==2 && current.stream().allMatch(s->
+                        "game".equals(s.getMode()) && room.getId().equals(s.getRoomId())
+                        && Objects.equals(room.getGameNumber(),s.getGameNumber())
+                        && room.getCurrentTeamId().equals(s.getTeamId())
+                        && bots.contains(s.getBotUid())))return;
+                warnBlocked("GPT-Live duet dispatch deferred: other or incomplete voice session");
+                return;
+            }
+            List<String> keys=bots.stream().map(botUid->
+                    roundKey+":"+botUid+(oneRecovery ? ":recovery1" : "")).toList();
+            List<AiVoiceSession> pair=usage.reserveDuo(
+                    room.getId(),room.getGameNumber(),room.getCurrentTeamId(),bots,keys);
+            List<AiVoiceSession> dispatched=new ArrayList<>(2);
+            for(AiVoiceSession allocated:pair){
+                if(!"pending".equals(allocated.getStatus()))continue;
+                if(oneRecovery)
+                    log.warn("GPT-Live bounded duet recovery room={} team={} bot={} attempt=1",
+                            room.getId(),room.getCurrentTeamId(),allocated.getBotUid());
+                try {
+                    String metadata=mapper.writeValueAsString(Map.of(
+                        "sessionId",allocated.getSessionId(),
+                        "roomId",room.getId(),
+                        "botUid",allocated.getBotUid(),
+                        "teamId",room.getCurrentTeamId(),
+                        "gameNumber",room.getGameNumber(),
+                        "shouldGreet",usage.shouldGreet(
+                                room.getId(),room.getGameNumber(),allocated.getBotUid(),
+                                allocated.getSessionId()),
+                        "maxSessionSeconds",180));
+                    Map<String,Object> dispatch=livekit.createAiDispatch(room.getId(),metadata);
+                    String dispatchId=Json.str(dispatch.get("id"));
+                    if(dispatchId.isBlank())throw new IllegalStateException("Missing LiveKit dispatch ID");
+                    usage.markDispatched(allocated.getSessionId(),dispatchId);
+                    allocated.setLivekitDispatchId(dispatchId);
+                    dispatched.add(allocated);
+                    log.info("GPT-Live duet voice dispatched room={} team={} bot={} session={}",
+                            room.getId(),room.getCurrentTeamId(),allocated.getBotUid(),
+                            allocated.getSessionId());
+                }catch(Exception error){
+                    usage.failDispatch(allocated.getSessionId(),"DUET_DISPATCH_FAILED");
+                    // The partner is already reserved but not running.
+                    for(AiVoiceSession other:pair){
+                        if(!other.getSessionId().equals(allocated.getSessionId())
+                                && dispatched.stream().noneMatch(s->
+                                    s.getSessionId().equals(other.getSessionId())))
+                            usage.failDispatch(other.getSessionId(),"DUET_PARTNER_UNAVAILABLE");
+                    }
+                    // If the first dispatch succeeded but the second failed,
+                    // stop the first immediately rather than paying for silence.
+                    for(AiVoiceSession started:dispatched){
+                        try {
+                            livekit.deleteAiDispatch(room.getId(),
+                                    started.getLivekitDispatchId());
+                        }catch(RuntimeException stopError){
+                            log.warn("GPT-Live orphaned duet dispatch stop failed: {}",
+                                    stopError.getClass().getSimpleName());
+                        }
+                        usage.beginStopping(started.getSessionId());
+                    }
+                    log.warn("GPT-Live duet pairing failed room={} bot={} cause={}",
+                            room.getId(),allocated.getBotUid(),
+                            error.getClass().getSimpleName());
+                    return;
+                }
+            }
+            return;
+        }
+
+        // Non-duet human+AI and scripted-pair sessions remain single-agent.
         for(String botUid:bots){
             List<AiVoiceSession> active=usage.activeSessions();
             boolean alreadyRunning=active.stream().anyMatch(s->
@@ -156,30 +233,15 @@ public class AiVoiceDispatchScheduler {
                     && Objects.equals(room.getGameNumber(),s.getGameNumber())
                     && botUid.equals(s.getBotUid()));
             if(alreadyRunning)continue;
-            // Duet may have exactly one other ACTIVE game agent of its own
-            // pair. Any other room/session or STOPPING job blocks new costs.
-            boolean mayJoin=duet && active.size()==1 && active.stream().allMatch(s->
-                    "game".equals(s.getMode()) && !"stopping".equals(s.getStatus())
-                    && room.getId().equals(s.getRoomId())
-                    && Objects.equals(room.getGameNumber(),s.getGameNumber())
-                    && room.getCurrentTeamId().equals(s.getTeamId())
-                    && bots.contains(s.getBotUid()));
-            if(!active.isEmpty() && !mayJoin){
+            if(!active.isEmpty()){
                 warnBlocked("GPT-Live dispatch blocked room="+room.getId()
                         +" by existing voice session status="+active.get(0).getStatus());
                 return;
             }
-            String key=duet ? roundKey+":"+botUid
-                    + (oneRecovery ? ":recovery1" : "") : roundKey;
-            AiVoiceSession allocated=duet
-                    ? usage.reserve(room.getId(),room.getGameNumber(),room.getCurrentTeamId(),
-                            botUid,key,null,true)
-                    : usage.reserve(room.getId(),room.getGameNumber(),room.getCurrentTeamId(),
-                            botUid,key);
+            AiVoiceSession allocated=usage.reserve(
+                    room.getId(),room.getGameNumber(),room.getCurrentTeamId(),
+                    botUid,roundKey);
             if(!"pending".equals(allocated.getStatus()))continue;
-            if(oneRecovery)
-                log.warn("GPT-Live bounded duet recovery room={} team={} bot={} attempt=1",
-                        room.getId(),room.getCurrentTeamId(),botUid);
             try {
                 String metadata=mapper.writeValueAsString(Map.of(
                     "sessionId",allocated.getSessionId(),
@@ -187,18 +249,19 @@ public class AiVoiceDispatchScheduler {
                     "botUid",botUid,
                     "teamId",room.getCurrentTeamId(),
                     "gameNumber",room.getGameNumber(),
-                    "shouldGreet",usage.shouldGreet(room.getId(),room.getGameNumber(),botUid,allocated.getSessionId()),
+                    "shouldGreet",usage.shouldGreet(
+                            room.getId(),room.getGameNumber(),botUid,allocated.getSessionId()),
                     "maxSessionSeconds",180));
                 Map<String,Object> dispatch=livekit.createAiDispatch(room.getId(),metadata);
                 String dispatchId=Json.str(dispatch.get("id"));
                 usage.markDispatched(allocated.getSessionId(),dispatchId);
                 log.info("GPT-Live voice dispatched room={} game={} team={} bot={} session={}",
-                        room.getId(),room.getGameNumber(),room.getCurrentTeamId(),botUid,allocated.getSessionId());
-            }catch(Exception e){
+                        room.getId(),room.getGameNumber(),room.getCurrentTeamId(),
+                        botUid,allocated.getSessionId());
+            }catch(Exception error){
                 usage.failDispatch(allocated.getSessionId(),"DISPATCH_FAILED");
                 log.warn("GPT-Live explicit dispatch failed for room {} bot {}: {}",
-                        room.getId(),botUid,e.getMessage());
-                if(duet)return; // don't pay for a lone agent with no partner
+                        room.getId(),botUid,error.getMessage());
             }
         }
     }
