@@ -1,7 +1,7 @@
 """SCRUM-52: real compound-word guesses should produce useful guidance."""
 import unittest
 
-from guess_guidance import guess_signature, partial_compound_guess
+from guess_guidance import (DUET_VOICE_GUESS_TOPIC, guess_signature,\n                            partial_compound_guess, verified_duet_voice_packet)
 
 
 class GuessGuidanceTests(unittest.TestCase):
@@ -53,6 +53,35 @@ class GuessGuidanceTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertNotIn("огурец", result.instruction().lower())
         self.assertNotIn(guessed, result.instruction())
+
+    def test_private_livekit_relay_only_accepts_this_peer_and_card(self):
+        import json
+        data=json.dumps({"v":1,"turnId":"round-A","cardRevision":4,
+                         "phrase":"огурец?"},ensure_ascii=False).encode("utf-8")
+        args=dict(topic=DUET_VOICE_GUESS_TOPIC,sender="trusted-bot",
+                  expected_peer="trusted-bot",turn_id="round-A",revision=4)
+        self.assertEqual("огурец?",verified_duet_voice_packet(data,**args))
+        self.assertIsNone(verified_duet_voice_packet(
+            data,**{**args,"sender":"another-team"}))
+        self.assertIsNone(verified_duet_voice_packet(
+            data,**{**args,"topic":"untrusted-topic"}))
+        self.assertIsNone(verified_duet_voice_packet(
+            data,**{**args,"turn_id":"old-round"}))
+        self.assertIsNone(verified_duet_voice_packet(
+            data,**{**args,"revision":5}))
+
+    def test_voice_relay_rejects_non_speech_and_oversized_packets(self):
+        import json
+        args=dict(topic=DUET_VOICE_GUESS_TOPIC,sender="bot",
+                  expected_peer="bot",turn_id="round",revision=0)
+        for data in (b"",b"not-json",b"x"*801,
+                     json.dumps({"v":1,"turnId":"round","cardRevision":0,
+                                 "phrase":123}).encode(),
+                     json.dumps({"v":1,"turnId":"round","cardRevision":0,
+                                 "phrase":" "}).encode(),
+                     json.dumps({"v":1,"turnId":"round","cardRevision":True,
+                                 "phrase":"огурец"}).encode()):
+            self.assertIsNone(verified_duet_voice_packet(data,**args))
 
     def test_guesser_repetition_signature_ignores_filler(self):
         self.assertEqual(guess_signature("Это огурец?"),
