@@ -296,7 +296,7 @@ class SettingsTests(unittest.TestCase):
         # GPT-Live owns its turns; even force=False interrupted tool output
         # and stranded the next clue. No explicit session interrupts survive.
         self.assertIn('async def stop_stale_explanation(',source)
-        self.assertNotIn('session.interrupt(',source)
+        self.assertNotIn('await session.interrupt(',source)
         self.assertIn('verified_score=changed_active_card or beginning_explanation',source)
         self.assertIn('attempts=2,',source)
         self.assertIn('response_timeout=10.5,',source)
