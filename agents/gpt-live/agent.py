@@ -30,6 +30,7 @@ from config import (
 from game_client import GameClient
 from duet_liveness import DuetLiveness
 from card_prompts import CardPromptCoordinator
+from guess_guidance import guess_signature, partial_compound_guess
 
 logger = logging.getLogger("hot-hat-gpt-live")
 server = AgentServer()
@@ -450,6 +451,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         last_agent_spoke = 0.0
         duet_wrong_guesses = 0
         duet_guess_verification_pending = False
+        # Per-card partial answers are private to the active explainer.
+        duet_partial_key = None
+        duet_partial_repeats = 0
+        # The guesser never sees the secret, only its own repeated utterances.
+        duet_guesser_last_key = None
+        duet_guesser_repeat_count = 0
         role_selection_lock = asyncio.Lock()
         role_selection_done = False
 
@@ -590,6 +597,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 return
             nonlocal duet_wrong_guesses, duet_guess_verification_pending
             nonlocal last_immediate_hint, last_duet_wrong_nudge, active_prompt_key
+            nonlocal duet_partial_key, duet_partial_repeats
             candidate_card_key = active_prompt_key
             try:
                 lower = phrase.lower()
@@ -655,10 +663,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         # the guesser's own voice may ALREADY have scored
                         # the word while this late ASR fragment is arriving.
                         now=time.monotonic()
+                        partial = (partial_compound_guess(candidate_card_key[2], phrase)
+                                   if candidate_card_key else None)
                         if (candidate_card_key and
                                 candidate_card_key==active_prompt_key and
-                                now-last_card_switched_at>=0.9 and
-                                now-last_duet_wrong_nudge>=1.4):
+                                (now-last_card_switched_at>=0.9 or partial is not None) and
+                                now-last_duet_wrong_nudge>=1.0):
                             current=await game.context()
                             still_same=(
                                 current.get("role")=="explainer" and
@@ -668,19 +678,48 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             )
                             if still_same:
                                 last_duet_wrong_nudge=now
-                                # Yield to the guesser now that a complete
-                                # spoken proposal was received. Never force
-                                # stop from VAD onset or partial transcripts.
-                                if str(getattr(session,"agent_state","")) in (
-                                        "speaking","thinking"):
-                                    await stop_stale_explanation()
-                                card_prompts.schedule(candidate_card_key,
-                                    "Ответ напарника пока другой. Сразу дай "
-                                    "иной короткий признак предмета, затем "
-                                    "дослушай следующую попытку. "
-                                    "Никаких комментариев о проверке.")
-                                logger.info("Duet final-guess followup queued bot=%s",
-                                            bot_uid[-6:])
+                                if partial:
+                                    signature = (candidate_card_key,
+                                                 guess_signature(phrase))
+                                    if signature == duet_partial_key:
+                                        duet_partial_repeats += 1
+                                    else:
+                                        duet_partial_key = signature
+                                        duet_partial_repeats = 1
+                                    followup = partial.instruction(
+                                        repeated=duet_partial_repeats > 1)
+                                    agent.duplex_session.append_thinking(followup)
+                                    # Repeated identical guesses must not cut off
+                                    # every new explanation. Escalate at 2,4,6...
+                                    if (duet_partial_repeats > 2 and
+                                            duet_partial_repeats % 2 == 1):
+                                        continue_followup = False
+                                    else:
+                                        continue_followup = True
+                                    logger.info(
+                                        "Duet partial composite heard bot=%s kind=%s repeat=%d",
+                                        bot_uid[-6:],partial.kind,
+                                        min(duet_partial_repeats,9))
+                                else:
+                                    duet_partial_key = None
+                                    duet_partial_repeats = 0
+                                    followup = (
+                                        "Ответ напарника пока другой. Сразу дай "
+                                        "иной короткий признак предмета, затем "
+                                        "дослушай следующую попытку. "
+                                        "Никаких комментариев о проверке.")
+                                    continue_followup = True
+                                # Only a completed FINAL transcript causes a
+                                # new hint. VAD onset NEVER force-interrupts.
+                                if continue_followup:
+                                    if str(getattr(session,"agent_state","")) in (
+                                            "speaking","thinking"):
+                                        await stop_stale_explanation()
+                                    card_prompts.schedule(candidate_card_key, followup)
+                                    logger.info(
+                                        "Duet final-guess followup queued bot=%s kind=%s",
+                                        bot_uid[-6:],
+                                        partial.kind if partial else "different")
             except Exception as exc:
                 logger.debug("No game action for transcribed utterance: %s", exc)
             finally:
@@ -691,6 +730,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                    lambda event: asyncio.create_task(on_heard(event)))
 
         async def on_guesser_own_voice(event):
+            nonlocal duet_guesser_last_key, duet_guesser_repeat_count
             # GPT-Live publishes the assistant's OWN actual utterance as a
             # completed conversation item after the audio finishes. In a
             # two-AI round, this is a much more reliable independent ASR
@@ -718,6 +758,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             bot_uid[-6:], "MATCH" if result.get("matched")
                             else str(result.get("reason") or "NO_MATCH")[:32])
                 if result.get("matched"):
+                    duet_guesser_last_key = None
+                    duet_guesser_repeat_count = 0
                     agent.recent_word_keys.add(str(result.get("actionId") or ""))
                     # Wait for the explainer to receive the server's new
                     # card. Do not confirm, invent next hints or announce points.
@@ -728,15 +770,28 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     )
                     logger.info("Duet self-voice guess scored: bot=%s",
                                 bot_uid[-6:])
-                elif result.get("reason") == "FORM_NOT_EXACT" and not is_duo:
-                    # Keep the original human+AI behaviour. The two-AI
-                    # agent often receives its own outdated transcript
-                    # AFTER the peer has moved to another secret card.
-                    # Do not inject an obsolete "wrong answer" instruction.
-                    agent.duplex_session.append_instructions(
-                        "Эта догадка не изменила карточку. "
-                        "Слушай человека дальше и предложи другой вариант."
-                    )
+                elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:
+                    # No secret is available to this agent. Coach only from
+                    # its OWN speech and current public card revision.
+                    current_key = (duet_snapshot.get("turnId"),
+                                   int(duet_snapshot.get("cardRevision") or 0))
+                    signature = (current_key, guess_signature(phrase))
+                    if signature == duet_guesser_last_key:
+                        duet_guesser_repeat_count += 1
+                    else:
+                        duet_guesser_last_key = signature
+                        duet_guesser_repeat_count = 1
+                    if duet_guesser_repeat_count in (2, 4, 7):
+                        agent.duplex_session.append_thinking(
+                            "Ты уже произнёс эту же догадку. НЕ повторяй её "
+                            "сама по себе! Дослушай новое уточнение напарника "
+                            "и назови более полный или другой ответ. "
+                            "Это может быть составное название: добавь "
+                            "недостающее свойство или определение, если "
+                            "подсказки к нему ведут. Тайное слово тебе "
+                            "неизвестно. Не объявляй, что угадал.")
+                        logger.info("Duet repeated own guess bot=%s repetitions=%d",
+                                    bot_uid[-6:],duet_guesser_repeat_count)
             except Exception as exc:
                 logger.debug("Duet self-voice guess was not scored: %s",
                              type(exc).__name__)
@@ -763,7 +818,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
 
         async def follow_game_state():
             nonlocal latest, duet_wrong_guesses, active_prompt_key
-            nonlocal last_card_switched_at
+            nonlocal last_card_switched_at, duet_partial_key, duet_partial_repeats
+            nonlocal duet_guesser_last_key, duet_guesser_repeat_count
             previous = None
             pending_duet_ack = None
             while not stop.is_set():
@@ -840,6 +896,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     if role == "explainer" and word:
                         if is_duo:
                             duet_wrong_guesses = 0
+                            duet_partial_key = None
+                            duet_partial_repeats = 0
                         # Only the explaining AI receives the word through
                         # authenticated server context. No word in room metadata.
                         if changed_active_card or beginning_explanation:
@@ -890,6 +948,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             "неформально. Никаких игровых слов, очков, смены ролей."
                         )
                     elif role == "guesser":
+                        duet_guesser_last_key = None
+                        duet_guesser_repeat_count = 0
                         agent.duplex_session.append_instructions(
                             "ТВОЯ РОЛЬ: УГАДЫВАЮЩИЙ. Секретного слова не знаешь. "
                             + ("Дослушай подсказку. Отвечай только одним "
@@ -999,6 +1059,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 "duet" if is_duo else "solo",bot_uid[-6:],
                                 duet_snapshot.get("role"),action,
                                 duet_live.prompts_without_voice)
+                    if base_action == "give_hint":
+                        # All explainer speech, including recovery, goes
+                        # through the SAME per-card coordinator. Previously
+                        # watchdog generate_reply raced the new-card prompt,
+                        # making the first ten seconds silent.
+                        if active_prompt_key and not card_prompts.busy:
+                            card_prompts.schedule(active_prompt_key,phrase)
+                        duet_live.pending=False
+                        continue
                     handle=request_duet_reply(phrase)
                     if handle is None:
                         duet_live.pending=False
