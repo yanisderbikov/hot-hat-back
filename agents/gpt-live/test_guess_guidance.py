@@ -74,6 +74,21 @@ class GuessGuidanceTests(unittest.TestCase):
                          window.offer(secret="снежный человек",card_key=key,
                                       phrase="человека",now=11.0))
 
+    def test_feminine_fire_hat_inflections_receive_complete_part_guidance(self):
+        adjective=partial_compound_guess("огненная шляпа","огненной?")
+        noun=partial_compound_guess("огненная шляпа","шляпу!")
+        self.assertEqual(adjective.kind,"missing_object")
+        self.assertEqual(noun.kind,"missing_modifier")
+        self.assertIsNone(partial_compound_guess("огненная шляпа",
+                                                "огненную шляпу!"))
+        window=CompoundTranscriptWindow()
+        key=("fire","explainer","огненная шляпа",3,False)
+        self.assertIsNone(window.offer(secret="огненная шляпа",
+                                       card_key=key,phrase="огненную",now=11.0))
+        self.assertEqual("огненную шляпу",
+                         window.offer(secret="огненная шляпа",
+                                      card_key=key,phrase="шляпу",now=12.0))
+
     def test_compound_buffer_never_joins_different_cards_or_old_guesses(self):
         window=CompoundTranscriptWindow()
         old=("turn","explainer","соленый огурец",1,False)
