@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Callable
+from typing import Callable, Awaitable
 
 
 class CardPromptCoordinator:
     def __init__(self, *, generate: Callable, state: Callable,
                  is_current: Callable, spoke_at: Callable,
                  log: Callable | None = None,
-                 attempts: int = 3, sleep: Callable = asyncio.sleep):
+                 attempts: int = 3, sleep: Callable = asyncio.sleep,
+                 commentary: Callable | None = None,
+                 reset: Callable[[], Awaitable] | None = None,
+                 require_voice: bool = False,
+                 response_timeout: float = 3.0):
         self.generate = generate
         self.state = state
         self.is_current = is_current
@@ -24,6 +28,10 @@ class CardPromptCoordinator:
         self.log = log or (lambda *_: None)
         self.attempts = attempts
         self.sleep = sleep
+        self.commentary = commentary
+        self.reset = reset
+        self.require_voice = require_voice
+        self.response_timeout = response_timeout
         self._task: asyncio.Task | None = None
         self._key = None
 
@@ -54,6 +62,23 @@ class CardPromptCoordinator:
 
     async def _run(self, key: tuple, instructions: str) -> None:
         baseline = self.spoke_at()
+        # GPT-Live's append_commentary is its native fast way to initiate
+        # speaking. generate_reply is a fallback (not a reliable sole API).
+        if self.commentary is not None and self.is_current(key):
+            try:
+                self.commentary(instructions)
+                self.log("card_prompt_commentary", 1, "native")
+                for _ in range(8):
+                    if not self.is_current(key):
+                        return
+                    if self.spoke_at() > baseline:
+                        self.log("card_prompt_voice_started", 1, "commentary")
+                        return
+                    await self.sleep(0.15)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.log("card_prompt_commentary_failed", 1, type(exc).__name__)
         for attempt in range(self.attempts):
             if not self.is_current(key):
                 return
@@ -79,14 +104,24 @@ class CardPromptCoordinator:
                 if handle is None:
                     raise RuntimeError("generate_reply did not return a request")
                 try:
-                    await asyncio.wait_for(asyncio.shield(handle), timeout=4.5)
+                    await asyncio.wait_for(asyncio.shield(handle),
+                                           timeout=self.response_timeout)
                 except asyncio.TimeoutError:
                     if self.spoke_at() > baseline or self.state()[0] == "speaking":
                         return
-                    raise RuntimeError("speech did not start within 4.5s")
+                    raise RuntimeError("model did not start audio within timeout")
                 if handle.exception() is not None:
                     raise RuntimeError(type(handle.exception()).__name__)
-                self.log("card_prompt_accepted", attempt + 1, "ok")
+                if self.require_voice and self.spoke_at() <= baseline:
+                    # A successful handle is not evidence that the full-duplex
+                    # model actually produced any sound. Wait for an event.
+                    for _ in range(4):
+                        if self.spoke_at() > baseline or not self.is_current(key):
+                            break
+                        await self.sleep(0.12)
+                    if self.spoke_at() <= baseline:
+                        raise RuntimeError("reply finished without voice")
+                self.log("card_prompt_accepted", attempt + 1, "voice" if self.require_voice else "ok")
                 return
             except asyncio.CancelledError:
                 raise
@@ -95,6 +130,13 @@ class CardPromptCoordinator:
                 if self.spoke_at() > baseline or not self.is_current(key):
                     return
                 if attempt + 1 < self.attempts:
-                    await self.sleep(0.25 * (attempt + 1))
+                    # Cancel an orphaned attempt before starting another:
+                    # concurrent generate_reply requests often refuse BOTH.
+                    if self.reset is not None and self.is_current(key):
+                        try:
+                            await asyncio.wait_for(self.reset(),timeout=1.0)
+                        except (asyncio.TimeoutError, RuntimeError):
+                            pass
+                    await self.sleep(0.15 * (attempt + 1))
         if self.is_current(key):
             self.log("card_prompt_exhausted", self.attempts, "no_audio")

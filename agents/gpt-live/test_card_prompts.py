@@ -67,3 +67,60 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(coord._task,timeout=2)
         self.assertEqual(called,["give next hint"])
         await coord.close()
+
+
+    async def test_native_gpt_live_commentary_starts_voice_without_second_request(self):
+        key=("r1","explainer","Пингвин",1,False)
+        spoke=[0.0]
+        called=[]
+        async def no_wait(_):
+            await asyncio.sleep(0)
+        async def no_reply():
+            return None
+        coord=CardPromptCoordinator(generate=lambda text:called.append(text) or asyncio.create_task(no_reply()),
+            commentary=lambda text:spoke.__setitem__(0,1.0),
+            state=lambda:("listening","listening"),is_current=lambda k:k==key,
+            spoke_at=lambda:spoke[0],require_voice=True,sleep=no_wait)
+        coord.schedule(key,"Живая подсказка")
+        await coord._task
+        self.assertEqual(called,[])
+        await coord.close()
+
+    async def test_successful_model_handle_without_audio_is_retried(self):
+        key=("r1","explainer","Пингвин",2,False)
+        spoke=[0.0]
+        calls=[]
+        async def no_wait(_):
+            await asyncio.sleep(0)
+        def generate(text):
+            calls.append(text)
+            if len(calls)==2:
+                spoke[0]=2.0
+            return asyncio.create_task(no_wait(0))
+        coord=CardPromptCoordinator(generate=generate,
+            state=lambda:("listening","listening"),is_current=lambda k:k==key,
+            spoke_at=lambda:spoke[0],require_voice=True,sleep=no_wait)
+        coord.schedule(key,"Подскажи")
+        await coord._task
+        self.assertEqual(len(calls),2)
+        await coord.close()
+
+    async def test_old_word_commentary_aborts_on_card_change(self):
+        old=("r","explainer","Музей",1,False)
+        new=("r","explainer","Пингвин",2,False)
+        current=[old]
+        requested=[]
+        async def yield_(secs):
+            await asyncio.sleep(0)
+        coord=CardPromptCoordinator(
+            generate=lambda txt:requested.append(txt) or asyncio.create_task(yield_(0)),
+            commentary=lambda txt:requested.append("comment:"+txt),
+            state=lambda:("listening","listening"),
+            is_current=lambda k:k==current[0],spoke_at=lambda:0.0,sleep=yield_)
+        coord.schedule(old,"old")
+        current[0]=new
+        coord.schedule(new,"new")
+        await coord._task
+        self.assertTrue(requested)
+        self.assertTrue(all("old" not in x for x in requested))
+        await coord.close()
