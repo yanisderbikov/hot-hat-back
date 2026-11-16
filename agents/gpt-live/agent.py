@@ -1221,9 +1221,14 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         continue
                     recover_thinking=action.startswith("reset_")
                     if recover_thinking:
+                        # GPT-Live owns its own voice turns. Forcibly cutting
+                        # model output in a thinking state caused subsequent
+                        # hints to be rejected. A gentle interrupt is only
+                        # advisory; the queued commentary below remains the
+                        # primary recovery path.
                         try:
-                            await asyncio.wait_for(session.interrupt(force=True),
-                                                   timeout=2)
+                            await asyncio.wait_for(session.interrupt(force=False),
+                                                   timeout=0.8)
                         except (RuntimeError,asyncio.TimeoutError):
                             pass
                     # A new card may have just requested a response; do
