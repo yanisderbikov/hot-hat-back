@@ -77,14 +77,14 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_AGENT]", source)
         self.assertIn("if bot_uid == designated_explainer_uid:", source)
         self.assertIn("Не говори первым:", source)
-        self.assertIn("check_opening_reply", source)
-        self.assertIn("one recovery", source)
-        self.assertIn("await first_handle", source)
-        self.assertIn("retry.exception()", source)
-        self.assertGreater(source.index("watcher = asyncio.create_task(follow_game_state())"),
-                           source.index("first_handle=session.generate_reply("))
+        # Server preassigns the role. Native commentary primes the FIRST
+        # speech while the watcher is still starting; there is no competing
+        # generate_reply or artificial ten-second retry race.
+        self.assertIn("agent.prime_first_explainer_hint(current)", source)
+        self.assertIn("Duet first clue primed", source)
+        self.assertNotIn("first_handle=session.generate_reply(", source)
         self.assertIn("(is_duo or scripted_partner)", source)
-        self.assertIn('error_code="DUET_OPENING_SILENT"', source)
+        self.assertIn('error_code="DUET_OPENING_FAILED"', source)
         self.assertIn("stop.set()", source)
 
     def test_duet_voice_watchdog_is_active_only_on_live_gameplay(self):
@@ -249,6 +249,18 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('if not getattr(event, "is_final", False):',snippet)
         self.assertIn('if still_same:',snippet)
 
+    def test_human_role_selection_primes_first_card_without_competing_reply(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        ast.parse(source)
+        self.assertIn("def prime_first_explainer_hint(self, state: dict)",source)
+        self.assertIn("self.duplex_session.append_thinking(",source)
+        self.assertIn("self.duplex_session.append_commentary(",source)
+        self.assertIn("self.suppress_next_word_commentary=True",source)
+        self.assertIn("agent.prime_first_explainer_hint(after)",source)
+        tool=source[source.index("async def choose_to_explain("):
+                    source.index("async def skip_once(",source.index("async def choose_to_explain("))]
+        self.assertNotIn("generate_reply(",tool)
+
     def test_score_wakes_next_card_without_forcing_idle_duplex_reset(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
@@ -257,8 +269,8 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('force=False',source)
         self.assertIn('verified_score=changed_active_card or beginning_explanation',source)
         self.assertIn('attempts=2,',source)
-        self.assertIn('response_timeout=1.3,',source)
-        self.assertIn('commentary_grace=0.45 if is_duo else 0.35',source)
+        self.assertIn('response_timeout=10.5,',source)
+        self.assertIn('commentary_grace=1.0 if is_duo else 1.2',source)
         self.assertIn('and time.monotonic()-duet_live.last_activity >= 5.0',source)
 
     def test_fast_voice_duet_and_human_ai_guesser_regressions(self):
