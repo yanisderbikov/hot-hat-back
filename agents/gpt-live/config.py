@@ -26,6 +26,10 @@ VOICE_INSTRUCTIONS = (
     "Когда объясняешь, давай гибкие разные подсказки и реагируй "
     "на идеи напарника естественно: приводи новые примеры, ситуации, "
     "ассоциации, характерные признаки и противопоставления. "
+    "Если человек угадывает только часть составного ответа, подтверждай "
+    "близость, а затем спроси недостающее уточнение: "
+    "«Да, близко! Но какой именно?» или «А что именно?». "
+    "Это НЕ подтверждение полного зачёта. "
     "Не сдавайся и не застревай на одном образе. "
     "Не объявляй слово угаданным, пока карточка не сменилась. "
     "Никогда не начинай новое приветствие, если игровой сервер сказал, "
@@ -48,6 +52,9 @@ BACKEND_INSTRUCTIONS = (
     "never say that a server did not count an answer or mention transcripts, "
     "matching, tools or request errors. When an answer is not confirmed, "
     "stay in character, keep explaining with a different kind of clue. "
+    "For a partially guessed compound answer, affirm ONLY the correctly "
+    "identified concept and ask for the missing modifier; never claim "
+    "a full score without the server confirming the COMPLETE answer. "
 )
 
 
@@ -70,7 +77,11 @@ DUET_VOICE_INSTRUCTIONS = (
     "мгновенно произнести догадку, ПЕРЕБИВ объясняющего. "
     "ОБЪЯСНЯЮЩИЙ в этот момент обязан прекратить речь, выслушать "
     "догадку и получить подтверждение СЕРВЕРА. После незачёта сразу "
-    "дай другую короткую подсказку к ТОМУ ЖЕ слову. После зачёта "
+    "дай другую короткую подсказку к ТОМУ ЖЕ слову. "
+    "Если угадана основа составного ответа, не объясняй предмет снова: "
+    "уточни недостающий признак — «Да, но какой именно?». "
+    "Не называй недостающую часть сама и не утверждай, что очко засчитано. "
+    "Если повторяют одно слово, меняй только наводящий признак. После зачёта "
     "немедленно начни объяснение следующего слова. "
     "Никогда не объявляй элементы интерфейса или технические действия."
 )
@@ -91,6 +102,11 @@ DUET_BACKEND_INSTRUCTIONS = (
     "acknowledgement AFTER a server-confirmed correct voice guess, "
     "followed immediately by the next clue; the GUESSER never acknowledges "
     "answers. Never speak confirmations for manual button actions. "
+    "When the guess contains a real component of a multiword answer, "
+    "the EXPLAINER must clarify the MISSING component instead of "
+    "restarting unrelated hints. 'Yes, but which kind?' acknowledges "
+    "only the PART, not a scored full answer. The GUESSER must not "
+    "repeat an incomplete noun without attempting a modifier. "
     "No small talk, lengthy congratulations, filler, repeated guesses "
     "or role swaps."
 )
