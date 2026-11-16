@@ -143,6 +143,31 @@ class AiVoiceDuetScoringTest {
         verify(f.transaction(),times(1)).commit();
     }
 
+    @Test void rublishaFinalSpokenGuessCountsAndClosesWithoutAnotherCard() {
+        Fixture f=make(EXPLAINER);
+        String human="human-guessing";
+        f.game().setGuesserUid(human);
+        f.game().setRosters(Map.of(TEAM,List.of(EXPLAINER,human)));
+        f.game().setCurrentWord("Будильник");
+        when(f.rooms().getPlayer(ROOM,human)).thenReturn(Optional.of(
+                RoomPlayer.builder().roomId(ROOM).teamId(TEAM)
+                        .uid(human).name("Игрок").isTestBot(false).build()));
+        when(f.engine().guess(eq(f.game()),eq("turn-1"),anyString())).thenReturn(
+                new WordResolved(WordResolved.Outcome.COUNTED,
+                        "Будильник",null,4,20,1,true,0));
+
+        Map<String,Object> result=f.service().observedSpeech(
+                "ai_voice",human,"Будильник!","aiw_123456789012345678");
+
+        assertEquals(true,result.get("matched"));
+        assertEquals("guessed",result.get("action"));
+        assertEquals("Будильник",result.get("word"));
+        assertEquals(true,result.get("turnClosed"));
+        verify(f.engine(),times(1)).guess(any(),eq("turn-1"),anyString());
+        verify(f.transaction(),times(1)).addTeamScore(TEAM,1);
+        verify(f.transaction(),times(1)).commit();
+    }
+
     @Test void incorrectGuessesAndSubstringsNeverAwardPoints() {
         Fixture f=make(GUESSER);
         for(String guess:List.of("Это карта","Компасик","Угадали!")) {
