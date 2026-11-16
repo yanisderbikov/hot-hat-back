@@ -208,6 +208,19 @@ public class AiVoiceGameService {
                 if(heard.equals(stem+ending))return true;
             return false;
         }
+        // Feminine adjective forms are frequent in spoken compounds:
+        // "огненная шляпа" -> "огненную шляпу" / "огненной шляпе".
+        // The old matcher handled masculine -ый/-ий only and falsely
+        // rejected these fully correct Russian grammatical variants.
+        if(lemma.length()>4 && (lemma.endsWith("ая")||lemma.endsWith("яя"))) {
+            String stem=lemma.substring(0,lemma.length()-2);
+            String endings=lemma.endsWith("яя")
+                    ? "юю ей ею ие их ими яя"
+                    : "ую ой ою ые ых ыми ая";
+            for(String ending:endings.split(" "))
+                if(heard.equals(stem+ending))return true;
+            return false;
+        }
         if(lemma.endsWith("ие")) {
             String stem=lemma.substring(0,lemma.length()-2);
             for(String ending:List.of("ия","ию","ием","ии","ий","иям","иями","иях"))
