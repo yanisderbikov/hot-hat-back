@@ -129,8 +129,13 @@ class DuetLivenessTests(unittest.TestCase):
         live.card_changed("turn-1","explainer","Компас",0)
         self.assertIsNone(next_action(live,22,phase="turn_intro"))
         self.assertIsNone(next_action(live,22,paused=True))
-        self.assertIsNone(next_action(live,22,deadline_ms=26_000))
-        self.assertEqual(next_action(live,22,deadline_ms=60_000),"give_hint")
+        self.assertIsNone(next_action(live,22,deadline_ms=23_900))
+        # Four seconds are still valuable in a speed round.
+        self.assertEqual(next_action(live,22,deadline_ms=26_000),"give_hint")
+        live.pending=False
+        live.mark_spoke(22.1)
+        self.assertIsNone(next_action(live,24,deadline_ms=25_500))
+        self.assertEqual(next_action(live,28,deadline_ms=60_000),"give_hint")
 
     def test_at_most_three_unanswered_prompts_before_paid_session_abort(self):
         live=DuetLiveness(last_activity=0)
