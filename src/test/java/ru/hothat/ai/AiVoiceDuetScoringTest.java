@@ -113,6 +113,57 @@ class AiVoiceDuetScoringTest {
         }
     }
 
+    @Test void shortAIExplainerApprovalScoresExactlyTheHumanCurrentCard() {
+        Fixture f=make(EXPLAINER);
+        String human="human-guessing";
+        f.game().setGuesserUid(human);
+        f.game().setRosters(Map.of(TEAM,List.of(EXPLAINER,human)));
+        when(f.rooms().getPlayer(ROOM,human)).thenReturn(Optional.of(
+                RoomPlayer.builder().roomId(ROOM).teamId(TEAM)
+                        .uid(human).name("Игрок").isTestBot(false).build()));
+
+        Map<String,Object> yes=f.service().assistantApprovesHumanGuess(
+                "ai_voice",human,"Это навигационный прибор","Да!",
+                "turn-1",0,"aia_123456789012345678");
+        assertEquals(true,yes.get("matched"));
+        verify(f.engine(),times(1)).guess(any(),eq("turn-1"),anyString());
+        verify(f.transaction(),times(1)).addTeamScore(TEAM,1);
+        verify(f.transaction(),times(1)).commit();
+    }
+
+    @Test void partialYesAndExpiredOrStaleApprovalsNeverClickNextWord() {
+        Fixture f=make(EXPLAINER);
+        String human="human-guessing";
+        f.game().setGuesserUid(human);
+        f.game().setRosters(Map.of(TEAM,List.of(EXPLAINER,human)));
+        when(f.rooms().getPlayer(ROOM,human)).thenReturn(Optional.of(
+                RoomPlayer.builder().roomId(ROOM).teamId(TEAM)
+                        .uid(human).name("Игрок").isTestBot(false).build()));
+        String action="aia_123456789012345678";
+        assertEquals(false,f.service().assistantApprovesHumanGuess(
+                "ai_voice",human,"огурец","Да, но какой?",
+                "turn-1",0,action).get("matched"));
+        assertEquals(false,f.service().assistantApprovesHumanGuess(
+                "ai_voice",human,"компас","Да",
+                "old-turn",0,action).get("matched"));
+        assertEquals(false,f.service().assistantApprovesHumanGuess(
+                "ai_voice",human,"компас","Да",
+                "turn-1",1,action).get("matched"));
+        assertEquals(false,f.service().assistantApprovesHumanGuess(
+                "ai_voice","another-user","компас","Да",
+                "turn-1",0,action).get("matched"));
+        verify(f.engine(),never()).guess(any(),anyString(),anyString());
+    }
+
+    @Test void duetExplainerCannotScoreViaHumanVerbalApprovalRoute() {
+        Fixture f=make(EXPLAINER);
+        Map<String,Object> reply=f.service().assistantApprovesHumanGuess(
+                "ai_voice",GUESSER,"компас","Да",
+                "turn-1",0,"aia_123456789012345678");
+        assertEquals(false,reply.get("matched"));
+        verify(f.engine(),never()).guess(any(),anyString(),anyString());
+    }
+
     @Test void humanExplainerAloneConfirmsWhenAiGuesses() {
         Fixture f=make(GUESSER);
         String human="human-teammate";
