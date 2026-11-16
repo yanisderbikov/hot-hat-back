@@ -537,12 +537,14 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             last_duet_reply_requested = now
             return session.generate_reply(instructions=instructions)
 
-        async def stop_stale_explanation():
-            # A model can continue generating a stale hint after a correct
-            # spoken answer; stop its actual audio before switching cards.
-            # Human interrupt + server-confirmed score both use this path.
-            if str(getattr(session, "agent_state", "")) not in (
-                    "speaking", "thinking"):
+        async def stop_stale_explanation(*, verified_score: bool = False):
+            # On an authoritative MATCH a pending generation can still hold
+            # old-card audio even while the agent reports "listening".
+            # A forced interruption is safe AFTER the server has counted the
+            # completed human guess; never force one from noisy VAD fragments.
+            if (not verified_score and
+                    str(getattr(session, "agent_state", "")) not in (
+                        "speaking", "thinking")):
                 return
             try:
                 await asyncio.wait_for(session.interrupt(force=True), timeout=1.6)
@@ -587,7 +589,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             if latest != "explainer":
                 return
             nonlocal duet_wrong_guesses, duet_guess_verification_pending
-            nonlocal last_immediate_hint, last_duet_wrong_nudge
+            nonlocal last_immediate_hint, last_duet_wrong_nudge, active_prompt_key
             candidate_card_key = active_prompt_key
             try:
                 lower = phrase.lower()
@@ -626,10 +628,20 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         # GPT-Live for another reply from the OLD-card ASR.
                         # The versioned card watcher owns the single NEW hint.
                         agent.suppress_next_word_commentary = False
-                        if is_duo:
+                        if is_duo and not result.get("turnClosed"):
                             agent.pending_voice_confirmation = _voice_confirmation(
                                 latest, True, len(agent.recent_word_keys))
-                        await stop_stale_explanation()
+                        # Invalidate the old card BEFORE cancelling output:
+                        # no queued retries or watchdog may resurrect its hint.
+                        active_prompt_key = None
+                        await card_prompts.close()
+                        await stop_stale_explanation(verified_score=True)
+                        if result.get("turnClosed"):
+                            # Last-word grace: the score was committed, but
+                            # there is NO next card. Finish voice immediately.
+                            logger.info("Voice-scored last word closed turn bot=%s",
+                                        bot_uid[-6:])
+                            stop.set()
                     elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:
                         duet_wrong_guesses += 1
                         if duet_wrong_guesses in (2, 4):
@@ -758,6 +770,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 try:
                     state = await game.context()
                 except Exception:
+                    # A 409 immediately after a final counted word means the
+                    # active turn has ended. Do not leave a stale hint audible
+                    # while the paid LiveKit worker is shutting down.
+                    active_prompt_key = None
+                    await card_prompts.close()
+                    await stop_stale_explanation(verified_score=True)
                     stop.set()
                     break
                 role = state.get("role", "unselected")
