@@ -135,7 +135,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("РОЛИ НЕ ОБСУЖДАЮТСЯ", source)
         self.assertIn("Не начинай с", source)
         self.assertIn("duet_wrong_guesses in (2, 4)", source)
-        self.assertIn("НОВАЯ КАРТОЧКА", source)
+        self.assertNotIn('"НОВАЯ КАРТОЧКА: объясни текущее слово"', source)
 
     def test_duet_backend_prompts_speak_guesses_without_tools(self):
         from config import DUET_VOICE_INSTRUCTIONS, DUET_BACKEND_INSTRUCTIONS
