@@ -170,25 +170,37 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("async def duet_guesser_spoke(",client)
         self.assertIn('"duet-guesser-spoke"',client)
 
-    def test_duet_mismatch_never_acts_as_advanced_card(self):
+    def test_final_guess_only_interrupts_after_server_checks_same_card(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
-        self.assertIn('elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:',source)
-        self.assertNotIn("Ответ НЕ засчитан сервером.",source)
-        self.assertNotIn("СЕРВЕР НЕ ЗАСЧИТАЛ последнюю голосовую догадку.",source)
-        self.assertNotIn("СЕРВЕР НЕ ЗАСЧИТАЛ эту догадку.",source)
-        self.assertIn("СЕРВЕР ЗАСЧИТАЛ твою догадку.",source)
-        self.assertIn("pending_duet_ack = None",source)
-        self.assertIn("agent.pending_voice_confirmation = None",source)
-        self.assertIn('result.get("reason") == "FORM_NOT_EXACT"',source)
-        self.assertIn("A non-exact peer-ASR result can arrive AFTER",source)
+        start=source.index('elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:')
+        end=source.index('except Exception as exc:',start)
+        rejection=source[start:end]
+        self.assertIn('candidate_card_key==active_prompt_key',rejection)
+        self.assertIn('now-last_card_switched_at>=0.9',rejection)
+        self.assertIn('current.get("cardRevision")',rejection)
+        self.assertIn('if still_same:',rejection)
+        self.assertIn('await stop_stale_explanation()',rejection)
+        self.assertIn('card_prompts.schedule(candidate_card_key,',rejection)
+        self.assertNotIn("Ты назвал неверно",rejection)
+
+    def test_two_ai_never_force_interrupts_on_vad_only_on_final_transcript(self):
+        source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
+        start=source.index("        def duet_partner_speech(event):")
+        end=source.index("        async def on_heard(event):",start)
+        self.assertNotIn("stop_stale_explanation()",source[start:end])
+        start=source.index("        async def on_heard(event):")
+        end=source.index("        session.on(\"user_input_transcribed\"",start)
+        snippet=source[start:end]
+        self.assertIn('if not getattr(event, "is_final", False):',snippet)
+        self.assertIn('if still_same:',snippet)
 
     def test_fast_voice_duet_and_human_ai_guesser_regressions(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         from config import DUET_BACKEND_INSTRUCTIONS, DUET_VOICE_INSTRUCTIONS
         ast.parse(source)
         self.assertIn('"allow_interruptions": True',source)
-        self.assertIn('"min_interruption_duration": 0.32',source)
+        self.assertIn('"min_interruption_duration": 0.20',source)
         self.assertIn("async def stop_stale_explanation()",source)
         self.assertIn("await stop_stale_explanation()",source)
         self.assertIn('if mode == "game" and not scripted_partner:',source)

@@ -411,9 +411,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             "allow_interruptions": True,
             # Wait long enough to distinguish an actual spoken word from
             # mic/noise/VAD fragments, but still allow genuine barge-in.
-            "min_interruption_duration": 0.32,
-            "min_endpointing_delay": 0.35,
-            "max_endpointing_delay": 1.1,
+            "min_interruption_duration": 0.20,
+            # Short one-word guesses must be transcribed as complete units;
+            # overly aggressive 0.35s endpointing split Russian guesses.
+            "min_endpointing_delay": 0.48,
+            "max_endpointing_delay": 1.25,
         } if is_duo else {})
         session = AgentSession(
             **duet_turn_settings,
@@ -481,6 +483,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
 
         last_immediate_hint = 0.0
         last_duet_reply_requested = 0.0
+        last_duet_wrong_nudge = 0.0
+        last_card_switched_at = 0.0
         active_prompt_key = None
         async def reset_orphaned_speech():
             # Reset only failed output, never cut off a real active voice.
@@ -583,7 +587,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             if latest != "explainer":
                 return
             nonlocal duet_wrong_guesses, duet_guess_verification_pending
-            nonlocal last_immediate_hint
+            nonlocal last_immediate_hint, last_duet_wrong_nudge
+            candidate_card_key = active_prompt_key
             try:
                 lower = phrase.lower()
                 if any(x in lower for x in (
@@ -626,24 +631,44 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 latest, True, len(agent.recent_word_keys))
                         await stop_stale_explanation()
                     elif result.get("reason") == "FORM_NOT_EXACT" and is_duo:
-                        # For TWO AI workers we still need active server-led
-                        # turn taking.  In HUMAN+AI play this branch must be
-                        # completely silent: native real-time dialogue already
-                        # heard the human, and injecting "NOT COUNTED" was
-                        # literally spoken aloud by Rublisha.
                         duet_wrong_guesses += 1
                         if duet_wrong_guesses in (2, 4):
-                            agent.duplex_session.append_instructions(
-                                "Следующая подсказка должна отличаться: "
-                                "поменяй категорию, действие или сравнение. "
-                                "Никогда не обсуждай процесс проверки ответа."
+                            agent.duplex_session.append_thinking(
+                                "Напарник уже пробовал назвать ответ. "
+                                "Нужен другой образ или признак, без "
+                                "повтора предыдущей подсказки.")
+                        # A completed FINAL transcript from the linked agent
+                        # is a real interruption, not a noisy VAD fragment.
+                        # First verify it still belongs to the same card:
+                        # the guesser's own voice may ALREADY have scored
+                        # the word while this late ASR fragment is arriving.
+                        now=time.monotonic()
+                        if (candidate_card_key and
+                                candidate_card_key==active_prompt_key and
+                                now-last_card_switched_at>=0.9 and
+                                now-last_duet_wrong_nudge>=1.4):
+                            current=await game.context()
+                            still_same=(
+                                current.get("role")=="explainer" and
+                                current.get("phase")=="active" and
+                                current.get("currentWord")==candidate_card_key[2] and
+                                int(current.get("cardRevision") or 0)==candidate_card_key[3]
                             )
-                        # A non-exact peer-ASR result can arrive AFTER
-                        # the guesser's OWN speech already scored and
-                        # advanced the card. Do not interrupt or inject
-                        # a rival response for a possibly stale fragment:
-                        # the full-duplex explainer hears the answer naturally,
-                        # and the bounded idle watchdog handles actual silence.
+                            if still_same:
+                                last_duet_wrong_nudge=now
+                                # Yield to the guesser now that a complete
+                                # spoken proposal was received. Never force
+                                # stop from VAD onset or partial transcripts.
+                                if str(getattr(session,"agent_state","")) in (
+                                        "speaking","thinking"):
+                                    await stop_stale_explanation()
+                                card_prompts.schedule(candidate_card_key,
+                                    "Ответ напарника пока другой. Сразу дай "
+                                    "иной короткий признак предмета, затем "
+                                    "дослушай следующую попытку. "
+                                    "Никаких комментариев о проверке.")
+                                logger.info("Duet final-guess followup queued bot=%s",
+                                            bot_uid[-6:])
             except Exception as exc:
                 logger.debug("No game action for transcribed utterance: %s", exc)
             finally:
@@ -726,6 +751,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
 
         async def follow_game_state():
             nonlocal latest, duet_wrong_guesses, active_prompt_key
+            nonlocal last_card_switched_at
             previous = None
             pending_duet_ack = None
             while not stop.is_set():
@@ -790,6 +816,8 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         and (previous[2] != word or previous[3] != key[3]))
                     beginning_explanation=(previous is not None
                         and previous[1] == "unselected" and role == "explainer")
+                    if changed_active_card or beginning_explanation:
+                        last_card_switched_at=time.monotonic()
                     previous = key
                     if role == "explainer" and word:
                         if is_duo:
