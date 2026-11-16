@@ -69,10 +69,24 @@ def _standalone_voice_approval(text: str) -> str | None:
     import re as _re
     normalized = _re.sub(r"[^а-яa-z0-9 ]+", " ", str(text or "").lower().replace("ё", "е"))
     normalized = " ".join(normalized.split())
-    return normalized if normalized in (
+    approvals=(
         "да", "верно", "точно", "правильно", "есть",
         "угадал", "угадала", "именно", "это оно", "так и есть",
-    ) else None
+    )
+    if normalized in approvals:
+        return normalized
+    # A full-duplex turn can contain "Да! <next sentence>" in the SAME
+    # item. Treat the unequivocal first sentence as the approval, but
+    # NEVER accept corrections like "Да! Но какой именно?".
+    leading=_re.match(
+        r"^\\s*(да|верно|точно|правильно|есть|угадал|угадала|именно)"
+        r"\\s*[!.]\\s+(.+)$",
+        str(text or "").lower().replace("ё","е").strip())
+    if leading and not _re.match(
+            r"^(но|почти|близко|не|какой|что|скорее|может|возможно)\\b",
+            leading.group(2).strip()):
+        return leading.group(1)
+    return None
 
 
 def _is_voice_confirmed_guess(row: dict) -> bool:
