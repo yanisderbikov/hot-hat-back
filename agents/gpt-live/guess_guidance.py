@@ -33,6 +33,12 @@ def _word_matches(target: str, spoken: str) -> bool:
     # to count an answer. Keep this conservative to avoid false near-matches.
     if len(target) < 5:
         return False
+    if target.endswith(("ый","ий","ой")) and len(target)>4:
+        stem=target[:-2]
+        endings=("его","ему","им","ем","яя","ее","ие","их","ими","юю","ей"
+                 ) if target.endswith("ий") else (
+            "ого","ому","ым","ом","ая","ое","ые","ых","ыми","ую","ой")
+        return spoken in tuple(stem+end for end in endings)
     stem = target[:-2] if target.endswith("ец") else target
     if target.endswith("ец"):
         return any(spoken == stem + ending for ending in ("ца", "цу", "цом", "це", "цы"))
@@ -42,6 +48,11 @@ def _word_matches(target: str, spoken: str) -> bool:
     if target.endswith("я"):
         return spoken in (target[:-1] + "и", target[:-1] + "ю",
                           target[:-1] + "ей")
+    # Guide near-correct conversation for case-inflected nouns too.
+    # The actual scorer independently checks entire phrases and grammar.
+    if target[-1] in "бвгджзйклмнпрстфхцчшщ":
+        return spoken in tuple(target+suffix for suffix in
+                               ("а","у","ом","е","ы","и","ов","ев","ам","ами","ах"))
     return False
 
 
