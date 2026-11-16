@@ -85,8 +85,9 @@ class CardPromptCoordinator:
 
     async def _run(self, key: tuple, instructions: str) -> None:
         baseline = self.spoke_at()
-        # GPT-Live's append_commentary is its native fast way to initiate
-        # speaking. generate_reply is a fallback (not a reliable sole API).
+        # GPT-Live's append_commentary is a SPOKEN paraphrase channel,
+        # not a safe place for repeated control commands. Schedule once
+        # per fresh card; never inject timer/progress chatter.
         if self.commentary is not None and self.is_current(key):
             try:
                 self.commentary(instructions)
@@ -176,14 +177,15 @@ class CardPromptCoordinator:
                             self.log("card_prompt_pending",attempt+1,
                                      "provider_not_finished")
                             return
-                        if (now >= next_nudge and self.commentary is not None
-                                and self.state()[1] != "speaking"):
-                            self.commentary(
-                                "Время игры идёт! Продолжай коротко объяснять "
-                                "ТЕКУЩЕЕ слово новым конкретным признаком, "
-                                "не называя ответ.")
-                            self.log("card_prompt_live_nudge",attempt+1,
-                                     "still_silent")
+                        if now >= next_nudge:
+                            # append_commentary is SOMETHING THE MODEL MAY
+                            # SAY ALOUD, not a private control channel.
+                            # Earlier this branch injected "Время игры идёт",
+                            # so the player heard "время капает" instead of
+                            # a clue. Never send process or countdown text
+                            # to a spoken commentary channel.
+                            self.log("card_prompt_waiting",attempt+1,
+                                     "provider_not_started")
                             next_nudge=now+1.8
                         await self.sleep(0.15)
                     if not self.is_current(key):
@@ -216,13 +218,10 @@ class CardPromptCoordinator:
                     # Do not interrupt and immediately hammer an autonomous
                     # full-duplex model. Give it an ordinary commentary nudge,
                     # then listen for actual voice before a new request.
-                    if self.commentary is not None and self.is_current(key):
-                        try:
-                            self.commentary(
-                                "Продолжай СЕЙЧАС короткую конкретную подсказку "
-                                "по текущей карточке. Без вступлений.")
-                        except Exception:
-                            pass
+                    # A second paraphrase instruction often becomes audible
+                    # meta-talk and the model refuses the next overlapping
+                    # response. Wait for this first provider request to
+                    # finish, then use only a bounded legitimate retry.
                     for _ in range(10):
                         if self.spoke_at() > baseline or not self.is_current(key):
                             return
