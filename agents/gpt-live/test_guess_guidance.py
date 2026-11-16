@@ -1,7 +1,8 @@
 """SCRUM-52: real compound-word guesses should produce useful guidance."""
 import unittest
 
-from guess_guidance import (DUET_VOICE_GUESS_TOPIC, guess_signature,\n                            partial_compound_guess, verified_duet_voice_packet)
+from guess_guidance import (DUET_VOICE_GUESS_TOPIC, guess_signature,
+                            partial_compound_guess, verified_duet_voice_packet)
 
 
 class GuessGuidanceTests(unittest.TestCase):
