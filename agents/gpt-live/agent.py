@@ -33,7 +33,8 @@ from duet_liveness import DuetLiveness
 from card_prompts import CardPromptCoordinator
 from guess_guidance import (
     CompoundTranscriptWindow, DUET_VOICE_GUESS_TOPIC,
-    guess_signature, partial_compound_guess, verified_duet_voice_packet,
+    already_spoken_component_hint, guess_signature, partial_compound_guess,
+    verified_duet_voice_packet,
 )
 
 logger = logging.getLogger("hot-hat-gpt-live")
@@ -738,8 +739,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                     else:
                                         duet_partial_key = signature
                                         duet_partial_repeats = 1
-                                    followup = partial.instruction(
-                                        repeated=duet_partial_repeats > 1)
+                                    followup = (
+                                        already_spoken_component_hint(
+                                            candidate_card_key[2],partial) +
+                                        partial.instruction(
+                                            repeated=duet_partial_repeats > 1))
                                     agent.duplex_session.append_thinking(followup)
                                     # Repeated identical guesses must not cut off
                                     # every new explanation. Escalate at 2,4,6...
@@ -787,7 +791,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             if still_same:
                                 partial=partial_compound_guess(
                                     candidate_card_key[2],phrase)
-                                followup=(partial.instruction() if partial else
+                                followup=((already_spoken_component_hint(
+                                              candidate_card_key[2],partial) +
+                                          partial.instruction()) if partial else
                                     "Напарник только что предложил вариант. "
                                     "Коротко отзовись по смыслу, а затем "
                                     "дай один НОВЫЙ конкретный признак "
