@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import time
+from types import SimpleNamespace
 
 from livekit import rtc
 from livekit.agents import (
@@ -30,7 +31,10 @@ from config import (
 from game_client import GameClient
 from duet_liveness import DuetLiveness
 from card_prompts import CardPromptCoordinator
-from guess_guidance import guess_signature, partial_compound_guess
+from guess_guidance import (
+    DUET_VOICE_GUESS_TOPIC, guess_signature, partial_compound_guess,
+    verified_duet_voice_packet,
+)
 
 logger = logging.getLogger("hot-hat-gpt-live")
 server = AgentServer()
@@ -457,6 +461,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         # The guesser never sees the secret, only its own repeated utterances.
         duet_guesser_last_key = None
         duet_guesser_repeat_count = 0
+        # Single accepted reaction per actual utterance even when the
+        # explainer receives both peer ASR and the reliable LiveKit relay.
+        duet_recent_guess_keys: dict[tuple, float] = {}
         role_selection_lock = asyncio.Lock()
         role_selection_done = False
 
@@ -600,6 +607,16 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             nonlocal last_immediate_hint, last_duet_wrong_nudge, active_prompt_key
             nonlocal duet_partial_key, duet_partial_repeats
             candidate_card_key = active_prompt_key
+            if is_duo and candidate_card_key:
+                dedup_key=(candidate_card_key,guess_signature(phrase))
+                received_at=time.monotonic()
+                if received_at-duet_recent_guess_keys.get(dedup_key,-100.0)<1.6:
+                    return
+                duet_recent_guess_keys[dedup_key]=received_at
+                # Bound retained signatures to the current short live turn.
+                if len(duet_recent_guess_keys)>64:
+                    duet_recent_guess_keys.clear()
+                    duet_recent_guess_keys[dedup_key]=received_at
             try:
                 lower = phrase.lower()
                 if any(x in lower for x in (
@@ -758,6 +775,28 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         session.on("user_input_transcribed",
                    lambda event: asyncio.create_task(on_heard(event)))
 
+        def on_duet_guess_packet(packet):
+            # Own-voice relays go ONLY from the linked GUESSER to this
+            # EXPLAINER. Browser packets, spectators, other teams, old
+            # card revisions and arbitrary room data are all ignored.
+            if not is_duo or latest != "explainer" or not active_prompt_key:
+                return
+            sender=str(getattr(getattr(packet,"participant",None),"identity","") or "")
+            candidate=verified_duet_voice_packet(
+                getattr(packet,"data",None),
+                topic=str(getattr(packet,"topic","") or ""),
+                sender=sender,expected_peer=human_uid,
+                turn_id=str(active_prompt_key[0] or ""),
+                revision=int(active_prompt_key[3] or 0))
+            if candidate:
+                logger.info("Duet verified own-voice relay received bot=%s",
+                            bot_uid[-6:])
+                asyncio.create_task(on_heard(
+                    SimpleNamespace(is_final=True,transcript=candidate)))
+
+        if is_duo:
+            ctx.room.on("data_received",on_duet_guess_packet)
+
         async def on_guesser_own_voice(event):
             nonlocal duet_guesser_last_key, duet_guesser_repeat_count
             # GPT-Live publishes the assistant's OWN actual utterance as a
@@ -781,7 +820,29 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             if not phrase:
                 return
             try:
+                # Preserve the speech's card ID before the score request:
+                # the server may advance while a response is in flight.
+                own_turn=str(duet_snapshot.get("turnId") or "")
+                own_revision=int(duet_snapshot.get("cardRevision") or 0)
                 result = await game.duet_guesser_spoke(phrase)
+                if (result.get("reason") == "FORM_NOT_EXACT"
+                        and own_turn and len(phrase) <= 180):
+                    # The GUESSER's own completed utterance is more reliable
+                    # than the EXPLAINER's peer-input ASR under barge-in.
+                    # Target only the authenticated teammate. Never send
+                    # a secret word, full game context or private prompt.
+                    try:
+                        await ctx.room.local_participant.publish_data(
+                            json.dumps({"v":1,"turnId":own_turn,
+                                        "cardRevision":own_revision,
+                                        "phrase":phrase},ensure_ascii=False),
+                            reliable=True,destination_identities=[human_uid],
+                            topic=DUET_VOICE_GUESS_TOPIC)
+                        logger.info("Duet own-voice relay sent bot=%s",
+                                    bot_uid[-6:])
+                    except Exception as relay_error:
+                        logger.debug("Duet voice relay unavailable: %s",
+                                     type(relay_error).__name__)
                 logger.info("Own-voice guess: mode=%s bot=%s result=%s",
                             "duet" if is_duo else "solo",
                             bot_uid[-6:], "MATCH" if result.get("matched")
