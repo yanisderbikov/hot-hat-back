@@ -140,7 +140,8 @@ class SettingsTests(unittest.TestCase):
     def test_fast_adaptive_feedback_on_partial_and_interrupted_guesses(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         ast.parse(source)
-        self.assertIn("from guess_guidance import guess_signature, partial_compound_guess",source)
+        self.assertIn("from guess_guidance import (",source)
+        self.assertIn("guess_signature, partial_compound_guess,",source)
         # Server scoring remains separate; only a finalized, authenticated
         # peer transcript can invoke the prompt coordinator.
         self.assertIn('if not getattr(event, "is_final", False):',source)
