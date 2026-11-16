@@ -562,8 +562,13 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             reset=reset_orphaned_speech,
             require_voice=True,
             attempts=2,
-            response_timeout=1.3,
-            commentary_grace=0.45 if is_duo else 0.35,
+            # A pending GPT-Live response isn't cancelled by the framework.
+            # SDK refusal timeout is 10s: let it finish instead of spawning
+            # overlapping requests after a 1.3s artificial timeout.
+            response_timeout=10.5,
+            # Native commentary goes to the already active audio model
+            # immediately. Let it speak before advisory generate_reply.
+            commentary_grace=1.0 if is_duo else 1.2,
             state=lambda: (str(getattr(session,"agent_state","")),
                            str(getattr(session,"user_state",""))),
             is_current=lambda key: (not stop.is_set()
@@ -1380,39 +1385,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         duet_bootstrap_turn=current.get("turnId")
                         if not duet_bootstrap_word or current.get("role")!="explainer":
                             raise RuntimeError("duet secret word/role not ready")
-                        agent.duplex_session.append_instructions(
-                            "Ты объясняешь слово: "+str(duet_bootstrap_word)
-                            +". Никогда не произноси это слово. Играй быстро."
-                        )
-                        first_handle=session.generate_reply(instructions=(
-                            "СЕЙЧАС начни первую подсказку к секретному "
-                            "слову (3–9 слов), не называя его. "
-                            "Не представляйся, не приветствуй, не обсуждай "
-                            "роли и счёт. Это игра на скорость: одна "
-                            "информативная подсказка, затем слушай догадку."
-                        ))
-                        async def check_opening_reply():
-                            nonlocal error_code
-                            await first_handle
-                            if first_handle.exception() is not None and not stop.is_set():
-                                # GPT-Live may decline generate_reply once:
-                                # bounded one-shot recovery (no paid retry loop).
-                                logger.warning("Duet opening speech refused; one recovery")
-                                await asyncio.sleep(1.2)
-                                if not stop.is_set():
-                                    retry=session.generate_reply(instructions=(
-                                        "Твоя очередь объяснять прямо сейчас. "
-                                        "Произнеси ОДНУ короткую подсказку, затем "
-                                        "выслушай ответ второго ИИ."
-                                    ))
-                                    await retry
-                                    if retry.exception() is not None:
-                                        logger.warning("Duet opening recovery also declined")
-                                        error_code="DUET_OPENING_SILENT"
-                                        # Terminate and report paid usage early;
-                                        # never burn the rest of 180s in silence.
-                                        stop.set()
-                        duet_first_reply_task=asyncio.create_task(check_opening_reply())
+                        # The FULL-DUPLEX model starts speech from native
+                        # commentary. An immediate generate_reply competes
+                        # with the still-in-flight role-start continuation
+                        # and caused the 4-10 second opening silence.
+                        if not agent.prime_first_explainer_hint(current):
+                            raise RuntimeError("duet first card could not be primed")
+                        logger.info("Duet first clue primed bot=%s",bot_uid[-6:])
+                        # One watchdog owns any genuine later stall. No
+                        # second competing startup response task is needed.
                     except Exception as exc:
                         logger.warning("Duo opening turn failed: %s", exc)
                         error_code="DUET_OPENING_FAILED"
