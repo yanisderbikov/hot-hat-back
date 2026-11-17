@@ -43,12 +43,17 @@ class CardPromptCoordinator:
         # coordinator must remember it even if the old card task is cancelled.
         self._pending_handle = None
         self._superseding_key = None
+        # A verified score is not complete until the NEXT card has actually
+        # started speaking. Keep one bounded, native-context recovery task
+        # per authoritative card without scheduling competing model replies.
+        self._score_silence_task: asyncio.Task | None = None
 
     @property
     def busy(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def schedule(self, key: tuple, instructions: str) -> None:
+    def schedule(self, key: tuple, instructions: str, *,
+                 after_verified_score: bool = False) -> None:
         if not self.is_current(key):
             return
         if key == self._key and self.busy:
@@ -69,6 +74,9 @@ class CardPromptCoordinator:
             return
         if self._task is not None and not self._task.done():
             self._task.cancel()
+        if key != self._key and self._score_silence_task is not None:
+            self._score_silence_task.cancel()
+            self._score_silence_task = None
         if key != self._key and self._pending_handle is not None:
             # GPT-Live explicitly supports superseding an unfinished
             # generate_reply with a NEW request. Keeping the old handle
@@ -87,8 +95,53 @@ class CardPromptCoordinator:
         self.log("card_prompt_queued", int(key[3]) if len(key)>3 else 0,
                  "new_card")
         self._task = asyncio.create_task(self._run(key, instructions))
+        if after_verified_score and self.commentary is not None:
+            # Capture the pre-card voice timestamp. A real new-card voice
+            # event makes this recovery a no-op.
+            self._score_silence_task = asyncio.create_task(
+                self._recover_after_score(key, self.spoke_at()))
+
+    async def _recover_after_score(self, key: tuple, baseline: float) -> None:
+        """Give a stalled full-duplex model ONE extra native voice cue.
+
+        GPT-Live's explicit generate_reply is advisory and can refuse after
+        10 seconds. A verified card change must not rely exclusively on its
+        handle finishing: native commentary can re-engage the model without
+        interrupting a delegated turn or creating a second generate_reply.
+        """
+        try:
+            await self.sleep(2.4)
+            while self.is_current(key) and self._key == key:
+                if self.spoke_at() > baseline:
+                    return
+                agent_state, peer_state = self.state()
+                if agent_state == "speaking":
+                    return
+                if peer_state == "speaking":
+                    # The human's next guess has priority. The nudge remains
+                    # armed until they stop; never talk over a teammate.
+                    await self.sleep(0.15)
+                    continue
+                self.commentary(
+                    "Опиши этот предмет ещё одним коротким конкретным "
+                    "признаком. Не называй загаданное слово.")
+                self.log("card_prompt_score_silence_recovery",
+                         int(key[3]) if len(key) > 3 else 0, "native_once")
+                return
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            self.log("card_prompt_score_silence_recovery_failed",
+                     0, type(exc).__name__)
 
     async def close(self) -> None:
+        if self._score_silence_task is not None:
+            self._score_silence_task.cancel()
+            try:
+                await self._score_silence_task
+            except asyncio.CancelledError:
+                pass
+            self._score_silence_task = None
         if self._task is not None and not self._task.done():
             self._task.cancel()
             try:
