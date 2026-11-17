@@ -1287,7 +1287,15 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                 "метакомментариев и вступлений. "
                                 "Не называй ответ. Слушай догадки напарника."
                             )
-                            card_prompts.schedule(key, reply_instruction)
+                            card_prompts.schedule(
+                                key, reply_instruction,
+                                # A scored word needs guaranteed initiative:
+                                # GPT-Live may spend 10s declining an advisory
+                                # reply after old audio was interrupted. Arm a
+                                # single native-commentary recovery if no fresh
+                                # voice arrives, not a second generate_reply.
+                                after_verified_score=changed_active_card,
+                            )
                             pending_duet_ack = None
                             agent.pending_voice_confirmation = None
                     elif role == "smalltalk":
