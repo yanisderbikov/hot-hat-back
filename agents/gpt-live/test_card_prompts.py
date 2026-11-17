@@ -230,3 +230,84 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(requested)
         self.assertTrue(all("old" not in x for x in requested))
         await coord.close()
+
+    async def test_verified_score_reawakens_silent_new_card_once(self):
+        key = ("turn", "explainer", "Маяк", 7, False)
+        gate = asyncio.Event()
+        comments = []
+        replies = []
+        async def controlled_sleep(seconds):
+            if seconds == 2.4:
+                await gate.wait()
+            else:
+                await asyncio.sleep(0)
+        coord = CardPromptCoordinator(
+            generate=lambda text: replies.append(text) or asyncio.create_task(asyncio.sleep(0)),
+            commentary=comments.append,
+            state=lambda: ("listening", "listening"),
+            is_current=lambda k: k == key,
+            spoke_at=lambda: 0.0, sleep=controlled_sleep,
+            attempts=1)
+        coord.schedule(key, "first clue", after_verified_score=True)
+        await asyncio.sleep(0)
+        self.assertEqual(comments, ["first clue"])
+        gate.set()
+        await asyncio.wait_for(coord._score_silence_task, timeout=1)
+        self.assertEqual(len(comments), 2, "One native hint reminder after actual silence")
+        self.assertIn("признаком", comments[1])
+        self.assertLessEqual(len(replies), 1,
+            "A liveness nudge must never request a competing model response")
+        await coord.close()
+
+    async def test_verified_score_does_not_reprompt_after_audio_started(self):
+        key = ("turn", "explainer", "Кедр", 8, False)
+        gate = asyncio.Event()
+        spoken = [0.0]
+        comments = []
+        async def controlled_sleep(seconds):
+            if seconds == 2.4:
+                await gate.wait()
+            else:
+                await asyncio.sleep(0)
+        coord = CardPromptCoordinator(
+            generate=lambda _: asyncio.create_task(asyncio.sleep(0)),
+            commentary=comments.append,
+            state=lambda: ("listening", "listening"),
+            is_current=lambda k: k == key,
+            spoke_at=lambda: spoken[0], sleep=controlled_sleep, attempts=1)
+        coord.schedule(key, "first clue", after_verified_score=True)
+        await asyncio.sleep(0)
+        spoken[0] = 1.0
+        gate.set()
+        await asyncio.wait_for(coord._score_silence_task, timeout=1)
+        self.assertEqual(comments, ["first clue"])
+        await coord.close()
+
+    async def test_verified_score_recovery_never_speaks_stale_card(self):
+        old = ("turn", "explainer", "Маяк", 8, False)
+        new = ("turn", "explainer", "Слива", 9, False)
+        current = [old]
+        gate = asyncio.Event()
+        comments = []
+        async def controlled_sleep(seconds):
+            if seconds == 2.4:
+                await gate.wait()
+            else:
+                await asyncio.sleep(0)
+        coord = CardPromptCoordinator(
+            generate=lambda _: asyncio.create_task(asyncio.sleep(0)),
+            commentary=comments.append,
+            state=lambda: ("listening", "listening"),
+            is_current=lambda k: k == current[0],
+            spoke_at=lambda: 0.0, sleep=controlled_sleep, attempts=1)
+        coord.schedule(old, "old clue", after_verified_score=True)
+        await asyncio.sleep(0)
+        current[0] = new
+        coord.schedule(new, "new clue", after_verified_score=True)
+        await asyncio.sleep(0)
+        gate.set()
+        await asyncio.wait_for(coord._score_silence_task, timeout=1)
+        self.assertEqual(comments.count("old clue"), 1)
+        self.assertEqual(len(comments), 3,
+            "Only the current word may receive a post-score recovery")
+        await coord.close()
