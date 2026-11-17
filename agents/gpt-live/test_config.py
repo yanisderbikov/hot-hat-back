@@ -123,7 +123,8 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("agent.suppress_next_word_commentary = False", source)
         self.assertIn("agent.pending_voice_confirmation", source)
         self.assertIn("_voice_confirmation(", source)
-        self.assertIn("card_prompts.schedule(key, reply_instruction)",source)
+        self.assertIn("card_prompts.schedule(",source)
+        self.assertIn("after_verified_score=changed_active_card",source)
         self.assertNotIn("if next_word:",source)
         self.assertIn("duet_guess_verification_pending", source)
         # History is memory only. In particular the GUESSER never receives
@@ -218,7 +219,8 @@ class SettingsTests(unittest.TestCase):
         # A single AI explaining for a person must not be left silent after
         # the short server-confirmed "Верно!" acknowledgement.
         self.assertIn("await stop_stale_explanation()",source)
-        self.assertIn("card_prompts.schedule(key, reply_instruction)",source)
+        self.assertIn("card_prompts.schedule(",source)
+        self.assertIn("after_verified_score=changed_active_card",source)
         self.assertIn("The server already advanced the card",source)
         self.assertIn('str(scored.get("actionId") or "").startswith("aig_")',source)
         self.assertIn("async def duet_guesser_spoke(",client)
@@ -484,7 +486,7 @@ class NaturalClueContractRegressions(unittest.TestCase):
     def test_speech_request_has_no_meta_headings(self):
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         begin=source.index('reply_instruction=(\n')
-        end=source.index('card_prompts.schedule(key, reply_instruction)',begin)
+        end=source.index('card_prompts.schedule(',begin)
         block=source[begin:end]
         self.assertNotIn('"НОВАЯ КАРТОЧКА:',block)
         self.assertNotIn('"Сервер засчитал голосовой ответ.',block)
