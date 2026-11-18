@@ -1,9 +1,12 @@
 """SCRUM-52: real compound-word guesses should produce useful guidance."""
 import unittest
 
-from guess_guidance import (CompoundTranscriptWindow, DUET_VOICE_GUESS_TOPIC,
-                            already_spoken_component_hint, guess_signature,
-                            partial_compound_guess, verified_duet_voice_packet)
+from guess_guidance import (
+    CompoundTranscriptWindow, DUET_VOICE_GUESS_TOPIC,
+    DUET_VOICE_FEEDBACK_TOPIC, duet_utterance_kind,
+    already_spoken_component_hint, guess_signature,
+    partial_compound_guess, verified_duet_voice_packet,
+    verified_duet_feedback_packet)
 
 
 class GuessGuidanceTests(unittest.TestCase):
@@ -152,6 +155,42 @@ class GuessGuidanceTests(unittest.TestCase):
                      json.dumps({"v":1,"turnId":"round","cardRevision":True,
                                  "phrase":"огурец"}).encode()):
             self.assertIsNone(verified_duet_voice_packet(data,**args))
+
+
+    def test_teammate_question_is_not_misclassified_as_wrong_guess(self):
+        for text in ("Нужна новая подсказка", "Дай подсказку!",
+                     "Ещё подсказку!", "Можно новую подсказку?"):
+            self.assertEqual(duet_utterance_kind(text),"request_hint",text)
+        for text in ("Какого оно цвета?", "Для чего это?",
+                     "Из чего сделано?", "Это живое?"):
+            self.assertEqual(duet_utterance_kind(text),"clarification",text)
+        for text in ("Это будильник?", "солёный огурец!",
+                     "Пылесос", "Секретный агент?"):
+            self.assertEqual(duet_utterance_kind(text),"guess",text)
+
+    def test_server_card_scoped_feedback_does_not_leak_secret(self):
+        import json
+        args=dict(topic=DUET_VOICE_FEEDBACK_TOPIC,sender="explain-bot",
+                  expected_peer="explain-bot",turn_id="turn-A",revision=5)
+        packet={"v":1,"turnId":"turn-A","cardRevision":5,
+                "kind":"missing_modifier"}
+        encode=lambda row: json.dumps(row,ensure_ascii=False).encode()
+        self.assertEqual(
+            verified_duet_feedback_packet(encode(packet),**args),
+            "missing_modifier")
+        for bad in (
+            {**packet,"secret":"солёный огурец"},
+            {**packet,"kind":"soleniy"},
+            {**packet,"cardRevision":True},
+            {**packet,"cardRevision":6},
+            {**packet,"turnId":"old-turn"},
+        ):
+            self.assertIsNone(
+                verified_duet_feedback_packet(encode(bad),**args))
+        self.assertIsNone(verified_duet_feedback_packet(
+            encode(packet),**{**args,"sender":"another-team"}))
+        self.assertIsNone(verified_duet_feedback_packet(
+            encode(packet),**{**args,"topic":DUET_VOICE_GUESS_TOPIC}))
 
     def test_guesser_repetition_signature_ignores_filler(self):
         self.assertEqual(guess_signature("Это огурец?"),
