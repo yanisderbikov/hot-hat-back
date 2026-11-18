@@ -193,7 +193,10 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('SimpleNamespace(is_final=True,transcript=candidate)',source)
         self.assertIn('if received_at-duet_recent_guess_keys.get(dedup_key,-100.0)<1.6:',source)
         # The relay never transmits a secret; only what the guesser said.
-        begin=source.index('await ctx.room.local_participant.publish_data(')
+        # Select the GUESSER's relay, not the newly added EXPLAINER
+        # status-only feedback relay earlier in on_heard().
+        start=source.index('async def on_guesser_own_voice(event):')
+        begin=source.index('await ctx.room.local_participant.publish_data(',start)
         end=source.index('logger.info("Duet own-voice relay sent',begin)
         self.assertNotIn('currentWord',source[begin:end])
         self.assertNotIn('secret',source[begin:end])
