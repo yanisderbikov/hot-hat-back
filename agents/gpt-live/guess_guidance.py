@@ -186,6 +186,62 @@ class CompoundTranscriptWindow:
 
 
 DUET_VOICE_GUESS_TOPIC = "hot-hat.duet.guess.v1"
+DUET_VOICE_FEEDBACK_TOPIC = "hot-hat.duet.feedback.v1"
+_FEEDBACK_KINDS = frozenset(("different", "missing_modifier", "missing_object", "partial"))
+
+
+def duet_utterance_kind(text: str) -> str:
+    """Separate a partner's REAL question from a scored word attempt.
+
+    A narrow question such as "Какого цвета?" should guide the explainer,
+    not become FORM_NOT_EXACT. A direct candidate "Это будильник?" is still
+    a scored guess. The model can ask for one helpful detail naturally.
+    """
+    norm = " ".join(words(text))
+    if not norm:
+        return "guess"
+    if re.search(
+        r"(?:^| )(?:нужна|нужен|дай|давай|можно|еще|следующую|новую)"
+        r"(?: [а-я]+){0,3} подсказк[ауи]|"
+        r"(?:^| )(?:подскажи|намекни|еще подсказку|новую подсказку)"
+        r"(?: |$)", norm):
+        return "request_hint"
+    if re.search(
+        r"^(?:а |ну |скажи |подскажи )?"
+        r"(?:какого|какая|какой|какие|где|для чего|зачем|"
+        r"из чего|чем|как выглядит|что делает|какого размера|"
+        r"с чем|это живое|это съедобное|это предмет|это человек|"
+        r"это место|это животное|оно большое|оно маленькое|"
+        r"оно живое|оно круглое|это горячее|это холодное)\b", norm):
+        return "clarification"
+    return "guess"
+
+
+def verified_duet_feedback_packet(payload: bytes, *, topic: str,
+                                  sender: str, expected_peer: str,
+                                  turn_id: str, revision: int) -> str | None:
+    """Validate status-only feedback from the linked EXPLAINER to GUESSER.
+
+    No secret word, missing modifier, original guess or private transcript
+    can travel in this packet. The recipient still hears natural audio.
+    """
+    if (topic != DUET_VOICE_FEEDBACK_TOPIC or not expected_peer
+            or sender != expected_peer or not turn_id
+            or not isinstance(payload, bytes) or len(payload) > 240):
+        return None
+    try:
+        row = json.loads(payload.decode("utf-8"))
+        if (not isinstance(row, dict) or row.get("v") != 1 or
+                row.get("turnId") != turn_id or
+                type(row.get("cardRevision")) is not int or
+                row.get("cardRevision") != revision or
+                type(row.get("kind")) is not str or
+                row["kind"] not in _FEEDBACK_KINDS or
+                set(row) != {"v", "turnId", "cardRevision", "kind"}):
+            return None
+        return row["kind"]
+    except (ValueError, UnicodeError, TypeError):
+        return None
 
 
 def verified_duet_voice_packet(payload: bytes, *, topic: str,
