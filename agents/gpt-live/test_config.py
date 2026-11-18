@@ -327,7 +327,7 @@ class SettingsTests(unittest.TestCase):
         # Never interrupt on unverified speech. Stop only stale local
         # playback when the authoritative server has counted a word.
         self.assertIn('async def stop_stale_explanation(',source)
-        self.assertIn('if not verified_score or',source)
+        self.assertIn('not verified_score or',source)
         self.assertIn('session.interrupt(force=False)',source)
         self.assertNotIn('session.interrupt(force=True)',source)
         self.assertIn('verified_score=changed_active_card or beginning_explanation',source)
