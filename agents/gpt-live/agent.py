@@ -34,8 +34,9 @@ from duet_liveness import DuetLiveness
 from card_prompts import CardPromptCoordinator
 from guess_guidance import (
     CompoundTranscriptWindow, DUET_VOICE_GUESS_TOPIC,
+    DUET_VOICE_FEEDBACK_TOPIC, duet_utterance_kind,
     already_spoken_component_hint, guess_signature, partial_compound_guess,
-    verified_duet_voice_packet,
+    verified_duet_voice_packet, verified_duet_feedback_packet,
 )
 
 logger = logging.getLogger("hot-hat-gpt-live")
@@ -593,6 +594,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         # The guesser never sees the secret, only its own repeated utterances.
         duet_guesser_last_key = None
         duet_guesser_repeat_count = 0
+        duet_guesser_feedback_key = None
         # Single accepted reaction per actual utterance even when the
         # explainer receives both peer ASR and the reliable LiveKit relay.
         duet_recent_guess_keys: dict[tuple, float] = {}
@@ -801,6 +803,27 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     duet_recent_guess_keys.clear()
                     duet_recent_guess_keys[dedup_key]=received_at
             try:
+                # The two AI participants must TALK, not feed every question
+                # into the literal-word scorer. In the Nov 18 recording
+                # "нужна новая подсказка" became another FORM_NOT_EXACT and
+                # generated irrelevant "wrong answer" coaching.
+                utterance_kind = duet_utterance_kind(phrase) if is_duo else "guess"
+                if is_duo and utterance_kind != "guess":
+                    if candidate_card_key and candidate_card_key == active_prompt_key:
+                        agent.duplex_session.append_thinking(
+                            "Напарник только что спросил: «" + phrase[:180] +
+                            "». Отвечай именно на этот вопрос живым кратким "
+                            "уточнением. Если нужна подсказка, дай новый "
+                            "ПРЕДМЕТНЫЙ признак. Не сообщай секрет.")
+                        cue = (
+                            "Коротко ответь на вопрос напарника и продолжи "
+                            "подводить его к предмету. Без повторов и "
+                            "объявлений действий.")
+                        if not card_prompts.react_to_guess(candidate_card_key,cue):
+                            agent.duplex_session.append_commentary(cue)
+                        logger.info("Duet teammate question handled bot=%s kind=%s",
+                                    bot_uid[-6:],utterance_kind)
+                    return
                 lower = phrase.lower()
                 if any(x in lower for x in (
                     "пропусти", "пропускаем", "пропускай",
@@ -969,18 +992,42 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                         "дослушай следующую попытку. "
                                         "Никаких комментариев о проверке.")
                                     continue_followup = True
-                                # GPT-Live's native barge-in already yields to
-                                # the real partner. Forcing session.interrupt()
-                                # on every wrong guess aborts the pending reply
-                                # and makes the very next generate_reply refuse.
-                                # Only a CONFIRMED scored card transition may
-                                # interrupt the old audio forcefully.
+                                # The guessing bot needs structured feedback
+                                # when it is close, not just another hint.
+                                # Relay STATUS ONLY. No secret, missing word
+                                # or human/audio transcript leaves this seat.
+                                feedback_kind = partial.kind if partial else "different"
+                                try:
+                                    await ctx.room.local_participant.publish_data(
+                                        json.dumps({
+                                            "v":1,"turnId":str(candidate_card_key[0]),
+                                            "cardRevision":int(candidate_card_key[3]),
+                                            "kind":feedback_kind,
+                                        },ensure_ascii=False).encode("utf-8"),
+                                        reliable=True,
+                                        destination_identities=[human_uid],
+                                        topic=DUET_VOICE_FEEDBACK_TOPIC)
+                                    logger.info("Duet feedback relayed bot=%s kind=%s",
+                                                bot_uid[-6:],feedback_kind)
+                                except Exception as relay_error:
+                                    logger.debug("Duet feedback relay unavailable: %s",
+                                                 type(relay_error).__name__)
+                                # A SAME-card guess is not a reason to start
+                                # a new provider reply. Only update the
+                                # running native audio conversation.
                                 if continue_followup:
-                                    card_prompts.schedule(candidate_card_key, followup)
+                                    cue = ("Ты услышала частично правильную "
+                                           "догадку. Естественно уточни "
+                                           "недостающую часть." if partial else
+                                           "Услышь попытку напарника и дай "
+                                           "ДРУГОЙ конкретный отличительный "
+                                           "признак. Не отвечай шаблоном.")
+                                    if not card_prompts.react_to_guess(
+                                            candidate_card_key,cue):
+                                        agent.duplex_session.append_commentary(cue)
                                     logger.info(
                                         "Duet final-guess followup queued bot=%s kind=%s",
-                                        bot_uid[-6:],
-                                        partial.kind if partial else "different")
+                                        bot_uid[-6:],feedback_kind)
                     elif result.get("reason") == "FORM_NOT_EXACT" and solo_explainer:
                         # The HUMAN's finalized guess also deserves a prompt
                         # response. Never react to raw microphone VAD.
@@ -1041,8 +1088,53 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 asyncio.create_task(on_heard(
                     SimpleNamespace(is_final=True,transcript=candidate)))
 
+        def on_duet_feedback_packet(packet):
+            # Only the same-team EXPLAINER may send card-scoped feedback.
+            # A wrong answer is not a score. This information shapes the
+            # next clarifying question without leaking the unseen secret.
+            nonlocal duet_guesser_feedback_key
+            if not is_duo or latest != "guesser":
+                return
+            sender=str(getattr(getattr(packet,"participant",None),"identity","") or "")
+            key=(str(duet_snapshot.get("turnId") or ""),
+                 int(duet_snapshot.get("cardRevision") or 0))
+            kind=verified_duet_feedback_packet(
+                getattr(packet,"data",None),
+                topic=str(getattr(packet,"topic","") or ""),
+                sender=sender,expected_peer=human_uid,
+                turn_id=key[0],revision=key[1])
+            if not kind or duet_guesser_feedback_key == (key,kind):
+                return
+            duet_guesser_feedback_key = (key,kind)
+            suggestion = {
+                "different": (
+                    "Твоя предыдущая версия не подходит. Не повторяй её "
+                    "и не говори «нужна новая подсказка» снова. "
+                    "Дослушай напарника. Если не хватает информации — "
+                    "один конкретный вопрос: категория, назначение, "
+                    "свойство или место использования."),
+                "missing_modifier": (
+                    "Ты уже правильно определил ОСНОВНОЙ ПРЕДМЕТ "
+                    "составного ответа, но не его обязательную разновидность. "
+                    "НЕ начинай искать новый предмет. Спроси о его "
+                    "состоянии, материале, цвете, способе приготовления "
+                    "или виде и предложи ПОЛНОЕ словосочетание."),
+                "missing_object": (
+                    "Ты назвал верный ПРИЗНАК составного ответа, но ещё "
+                    "не сам предмет. Спроси, что это за объект, или "
+                    "предложи предмет с уже названным признаком."),
+                "partial": (
+                    "Часть твоей версии близка к ответу. Доработай "
+                    "эту версию уточняющим вопросом; не начинай "
+                    "поиск сначала и не проси новую подсказку шаблоном."),
+            }[kind]
+            agent.duplex_session.append_thinking(suggestion)
+            logger.info("Duet feedback consumed bot=%s kind=%s",
+                        bot_uid[-6:],kind)
+
         if is_duo:
             ctx.room.on("data_received",on_duet_guess_packet)
+            ctx.room.on("data_received",on_duet_feedback_packet)
 
         async def on_guesser_own_voice(event):
             nonlocal duet_guesser_last_key, duet_guesser_repeat_count
@@ -1071,8 +1163,14 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 # the server may advance while a response is in flight.
                 own_turn=str(duet_snapshot.get("turnId") or "")
                 own_revision=int(duet_snapshot.get("cardRevision") or 0)
-                result = await game.duet_guesser_spoke(phrase)
-                if (result.get("reason") == "FORM_NOT_EXACT"
+                own_utterance_kind = duet_utterance_kind(phrase)
+                # Clarifying questions are conversation, NOT incorrect
+                # guesses. Forward them through the same authenticated
+                # voice relay so the explainer answers what was asked.
+                result = (await game.duet_guesser_spoke(phrase)
+                          if own_utterance_kind == "guess" else
+                          {"matched":False,"reason":"DUET_QUESTION"})
+                if (result.get("reason") in ("FORM_NOT_EXACT","DUET_QUESTION")
                         and own_turn and len(phrase) <= 180):
                     # The GUESSER's own completed utterance is more reliable
                     # than the EXPLAINER's peer-input ASR under barge-in.
@@ -1252,6 +1350,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             nonlocal latest, duet_wrong_guesses, active_prompt_key
             nonlocal last_card_switched_at, duet_partial_key, duet_partial_repeats
             nonlocal duet_guesser_last_key, duet_guesser_repeat_count
+            nonlocal duet_guesser_feedback_key
             nonlocal pending_human_guess
             previous = None
             pending_duet_ack = None
@@ -1400,6 +1499,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     elif role == "guesser":
                         duet_guesser_last_key = None
                         duet_guesser_repeat_count = 0
+                        duet_guesser_feedback_key = None
                         agent.duplex_session.append_instructions(
                             "ТВОЯ РОЛЬ: УГАДЫВАЮЩИЙ. Секретного слова не знаешь. "
                             + ("Дослушай подсказку. Отвечай только одним "
@@ -1494,14 +1594,18 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             "Не повторяй прежнюю подсказку и не говори о ходе игры."
                         ),
                         "make_guess": (
-                            "Твоя очередь УГАДЫВАТЬ по уже услышанной подсказке. "
-                            "Немедленно скажи одну конкретную догадку. "
-                            "Не проси объясняющего передать тайное слово."
+                            "Ты услышал новую реплику напарника. "
+                            "Если уже есть конкретная версия — назови её. "
+                            "Если не хватает одного признака, задай ОДИН "
+                            "предметный вопрос: например «Для чего это?» "
+                            "или «Какого оно цвета?». Не произноси "
+                            "шаблонное «нужна новая подсказка»."
                         ),
                         "request_hint": (
-                            "Ты угадываешь, но не слышишь подсказки. "
-                            "Скажи очень коротко: Дай подсказку! "
-                            "После ответа сразу пробуй угадать."
+                            "Первая подсказка пока не прозвучала. "
+                            "Один раз коротко попроси напарника начать: "
+                            "«Подскажи, что это такое?». После этого "
+                            "СЛУШАЙ его ответ и не повторяй запрос."
                         ),
                     }[base_action]
                     logger.info("Game speech recovery: mode=%s bot=%s role=%s prompt=%s "
