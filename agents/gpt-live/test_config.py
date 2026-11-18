@@ -312,6 +312,8 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('async def confirm_correct_human_guess(',source)
         self.assertIn('async def commit_solo_approval(',source)
         self.assertIn('agent.confirm_last_human_guess = commit_solo_approval',source)
+        self.assertIn('last_peer_speech_started_at = time.monotonic()',source)
+        self.assertIn('deadline = time.monotonic() + 0.9',source)
         self.assertIn('if source == "tool":',source)
         self.assertIn('guess.get("approval_requested")',source)
         self.assertIn('time.monotonic() - last_tool_score_at < 1.5',source)
