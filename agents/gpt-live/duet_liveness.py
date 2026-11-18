@@ -46,7 +46,11 @@ class DuetLiveness:
     def card_changed(self, turn_id: str, role: str, word: str | None,
                      now: float, revision: int = 0) -> None:
         key = (turn_id, role, word if role == "explainer" else None)
-        if revision and role == "explainer":
+        # The GUESSER sees no secret, but a cardRevision is still a
+        # non-sensitive, authoritative signal to reset its conversational
+        # cadence after a successful guess. Without it the guesser keeps
+        # the preceding card's "asked for hint" state.
+        if revision and role in ("explainer", "guesser"):
             key += (revision,)
         if key != self.card_key:
             self.card_key = key
