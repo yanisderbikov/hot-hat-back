@@ -325,6 +325,8 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('deadline = time.monotonic() + 0.9',source)
         self.assertIn('if source == "tool":',source)
         self.assertIn('guess.get("approval_requested")',source)
+        self.assertIn('human_guess["status"] = "partial"',source)
+        self.assertIn('guess["status"] != "unmatched"',source)
         self.assertIn('time.monotonic() - last_tool_score_at < 1.5',source)
         self.assertIn('await game.approve_human_guess(',source)
         self.assertIn('if not result.get("matched"):',source)
