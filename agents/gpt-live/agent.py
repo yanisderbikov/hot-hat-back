@@ -879,7 +879,14 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         if active_prompt_key == candidate_card_key:
                             active_prompt_key = None
                             await card_prompts.close()
-                            await stop_stale_explanation(verified_score=True)
+                            # Interrupting SOLO GPT-Live at an exact MATCH
+                            # stops only local audio, NOT its internal voice
+                            # generation. The Nov 18 trace proves this caused
+                            # a seven-second next-card stall. Let native VAD
+                            # and the new-card commentary take over instead.
+                            # DUET still uses explicit verified-score cutoff.
+                            if is_duo:
+                                await stop_stale_explanation(verified_score=True)
                             logger.info(
                                 "Scored old card invalidated bot=%s",bot_uid[-6:])
                         else:
@@ -1181,8 +1188,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                 # Interrupting a running delegated tool response can strand
                 # GPT-Live for seconds. Natural tool speech continues; the
                 # next authoritative card owns the following clue.
-                if source != "tool":
-                    await stop_stale_explanation(verified_score=True)
+                # Even the fallback transcript arrived at the end of a
+                # spoken turn. Never interrupt SOLO after an approval: it
+                # can strand the pending GPT-Live backend delegation.
             if result.get("turnClosed"):
                 stop.set()
             return True
@@ -1316,8 +1324,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                         if changed_active_card or beginning_explanation:
                             # Any unfinished greeting or old-card generation
                             # must yield to the server's first playable word.
-                            await stop_stale_explanation(
-                                verified_score=changed_active_card or beginning_explanation)
+                            if is_duo:
+                                await stop_stale_explanation(
+                                    verified_score=changed_active_card or beginning_explanation)
                         # A word is ephemeral private thinking, NOT a
                         # permanent instruction: older standing secrets were
                         # pulling Rublisha back to Museum after Penguin.
