@@ -115,8 +115,11 @@ class CardPromptCoordinator:
                 if self.spoke_at() > baseline:
                     return
                 agent_state, peer_state = self.state()
-                if agent_state == "speaking":
-                    return
+                # The model can still be playing the PREVIOUS card while
+                # agent_state remains "speaking" (no new speech onset event).
+                # The OLD guard silently discarded recovery exactly then.
+                # An updated native commentary cue is safe: it does not
+                # interrupt playout or request another provider reply.
                 if peer_state == "speaking":
                     # The human's next guess has priority. The nudge remains
                     # armed until they stop; never talk over a teammate.
