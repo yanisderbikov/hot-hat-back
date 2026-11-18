@@ -581,6 +581,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         )
         duet_snapshot = {}
         last_agent_spoke = 0.0
+        # VAD speech onset must be separate from finalized ASR arrival.
+        # mark_heard() updates last_peer_voice on BOTH events, so that value
+        # is not a reliable speech-start timestamp for early AI approval.
+        last_peer_speech_started_at = 0.0
         duet_wrong_guesses = 0
         duet_guess_verification_pending = False
         # Per-card partial answers are private to the active explainer.
@@ -734,8 +738,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     last_logged_voice_key=active_prompt_key
 
         def duet_partner_speech(event):
+            nonlocal last_peer_speech_started_at
             if watch_game_speech and str(getattr(event, "new_state", "")) == "speaking":
-                duet_live.mark_heard(time.monotonic())
+                last_peer_speech_started_at = time.monotonic()
+                duet_live.mark_heard(last_peer_speech_started_at)
                 # LiveKit DuplexModel handles natural barge-in itself. NEVER
                 # force-interrupt at VAD 'speaking' onset: this fires before
                 # a complete word exists and repeatedly cut OFF BOTH bots.
@@ -777,8 +783,10 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                     # The model may begin saying "Да" BEFORE the final ASR
                     # transcript arrives. The real VAD speech-onset time
                     # is the correct temporal boundary, not ASR end time.
-                    "speech_started_at": (duet_live.last_peer_voice
-                                          or time.monotonic()-2.0),
+                    "speech_started_at": (
+                        last_peer_speech_started_at
+                        if 0 < time.monotonic() - last_peer_speech_started_at < 8
+                        else time.monotonic() - 2.0),
                     "status": "pending", "approval_requested": False,
                 }
                 pending_human_guess = human_guess
