@@ -296,17 +296,25 @@ class SettingsTests(unittest.TestCase):
         from agent import _standalone_voice_approval
         for text in ("Да!", "Верно.", "Точно!", "Правильно", "Это оно",
                      "Угадал!", "Так и есть", "Да! Ещё один признак.",
-                     "Верно. Следующая загадка."):
+                     "Верно. Следующая загадка.", "Верно, верно!", 
+                     "Да, да!", "Точно, правильно!"):
             self.assertIsNotNone(_standalone_voice_approval(text),text)
         for text in ("да, но какой?", "да, близко", "да нет",
                      "давай дальше", "да это предмет?", "да! но не такой",
                      "Да! Почти, но другой.", "Верно! Но нет, другой.",
+                     "Да, да, но какой?", "Верно, почти",
                      "возможно", ""):
             self.assertIsNone(_standalone_voice_approval(text),text)
         source=Path(__file__).with_name("agent.py").read_text(encoding="utf-8")
         client=Path(__file__).with_name("game_client.py").read_text(
             encoding="utf-8")
         self.assertIn('async def on_assistant_spoken_approval(event):',source)
+        self.assertIn('async def confirm_correct_human_guess(',source)
+        self.assertIn('async def commit_solo_approval(',source)
+        self.assertIn('agent.confirm_last_human_guess = commit_solo_approval',source)
+        self.assertIn('if source == "tool":',source)
+        self.assertIn('guess.get("approval_requested")',source)
+        self.assertIn('time.monotonic() - last_tool_score_at < 1.5',source)
         self.assertIn('await game.approve_human_guess(',source)
         self.assertIn('if not result.get("matched"):',source)
         self.assertIn('pending_human_guess["key"] != key',source)
