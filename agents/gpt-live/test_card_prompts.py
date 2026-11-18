@@ -6,6 +6,29 @@ from card_prompts import CardPromptCoordinator
 
 
 class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_duet_same_card_reaction_never_starts_competing_reply(self):
+        key=("turn","explainer","солёный огурец",2,False)
+        generated=[]
+        commentary=[]
+        hold=asyncio.get_running_loop().create_future()
+        coord=CardPromptCoordinator(
+            generate=lambda txt:generated.append(txt) or hold,
+            commentary=commentary.append,
+            state=lambda:("listening","listening"),
+            is_current=lambda k:k==key,
+            spoke_at=lambda:0.0,
+            commentary_grace=0.15,response_timeout=0.05,
+            attempts=1)
+        coord.schedule(key,"old hint")
+        await asyncio.wait_for(coord._task,timeout=1)
+        self.assertEqual(generated,["old hint"])
+        self.assertTrue(coord.react_to_guess(
+            key,"ask for the missing modifier"))
+        self.assertEqual(generated,["old hint"])
+        self.assertIn("ask for the missing modifier",commentary)
+        hold.set_result(None)
+        await coord.close()
+
     async def test_new_card_immediately_generates_speech_without_waiting_for_human(self):
         key = ("round1", "explainer", "Маяк", 3, False)
         called = []
