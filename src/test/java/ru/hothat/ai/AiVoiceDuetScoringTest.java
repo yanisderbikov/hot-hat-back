@@ -131,6 +131,57 @@ class AiVoiceDuetScoringTest {
         verify(f.transaction(),times(1)).commit();
     }
 
+    @Test void partialPirateNeverScoresEvenIfAIIncorrectlySaysYes() {
+        Fixture f=make(EXPLAINER);
+        String human="human-guessing";
+        f.game().setGuesserUid(human);
+        f.game().setCurrentWord("Морской пират");
+        f.game().setRosters(Map.of(TEAM,List.of(EXPLAINER,human)));
+        when(f.rooms().getPlayer(ROOM,human)).thenReturn(Optional.of(
+                RoomPlayer.builder().roomId(ROOM).teamId(TEAM)
+                        .uid(human).name("Игрок").isTestBot(false).build()));
+        String action="aia_123456789012345678";
+        for(String incomplete:List.of("пират", "Пират?", "морской",
+                "Это пират!", "Вроде пират, но какой?")) {
+            Map<String,Object> result=f.service().assistantApprovesHumanGuess(
+                    "ai_voice",human,incomplete,"Верно!",
+                    "turn-1",0,action);
+            assertEquals(false,result.get("matched"),incomplete);
+            assertEquals("COMPOUND_NOT_COMPLETE",result.get("reason"),incomplete);
+        }
+        verify(f.engine(),never()).guess(any(),anyString(),anyString());
+        verify(f.transaction(),never()).addTeamScore(anyString(),anyInt());
+        verify(f.transaction(),never()).commit();
+
+        // A subsequent complete human answer is still accepted.
+        Map<String,Object> correct=f.service().assistantApprovesHumanGuess(
+                "ai_voice",human,"Морского пирата!","Верно!",
+                "turn-1",0,action);
+        assertEquals(true,correct.get("matched"));
+        verify(f.engine(),times(1)).guess(any(),eq("turn-1"),anyString());
+        verify(f.transaction(),times(1)).addTeamScore(TEAM,1);
+    }
+
+    @Test void otherCompoundApprovalsAlsoRequireAllWords() {
+        Fixture f=make(EXPLAINER);
+        String human="human-guessing";
+        f.game().setGuesserUid(human);
+        f.game().setCurrentWord("Солёный огурец");
+        f.game().setRosters(Map.of(TEAM,List.of(EXPLAINER,human)));
+        when(f.rooms().getPlayer(ROOM,human)).thenReturn(Optional.of(
+                RoomPlayer.builder().roomId(ROOM).teamId(TEAM)
+                        .uid(human).name("Игрок").isTestBot(false).build()));
+        assertEquals("COMPOUND_NOT_COMPLETE",
+                f.service().assistantApprovesHumanGuess(
+                    "ai_voice",human,"Огурец?","Да!",
+                    "turn-1",0,"aia_123456789012345678").get("reason"));
+        verify(f.engine(),never()).guess(any(),anyString(),anyString());
+        assertEquals(true,
+                f.service().assistantApprovesHumanGuess(
+                    "ai_voice",human,"Огурец солёный!","Да!",
+                    "turn-1",0,"aia_123456789012345679").get("matched"));
+    }
+
     @Test void partialYesAndExpiredOrStaleApprovalsNeverClickNextWord() {
         Fixture f=make(EXPLAINER);
         String human="human-guessing";
