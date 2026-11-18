@@ -101,6 +101,32 @@ class CardPromptCoordinator:
             self._score_silence_task = asyncio.create_task(
                 self._recover_after_score(key, self.spoke_at()))
 
+    def react_to_guess(self, key: tuple, instructions: str) -> bool:
+        """One contextual voice follow-up, without competing generate_reply.
+
+        A same-card incorrect guess is a NEW conversation event, not a new
+        secret card. Never replace the in-flight provider reply for it.
+        Returning False allows the caller to use native commentary when
+        the first card has only been primed (no coordinator key yet).
+        """
+        if key != self._key or not self.is_current(key):
+            return False
+        if self.commentary is None:
+            return False
+        now = time.monotonic()
+        if now - self._last_update_at < 0.45:
+            return True
+        self._last_update_at = now
+        try:
+            self.commentary(instructions)
+            self.log("card_prompt_duet_reaction",
+                     int(key[3]) if len(key) > 3 else 0, "native")
+            return True
+        except Exception as exc:
+            self.log("card_prompt_duet_reaction_failed",
+                     0, type(exc).__name__)
+            return False
+
     async def _recover_after_score(self, key: tuple, baseline: float) -> None:
         """Give a stalled full-duplex model ONE extra native voice cue.
 
