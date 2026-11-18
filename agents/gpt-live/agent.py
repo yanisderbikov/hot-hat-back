@@ -1051,6 +1051,14 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                             if still_same:
                                 partial=partial_compound_guess(
                                     candidate_card_key[2],phrase)
+                                if partial is not None and human_guess is not None:
+                                    # "пират" for "морской пират" is an
+                                    # acknowledged PART, never an accepted
+                                    # whole-word guess. Ignore any trailing
+                                    # "Да!"/tool approval for this exact
+                                    # human utterance. The backend also
+                                    # enforces this independently.
+                                    human_guess["status"] = "partial"
                                 followup=((already_spoken_component_hint(
                                               candidate_card_key[2],partial) +
                                           partial.instruction()) if partial else
