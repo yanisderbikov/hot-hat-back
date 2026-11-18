@@ -311,3 +311,30 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(comments), 3,
             "Only the current word may receive a post-score recovery")
         await coord.close()
+
+    async def test_stale_speaking_state_does_not_suppress_next_card_cue(self):
+        # Observed on Nov 18: old GPT-Live audio kept agent_state=speaking,
+        # with no NEW-card onset event. The previous recovery returned here.
+        key=("turn","explainer","следующее",5,False)
+        gate=asyncio.Event()
+        commentary=[]
+        async def controlled_sleep(seconds):
+            if seconds == 2.4:
+                await gate.wait()
+            else:
+                await asyncio.sleep(0)
+        coord=CardPromptCoordinator(
+            generate=lambda _:asyncio.create_task(asyncio.sleep(0)),
+            commentary=commentary.append,
+            state=lambda:("speaking","listening"),
+            is_current=lambda k:k==key,
+            spoke_at=lambda:10.0,
+            sleep=controlled_sleep,
+            attempts=1)
+        coord.schedule(key,"New clue",after_verified_score=True)
+        await asyncio.sleep(0)
+        gate.set()
+        await asyncio.wait_for(coord._score_silence_task,timeout=1.0)
+        self.assertEqual(len(commentary),2)
+        self.assertIn("признаком",commentary[1])
+        await coord.close()
