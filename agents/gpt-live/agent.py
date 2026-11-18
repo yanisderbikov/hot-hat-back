@@ -75,6 +75,15 @@ def _standalone_voice_approval(text: str) -> str | None:
     )
     if normalized in approvals:
         return normalized
+    # GPT-Live can repeat short unmistakable approvals inside one audio
+    # turn ("Верно, верно!", "Да! Да!"). Final turn transcription arrives
+    # AFTER speech; previous classifier rejected these and delayed scoring.
+    # Never accept any non-approval word such as "но", "почти", "какой".
+    words = normalized.split()
+    if 1 < len(words) <= 3 and all(w in (
+            "да", "верно", "точно", "правильно", "есть",
+            "угадал", "угадала", "именно") for w in words):
+        return words[0]
     # A full-duplex turn can contain "Да! <next sentence>" in the SAME
     # item. Treat the unequivocal first sentence as the approval, but
     # NEVER accept corrections like "Да! Но какой именно?".
@@ -151,6 +160,10 @@ class HotHatPlayer(Agent):
                  character_name: str = "Рублиша", personality: str = "",
                  duet_role: str = "", recent_words: list[dict] | None = None):
         self.game = game
+        # Optional server-authoritative approval callback, registered only
+        # for a live human+AI explainer in the worker. No guessed text or
+        # secret is accepted as a model tool argument.
+        self.confirm_last_human_guess = None
         self.human_uid = human_uid
         self.smalltalk = smalltalk
         self.duet_role = duet_role
@@ -351,6 +364,31 @@ class HotHatPlayer(Agent):
                     "Останься на текущем слове, предложи другую подсказку.")
         except Exception:
             return "Продолжи объяснять текущее слово."
+
+    @function_tool
+    async def confirm_correct_human_guess(self, context: RunContext) -> str:
+        """Засчитать последнюю догадку человека, если она ТОЧНО верна.
+
+        Вызывай этот инструмент ДО того, как произнести «Да», «Верно»
+        или «Правильно» в роли объясняющего. Инструмент проверяет
+        последнюю финальную голосовую догадку и текущую карточку.
+        Не вызывай при частичном ответе, сомнении или неверной догадке.
+        Не передавай в инструмент ответ или секретное слово.
+        """
+        callback = self.confirm_last_human_guess
+        if callback is None or self.smalltalk or self.duet_role:
+            return "Зачёт недоступен. Не подтверждай догадку."
+        try:
+            matched = await callback("верно", "tool")
+        except Exception as exc:
+            logger.warning("AI approval tool failed: %s", type(exc).__name__)
+            return "Зачёт не подтверждён. Дай другую подсказку."
+        if matched:
+            return ("Слово засчитано. Скажи ОДНО короткое подтверждение "
+                    "и сразу объясняй СЛЕДУЮЩУЮ карточку, когда она придёт. "
+                    "Не повторяй подтверждение.")
+        return ("Зачёт не подтверждён. НЕ говори «Да» или «Верно». "
+                "Уточни загадку другим кратким признаком.")
 
     @function_tool
     async def read_game_role(self, context: RunContext) -> str:
@@ -600,6 +638,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
         last_duet_wrong_nudge = 0.0
         last_card_switched_at = 0.0
         last_logged_voice_key = None
+        # A tool-committed approval may be finishing its delegated response.
+        # Do not abort that response just because the game advanced.
+        last_tool_score_at = 0.0
         active_prompt_key = None
         async def reset_orphaned_speech():
             # GPT-Live is server-driven: even force=False may break an
@@ -664,7 +705,9 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             # continues thinking internally after an interrupt, but LiveKit
             # can stop its LOCAL playout. Do this only on a real server
             # score/card change, never on VAD or an incorrect guess.
-            if not verified_score or str(getattr(session,"agent_state","")) != "speaking":
+            if (not verified_score or
+                    time.monotonic() - last_tool_score_at < 1.5 or
+                    str(getattr(session,"agent_state","")) != "speaking"):
                 return
             try:
                 await asyncio.wait_for(session.interrupt(force=False),timeout=0.65)
@@ -941,10 +984,12 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
                                               candidate_card_key[2],partial) +
                                           partial.instruction()) if partial else
                                     "Напарник только что предложил вариант. "
-                                    "Коротко отзовись по смыслу, а затем "
+                                    "Если он ТОЧНО назвал ответ, СНАЧАЛА вызови "
+                                    "confirm_correct_human_guess и только "
+                                    "после успешного результата скажи одно "
+                                    "«Верно!». Иначе НЕ подтверждай зачёт: "
                                     "дай один НОВЫЙ конкретный признак "
-                                    "загаданного предмета. Без объявления "
-                                    "проверки, без повторения прежней подсказки.")
+                                    "загаданного предмета без повтора.")
                                 agent.duplex_session.append_thinking(followup)
                                 # Preserve natural interruption when a human
                                 # answers: forcing an extra interrupt leaves
@@ -1085,63 +1130,85 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             if _ai_committed_to_explaining(getattr(item,"text_content","")):
                 await ensure_server_started_for_bot("bot_committed")
 
-        async def on_assistant_spoken_approval(event):
-            """Turn an EXPLICIT assistant 'Да!' into a real guessed action.
+        async def commit_solo_approval(approval: str, source: str) -> bool:
+            """Commit one verified spoken or delegated AI decision immediately.
 
-            The legacy realtime model could say 'Да!' on a correct human
-            guess but the strict ASR matcher returned FORM_NOT_EXACT.
-            Conversely, a partial 'Да, но какой?' MUST NOT click a word.
-            The backend makes the final, identity-bound and version-bound
-            decision, exactly like a human explainer's UI action.
+            An assistant transcript is available only AFTER its audible
+            response, so the delegated tool can score earlier while the model
+            is responding. Both routes share the same single-use gate and
+            server turn/card authorization. Never score from AI's secret.
             """
-            nonlocal pending_human_guess, active_prompt_key
+            nonlocal pending_human_guess, active_prompt_key, last_tool_score_at
+            if not solo_explainer or latest != "explainer" or stop.is_set():
+                return False
+            guess = pending_human_guess
+            if not guess or guess.get("approval_requested"):
+                return False
+            candidate = guess["key"]
+            if (candidate != active_prompt_key or
+                    time.monotonic() - guess["at"] > 8.0 or
+                    (source == "spoken" and
+                     last_agent_spoke < guess["speech_started_at"] - 0.3)):
+                return False
+            async with score_lock:
+                if (guess["status"] != "unmatched" or
+                        candidate != active_prompt_key or
+                        guess.get("approval_requested")):
+                    return False
+                guess["approval_requested"] = True
+                result = await game.approve_human_guess(
+                    human_uid, guess["phrase"], approval,
+                    str(candidate[0]), int(candidate[3]))
+            logger.info(
+                "AI explainer approval: bot=%s source=%s scored=%s reason=%s",
+                bot_uid[-6:], source, bool(result.get("matched")),
+                str(result.get("reason") or "MATCH")[:24])
+            if not result.get("matched"):
+                return False
+            if source == "tool":
+                last_tool_score_at = time.monotonic()
+            if pending_human_guess is guess:
+                pending_human_guess = None
+            compound_asr.clear()
+            agent.recent_word_keys.add(str(result.get("actionId") or ""))
+            agent.duplex_session.append_thinking(
+                "Только что подтверждённое слово ЗАСЧИТАНО. "
+                "Прежняя карточка закрыта навсегда. "
+                "Не описывай её больше. Следующая придёт с сервера.")
+            if active_prompt_key == candidate:
+                active_prompt_key = None
+                await card_prompts.close()
+                # Interrupting a running delegated tool response can strand
+                # GPT-Live for seconds. Natural tool speech continues; the
+                # next authoritative card owns the following clue.
+                if source != "tool":
+                    await stop_stale_explanation(verified_score=True)
+            if result.get("turnClosed"):
+                stop.set()
+            return True
+
+        async def on_assistant_spoken_approval(event):
+            """Backward-compatible speech fallback when model skips its tool."""
             if not solo_explainer or latest != "explainer" or stop.is_set():
                 return
-            item=getattr(event,"item",None)
-            if (getattr(item,"role","") != "assistant" or
-                    getattr(item,"interrupted",False)):
+            item = getattr(event, "item", None)
+            if (getattr(item, "role", "") != "assistant" or
+                    getattr(item, "interrupted", False)):
                 return
-            approval=_standalone_voice_approval(getattr(item,"text_content",""))
-            if not approval:
-                return
-            guess=pending_human_guess
-            if not guess or guess.get("approval_requested"):
-                return
-            candidate=guess["key"]
-            if (candidate != active_prompt_key or
-                    time.monotonic()-guess["at"] > 8.0 or
-                    last_agent_spoke < guess["speech_started_at"]-0.3):
-                return
-            guess["approval_requested"]=True
-            try:
-                async with score_lock:
-                    if (guess["status"] != "unmatched" or
-                            candidate != active_prompt_key):
-                        return
-                    result=await game.approve_human_guess(
-                        human_uid,guess["phrase"],approval,
-                        str(candidate[0]),int(candidate[3]))
-                logger.info("AI explainer verbal approval: bot=%s scored=%s",
-                            bot_uid[-6:],bool(result.get("matched")))
-                if not result.get("matched"):
-                    return
-                if pending_human_guess is guess:
-                    pending_human_guess=None
-                compound_asr.clear()
-                agent.recent_word_keys.add(str(result.get("actionId") or ""))
-                agent.duplex_session.append_thinking(
-                    "Только что подтверждённое слово ЗАСЧИТАНО. "
-                    "Прежняя карточка закрыта навсегда. "
-                    "Не описывай её больше. Следующая придёт с сервера.")
-                if active_prompt_key == candidate:
-                    active_prompt_key=None
-                    await card_prompts.close()
-                    await stop_stale_explanation(verified_score=True)
-                if result.get("turnClosed"):
-                    stop.set()
-            except Exception as exc:
-                logger.warning("AI verbal approval not committed bot=%s error=%s",
-                               bot_uid[-6:],type(exc).__name__)
+            approval = _standalone_voice_approval(
+                getattr(item, "text_content", ""))
+            if approval:
+                try:
+                    await commit_solo_approval(approval, "spoken")
+                except Exception as exc:
+                    logger.warning(
+                        "AI verbal approval not committed bot=%s error=%s",
+                        bot_uid[-6:], type(exc).__name__)
+
+        # The delegated tool can settle a correct answer while GPT-Live is
+        # still speaking. The ordinary completed-utterance fallback remains.
+        if solo_explainer:
+            agent.confirm_last_human_guess = commit_solo_approval
 
         async def on_solo_assistant_item(event):
             await on_assistant_role_commitment(event)
