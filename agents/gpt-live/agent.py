@@ -1157,6 +1157,16 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             if not solo_explainer or latest != "explainer" or stop.is_set():
                 return False
             guess = pending_human_guess
+            if source == "tool":
+                # The delegated GPT-Live backend can ask for a score while
+                # the FINAL human ASR text or exact-match request is still
+                # in flight. Wait briefly rather than rejecting a correct
+                # answer and making the bot repeat "Верно" for seconds.
+                deadline = time.monotonic() + 0.9
+                while (time.monotonic() < deadline and
+                       (guess is None or guess["status"] == "pending")):
+                    await asyncio.sleep(0.075)
+                    guess = pending_human_guess
             if not guess or guess.get("approval_requested"):
                 return False
             candidate = guess["key"]
