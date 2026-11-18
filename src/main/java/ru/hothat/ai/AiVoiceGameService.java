@@ -367,6 +367,17 @@ public class AiVoiceGameService {
                 !Objects.equals(game.getExplainerUid(),u.getBotUid()) ||
                 !Objects.equals(game.getGuesserUid(),speakerUid))
             return Map.of("matched",false,"reason","WORD_ADVANCED");
+        // A verbal "Верно!" is NOT sufficient evidence for the missing
+        // half of a multiword secret. In the Nov 18 18:04 recording a human
+        // said only "пират", the AI correctly asked "какой?", but its
+        // later standalone approval nevertheless scored "морской пират".
+        // Keep semantic AI approval for SINGLE-word synonyms, but require
+        // the WHOLE canonical compound (with supported Russian case forms)
+        // before any multiword card can be advanced via this fallback.
+        String normalizedSecret=wordsOnly(game.getCurrentWord());
+        if(normalizedSecret.contains(" ") &&
+                !exactWordSpoken(game.getCurrentWord(),transcript))
+            return Map.of("matched",false,"reason","COMPOUND_NOT_COMPLETE");
         String teamId=game.getCurrentTeamId();
         WordResolved resolved=engine.guess(game,game.getTurnId(),wordActionId);
         if(resolved.outcome()!=WordResolved.Outcome.COUNTED) {
