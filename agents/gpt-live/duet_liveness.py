@@ -17,6 +17,11 @@ class DuetLiveness:
     card_key: tuple | None = None
     prompts_without_voice: int = 0
     pending: bool = False
+    # A guesser only gets ONE prompted turn per newly heard explainer cue.
+    # Otherwise the watchdog fires every few seconds and the voice model
+    # compulsively repeats "нужна новая подсказка" with no new evidence.
+    peer_voice_at_last_prompt: float = -1.0
+    hint_requests_this_card: int = 0
     max_prompts_without_voice: int = 3
     # Only TWO authentic AI participants use the shorter idle delays.
     # Human+AI keeps the previously tested 5.5/7.5-second logic.
@@ -49,6 +54,8 @@ class DuetLiveness:
             self.last_prompt = 0.0
             self.prompts_without_voice = 0
             self.pending = False
+            self.peer_voice_at_last_prompt = -1.0
+            self.hint_requests_this_card = 0
 
     def decide(self, *, now: float, epoch_ms: int, phase: str,
                role: str, word: str | None, paused: bool, deadline_ms: int,
@@ -109,6 +116,14 @@ class DuetLiveness:
             delay = max(delay, thinking_delay)
         if now - self.last_activity < delay or (self.last_prompt > 0 and now - self.last_prompt < cooldown):
             return None
+        # Do not force a second guess/question on the SAME unheard clue.
+        # The explainer, not a robotic timer, must provide the next detail.
+        if role == "guesser":
+            if (self.peer_voice_at_last_prompt >= 0 and
+                    self.last_peer_voice <= self.peer_voice_at_last_prompt):
+                return None
+            if self.last_peer_voice <= 0 and self.hint_requests_this_card:
+                return None
         if self.prompts_without_voice >= self.max_prompts_without_voice:
             return "failed"
         self.prompts_without_voice += 1
@@ -117,4 +132,8 @@ class DuetLiveness:
         self.pending = True
         action = ("give_hint" if role == "explainer" else
                   "make_guess" if self.last_peer_voice > 0 else "request_hint")
+        if role == "guesser":
+            self.peer_voice_at_last_prompt = self.last_peer_voice
+            if action == "request_hint":
+                self.hint_requests_this_card += 1
         return "reset_" + action if agent_state == "thinking" else action
