@@ -80,6 +80,36 @@ class DuetLivenessTests(unittest.TestCase):
         self.assertEqual(next_action(live,22.2,role="guesser",word=None),"make_guess")
         self.assertEqual(live.prompts_without_voice,1)
 
+    def test_guesser_only_reacts_once_per_new_teammate_clue(self):
+        live=DuetLiveness(last_activity=0,fast_duet=True,speed_round=True)
+        live.card_changed("turn","guesser",None,0,revision=1)
+        self.assertEqual(next_action(live,3,role="guesser",word=None),
+                         "request_hint")
+        live.pending=False
+        self.assertIsNone(next_action(live,10,role="guesser",word=None),
+                          "Never spam a second hint request without teammate audio")
+        live.mark_heard(11)
+        self.assertEqual(next_action(live,14,role="guesser",word=None),
+                         "make_guess")
+        live.pending=False
+        self.assertIsNone(next_action(live,20,role="guesser",word=None),
+                          "Do not guess repeatedly from the same single clue")
+        live.mark_heard(21)
+        self.assertEqual(next_action(live,24,role="guesser",word=None),
+                         "make_guess")
+
+    def test_guesser_card_revision_resets_dialogue_without_secret(self):
+        live=DuetLiveness(last_activity=0,fast_duet=True,speed_round=True)
+        live.card_changed("turn","guesser",None,0,revision=2)
+        self.assertEqual(next_action(live,3,role="guesser",word=None),
+                         "request_hint")
+        live.pending=False
+        live.card_changed("turn","guesser",None,5,revision=3)
+        self.assertEqual(live.card_key,("turn","guesser",None,3))
+        self.assertEqual(live.hint_requests_this_card,0)
+        self.assertEqual(next_action(live,9,role="guesser",word=None),
+                         "request_hint")
+
     def test_real_speech_resets_recovery_budget_even_during_long_turn(self):
         live=DuetLiveness(last_activity=0)
         live.card_changed("turn-1","explainer","Трамвай",0)
