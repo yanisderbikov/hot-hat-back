@@ -78,14 +78,14 @@ public record PublishMemeRequestDTO(
         String sourceUrl,
 
         /**
-         * Свободная пометка о способе импорта — её пишет и читает только
-         * интерфейс. Предел в 24 знака взят из колонки: сегодня клиент шлёт
-         * значения вроде {@code youtube-tab-raw-capture-playing-source} и
-         * получает не ошибку запроса, а срыв записи в базу.
+         * Legacy recording tabs can still send a long importMode.
+         * Accept up to 64 characters at the API edge, then canonicalize
+         * to the DB column's 24-character limit in PublishMemeUseCase.
+         * Otherwise a correctly captured video fails only at publication.
          */
         @Schema(description = "Как мем попал в библиотеку: file, record, direct-url и подобное",
-                example = "file", maxLength = 24, nullable = true)
-        @Size(max = 24, message = "Способ импорта длиннее 24 символов.")
-        @Pattern(regexp = "^[a-z0-9-]{1,24}$", message = "Способ импорта записывается латиницей через дефис.")
+                example = "file", maxLength = 64, nullable = true)
+        @Size(max = 64, message = "Способ импорта длиннее 64 символов.")
+        @Pattern(regexp = "^[a-z0-9-]{1,64}$", message = "Способ импорта записывается латиницей через дефис.")
         String importMode) {
 }
