@@ -124,6 +124,45 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await coord.close()
 
 
+    async def test_verified_duet_score_starts_new_card_even_when_old_thinking_has_no_handle(self):
+        # Observed Nov 19: a successful AI+AI guess advances the card, yet
+        # the interrupted old GPT-Live turn can still report "thinking".
+        # No tracked generate_reply handle existed, so the new card used
+        # to wait 2.5 seconds and then silently abandon the speech request.
+        key=("turn","explainer","морская звезда",7,False)
+        generated=[]
+        commentary=[]
+        coord=CardPromptCoordinator(
+            generate=lambda txt:generated.append(txt) or
+                asyncio.create_task(asyncio.sleep(0)),
+            commentary=commentary.append,
+            state=lambda:("thinking","listening"),
+            is_current=lambda k:k==key,
+            spoke_at=lambda:0.0,
+            response_timeout=0.1,commentary_grace=0.15,attempts=1)
+        coord.schedule(key,"new clue after scored word",
+                       after_verified_score=True)
+        await asyncio.wait_for(coord._task,timeout=1.0)
+        self.assertEqual(generated,["new clue after scored word"])
+        self.assertEqual(commentary,["new clue after scored word"])
+        await coord.close()
+
+    async def test_unverified_same_card_never_preempts_stale_thinking(self):
+        key=("turn","explainer","снежный человек",7,False)
+        requested=[]
+        coord=CardPromptCoordinator(
+            generate=lambda txt:requested.append(txt) or
+                asyncio.create_task(asyncio.sleep(0)),
+            state=lambda:("thinking","listening"),
+            is_current=lambda k:k==key,
+            spoke_at=lambda:0.0,
+            attempts=1)
+        coord.schedule(key,"a same-card hint",after_verified_score=False)
+        await asyncio.sleep(0.35)
+        self.assertEqual(requested,[],
+            "Only a verified score may preempt a busy provider turn")
+        await coord.close()
+
     async def test_new_card_supersedes_stale_provider_reply_but_same_card_does_not(self):
         old=("turn","explainer","огненная шляпа",0,False)
         new=("turn","explainer","воздушный шар",1,False)
