@@ -21,7 +21,8 @@ class CardPromptCoordinator:
                  reset: Callable[[], Awaitable] | None = None,
                  require_voice: bool = False,
                  response_timeout: float = 3.0,
-                 commentary_grace: float = 1.2):
+                 commentary_grace: float = 1.2,
+                 fast_score_handoff: bool = False):
         self.generate = generate
         self.state = state
         self.is_current = is_current
@@ -36,6 +37,9 @@ class CardPromptCoordinator:
         # Keep native real-time commentary first; the optional shorter
         # SOLO delay gets an explicit reply going before ten seconds pass.
         self.commentary_grace = max(0.15, min(1.5, commentary_grace))
+        # Opt-in only for AI+AI: never alter the tested solo/Rublisha
+        # recovery path when a previous voice turn is still thinking.
+        self.fast_score_handoff = fast_score_handoff
         self._task: asyncio.Task | None = None
         self._key = None
         self._last_update_at = 0.0
@@ -96,7 +100,8 @@ class CardPromptCoordinator:
         # stale thinking state; unverified same-card hints cannot.
         self._superseding_key = (
             key if new_authoritative_card and
-                   (after_verified_score or had_pending_reply) else None)
+                   ((after_verified_score and self.fast_score_handoff)
+                    or had_pending_reply) else None)
         self._key = key
         self._last_update_at = 0.0
         # Log numeric revision ONLY; never the secret word in production.
