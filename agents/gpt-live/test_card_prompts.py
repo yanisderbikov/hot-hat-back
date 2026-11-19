@@ -139,12 +139,32 @@ class CardPromptCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             state=lambda:("thinking","listening"),
             is_current=lambda k:k==key,
             spoke_at=lambda:0.0,
-            response_timeout=0.1,commentary_grace=0.15,attempts=1)
+            response_timeout=0.1,commentary_grace=0.15,attempts=1,
+            fast_score_handoff=True)
         coord.schedule(key,"new clue after scored word",
                        after_verified_score=True)
         await asyncio.wait_for(coord._task,timeout=1.0)
         self.assertEqual(generated,["new clue after scored word"])
         self.assertEqual(commentary,["new clue after scored word"])
+        await coord.close()
+
+    async def test_rublisha_solo_preserves_old_verified_score_thinking_policy(self):
+        # The user likes solo/Rublisha: fast_score_handoff is strictly
+        # opt-in for two-AI teams. Its default must not preempt an old
+        # thinking state without a tracked pending provider request.
+        key=("turn","explainer","компас",7,False)
+        generated=[]
+        coord=CardPromptCoordinator(
+            generate=lambda txt:generated.append(txt) or
+                asyncio.create_task(asyncio.sleep(0)),
+            state=lambda:("thinking","listening"),
+            is_current=lambda k:k==key,
+            spoke_at=lambda:0.0,
+            attempts=1)
+        coord.schedule(key,"solo next clue",after_verified_score=True)
+        await asyncio.sleep(0.35)
+        self.assertEqual(generated,[],
+            "The fast after-score handoff must not change Rublisha")
         await coord.close()
 
     async def test_unverified_same_card_never_preempts_stale_thinking(self):
