@@ -347,6 +347,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('attempts=2,',source)
         self.assertIn('response_timeout=10.5,',source)
         self.assertIn('commentary_grace=0.35 if is_duo else 1.2',source)
+        self.assertIn('fast_score_handoff=is_duo',source)
         self.assertIn('async def reset_orphaned_speech():',source)
 
     def test_fast_voice_duet_and_human_ai_guesser_regressions(self):
