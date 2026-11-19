@@ -680,6 +680,7 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             # but a full 1.0s grace delayed explicit next-card speech.
             # Keep SOLO/Rublisha timing unchanged.
             commentary_grace=0.35 if is_duo else 1.2,
+            fast_score_handoff=is_duo,
             state=lambda: (str(getattr(session,"agent_state","")),
                            str(getattr(session,"user_state",""))),
             is_current=lambda key: (not stop.is_set()
