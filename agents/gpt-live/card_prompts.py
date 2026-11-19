@@ -77,18 +77,26 @@ class CardPromptCoordinator:
         if key != self._key and self._score_silence_task is not None:
             self._score_silence_task.cancel()
             self._score_silence_task = None
-        if key != self._key and self._pending_handle is not None:
-            # GPT-Live explicitly supports superseding an unfinished
-            # generate_reply with a NEW request. Keeping the old handle
-            # blocked all next-card speech for up to 10 seconds.
-            # Only an AUTHORITATIVE card change can supersede a request:
-            # same-card repeated guesses remain serialized.
-            self.log("card_prompt_supersede", int(key[3]) if len(key)>3 else 0,
+        new_authoritative_card = key != self._key
+        had_pending_reply = (
+            new_authoritative_card and self._pending_handle is not None)
+        if had_pending_reply:
+            # Only a genuinely new card may supersede an old provider
+            # request. A wrong guess on the SAME card never does this.
+            self.log("card_prompt_supersede",
+                     int(key[3]) if len(key)>3 else 0,
                      "new_authoritative_card")
             self._pending_handle = None
-            self._superseding_key = key
-        else:
-            self._superseding_key = None
+        # Nov 19 duet recording: after a verified AI guess, the old
+        # interrupted playout sometimes left AgentSession in "thinking"
+        # even when no unfinished generate_reply handle was tracked.
+        # Previously this cleared _superseding_key, so _run waited 2.5s
+        # and abandoned the NEXT card without requesting speech.
+        # A verified server score authorizes the new card to preempt that
+        # stale thinking state; unverified same-card hints cannot.
+        self._superseding_key = (
+            key if new_authoritative_card and
+                   (after_verified_score or had_pending_reply) else None)
         self._key = key
         self._last_update_at = 0.0
         # Log numeric revision ONLY; never the secret word in production.
