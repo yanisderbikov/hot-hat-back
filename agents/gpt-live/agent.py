@@ -675,9 +675,11 @@ async def hot_hat_voice_player(ctx: JobContext) -> None:
             # SDK refusal timeout is 10s: let it finish instead of spawning
             # overlapping requests after a 1.3s artificial timeout.
             response_timeout=10.5,
-            # Native commentary goes to the already active audio model
-            # immediately. Let it speak before advisory generate_reply.
-            commentary_grace=1.0 if is_duo else 1.2,
+            # In a 60-second AI+AI round every correct guess starts a
+            # fresh card. Native commentary still gets first chance,
+            # but a full 1.0s grace delayed explicit next-card speech.
+            # Keep SOLO/Rublisha timing unchanged.
+            commentary_grace=0.35 if is_duo else 1.2,
             state=lambda: (str(getattr(session,"agent_state","")),
                            str(getattr(session,"user_state",""))),
             is_current=lambda key: (not stop.is_set()
