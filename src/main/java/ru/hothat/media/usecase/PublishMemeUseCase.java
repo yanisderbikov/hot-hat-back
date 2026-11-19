@@ -74,7 +74,7 @@ public class PublishMemeUseCase {
                 request.durationMs(),
                 Divisions.normalize(request.divisionLanguage()),
                 request.sourceUrl(),
-                request.importMode(),
+                canonicalImportMode(request.importMode()),
                 videoKey,
                 MemeAssetKey.mimeOf(videoKey, MemeAssetKind.VIDEO),
                 videoSize,
@@ -82,6 +82,26 @@ public class PublishMemeUseCase {
                 posterKey == null ? null : MemeAssetKey.mimeOf(posterKey, MemeAssetKind.POSTER),
                 posterSize), Instant.now(clock));
         return new PublishedMemeResponseDTO(cards.card(card, user.uid()));
+    }
+
+    /**
+     * The physical meme import_mode column is VARCHAR(24).
+     * Older web clients (including an already-open capture tab) publish
+     * long, otherwise valid mode labels after uploading a playable video.
+     * Translate those known modes to stable, meaningful 24-char labels
+     * BEFORE persistence. Do not truncate silently or alter sourceUrl.
+     */
+    static String canonicalImportMode(String mode) {
+        if (mode == null) return null;
+        return switch (mode) {
+            case "youtube-tab-raw-capture-playing-source" -> "youtube-tab-play";
+            case "youtube-tab-raw-then-crop" -> "youtube-tab-crop";
+            default -> {
+                if (mode.length() > 24)
+                    throw ApiException.of("MEME_IMPORT_MODE_INVALID", 400);
+                yield mode;
+            }
+        };
     }
 
     private static void requireOwn(HotHatUser user, MemeStore.Card meme) {
