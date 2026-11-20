@@ -87,7 +87,7 @@ public class YoutubeMemeSearchController {
                 process = new ProcessBuilder(
                         "yt-dlp", "--flat-playlist", "--dump-single-json",
                         "--ignore-config", "--skip-download", "--no-warnings",
-                        "--no-playlist", "--socket-timeout", "7",
+                        "--socket-timeout", "7",
                         "--retries", "1", "--extractor-retries", "1",
                         "--playlist-end", String.valueOf(MAX_RESULTS),
                         "ytsearch" + MAX_RESULTS + ":" + query)
