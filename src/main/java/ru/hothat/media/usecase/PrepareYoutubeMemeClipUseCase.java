@@ -2,6 +2,8 @@ package ru.hothat.media.usecase;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.context.event.EventListener;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import ru.hothat.config.ApiException;
 
 import java.io.IOException;
@@ -34,6 +36,26 @@ public class PrepareYoutubeMemeClipUseCase {
     private static final long MAX_RESPONSE_BYTES = 24L * 1024 * 1024;
     private static final int PROCESS_TIMEOUT_SECONDS = 75;
     private static final Semaphore PARALLEL = new Semaphore(2, true);
+
+    /**
+     * Explicit opt-in Railway smoke test for one supplied public video ID.
+     * Disabled unless the service variable is present. It does not expose
+     * an unauthenticated downloader endpoint and never blocks app startup.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void optionalSmokeTest() {
+        String videoId = System.getenv("HOT_HAT_YOUTUBE_IMPORT_SMOKE_ID");
+        if (videoId == null || !videoId.matches("[A-Za-z0-9_-]{11}")) return;
+        Thread.ofVirtual().name("youtube-clip-smoke").start(() -> {
+            log.info("YouTube server import smoke test started id={}", videoId);
+            try {
+                byte[] bytes = run(videoId, 0.0);
+                log.info("YouTube server import smoke test SUCCESS id={} bytes={}", videoId, bytes.length);
+            } catch (RuntimeException error) {
+                log.error("YouTube server import smoke test FAILED id={} detail={}", videoId, error.toString());
+            }
+        });
+    }
 
     public byte[] run(String videoId, double requestedStart) {
         validate(videoId, requestedStart);
