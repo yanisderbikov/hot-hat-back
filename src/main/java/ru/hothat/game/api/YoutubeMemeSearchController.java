@@ -118,7 +118,7 @@ public class YoutubeMemeSearchController {
                     return ResponseEntity.status(502).body(Map.of(
                             "error", "YouTube не вернул результаты. Попробуйте другой запрос."));
                 }
-                hasMore = all.size() > offset + MAX_RESULTS;
+                hasMore = offset < 60 && all.size() > offset + MAX_RESULTS;
                 if (offset < all.size())
                     result.addAll(all.subList(offset, Math.min(offset + MAX_RESULTS, all.size())));
             } catch (Exception exception) {
