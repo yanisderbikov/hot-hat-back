@@ -12,6 +12,8 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -43,6 +45,13 @@ public class PrepareYoutubeMemeClipUseCase {
     private static final long SHARED_TTL_MS = 90_000;
     private static final int MAX_SHARED_CLIPS = 3;
     private final Map<String, SharedClip> shared = new LinkedHashMap<>();
+    // A 422 age gate cannot be solved by hammering the same video ten times.
+    // Railway also sees occasional cloud-IP bot challenges from YouTube.
+    private final ConcurrentHashMap<String, DeniedClip> denied = new ConcurrentHashMap<>();
+    private final AtomicLong botChallengeUntil = new AtomicLong();
+    private record DeniedClip(String code, long until) { }
+    static final String AGE_REQUIRED = "YOUTUBE_AGE_CONFIRMATION_REQUIRED";
+    static final String BOT_REQUIRED = "YOUTUBE_BOT_CONFIRMATION_REQUIRED";
     private record SharedClip(CompletableFuture<byte[]> result, long expiresAt) { }
 
     /**
@@ -71,6 +80,12 @@ public class PrepareYoutubeMemeClipUseCase {
      */
     public byte[] run(String videoId, double requestedStart) {
         validate(videoId, requestedStart);
+        long nowMs = System.currentTimeMillis();
+        DeniedClip refusal = denied.get(videoId);
+        if (refusal != null && refusal.until() > nowMs)
+            throw ApiException.of(refusal.code(), 422);
+        if (botChallengeUntil.get() > nowMs)
+            throw ApiException.of(BOT_REQUIRED, 422);
         String key = videoId + ":" + Math.round(requestedStart * 1000);
         SharedClip clip;
         boolean producer = false;
@@ -137,9 +152,17 @@ public class PrepareYoutubeMemeClipUseCase {
                 throw ApiException.of("YOUTUBE_IMPORT_TIMEOUT", 504);
             }
             if (process.exitValue() != 0) {
-                log.warn("YouTube clip import failed id={} exit={} detail={}",
-                        videoId, process.exitValue(), tail(processLog));
-                throw ApiException.of("YOUTUBE_IMPORT_UNAVAILABLE", 422);
+                String detail = tail(processLog);
+                String code = classifyExtractorFailure(detail);
+                log.warn("YouTube clip import rejected id={} reason={} exit={} detail={}",
+                        videoId, code, process.exitValue(), detail);
+                if (AGE_REQUIRED.equals(code))
+                    denied.put(videoId, new DeniedClip(code, System.currentTimeMillis() + 10 * 60_000L));
+                if (BOT_REQUIRED.equals(code)) {
+                    denied.put(videoId, new DeniedClip(code, System.currentTimeMillis() + 60_000L));
+                    botChallengeUntil.set(System.currentTimeMillis() + 30_000L);
+                }
+                throw ApiException.of(code, 422);
             }
             Path mp4;
             try (Stream<Path> candidates = Files.list(workspace)) {
@@ -162,6 +185,18 @@ public class PrepareYoutubeMemeClipUseCase {
             if (workspace != null) deleteWorkspace(workspace);
             PARALLEL.release();
         }
+    }
+
+    // The extractor's actual text is authoritative; do not interpret every
+    // 422 as a broken network, missing FFmpeg, or retriable video.
+    static String classifyExtractorFailure(String raw) {
+        String message = String.valueOf(raw).toLowerCase(Locale.ROOT);
+        if (message.contains("confirm your age") || message.contains("age-restricted")
+                || message.contains("age restricted"))
+            return AGE_REQUIRED;
+        if (message.contains("not a bot") || message.contains("unusual traffic"))
+            return BOT_REQUIRED;
+        return "YOUTUBE_IMPORT_UNAVAILABLE";
     }
 
     static void validate(String videoId, double start) {
