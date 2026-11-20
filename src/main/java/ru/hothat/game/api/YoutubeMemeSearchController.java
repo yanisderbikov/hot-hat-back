@@ -44,6 +44,7 @@ public class YoutubeMemeSearchController {
     private static final Pattern VIDEO_LINK = Pattern.compile(
             "(?:youtu\\.be/|youtube\\.com/(?:watch\\?[^#]*?v=|shorts/|embed/))([a-zA-Z0-9_-]{11})");
     private static final int MAX_RESULTS = 20;
+    private static final int MAX_SEARCH_RESULTS = 81;
     private static final Duration TTL = Duration.ofMinutes(3);
 
     private final ObjectMapper json;
@@ -51,19 +52,22 @@ public class YoutubeMemeSearchController {
     private final Map<String, Long> lastRequests = new ConcurrentHashMap<>();
 
     public record VideoResult(String id, String title, Long durationMs, String thumbnail) {}
-    private record CachedSearch(long until, List<VideoResult> items) {}
+    private record CachedSearch(long until, List<VideoResult> items, boolean hasMore) {}
 
     @GetMapping("/search")
     public ResponseEntity<Map<String, Object>> search(
             @PathVariable @RoomId String roomId,
             @RequestParam("q") @Size(min = 1, max = 100) String text,
+            @RequestParam(value = "offset", defaultValue = "0") @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(60) int offset,
             @org.springframework.security.core.annotation.AuthenticationPrincipal
                     ru.hothat.config.HotHatUser user) {
         String query = text.strip();
         if (query.isBlank()) return ResponseEntity.badRequest().build();
         long now = System.currentTimeMillis();
-        CachedSearch cached = cache.get(query.toLowerCase(java.util.Locale.ROOT));
-        if (cached != null && cached.until() > now) return ResponseEntity.ok(Map.of("items", cached.items()));
+        String cacheKey = query.toLowerCase(java.util.Locale.ROOT) + ":" + offset;
+        CachedSearch cached = cache.get(cacheKey);
+        if (cached != null && cached.until() > now)
+            return ResponseEntity.ok(Map.of("items", cached.items(), "hasMore", cached.hasMore()));
         if (lastRequests.size() > 10_000) lastRequests.clear();
         Long previous = lastRequests.get(user.uid());
         if (previous != null && now - previous < 650)
@@ -72,15 +76,17 @@ public class YoutubeMemeSearchController {
         lastRequests.put(user.uid(), now);
 
         List<VideoResult> result = new ArrayList<>();
+        boolean hasMore = false;
+        final int limit = Math.min(MAX_SEARCH_RESULTS, offset + MAX_RESULTS + 1);
         Matcher linkedVideo = VIDEO_LINK.matcher(query);
         if (VIDEO_ID.matcher(query).matches() || linkedVideo.find()) {
             String id = VIDEO_ID.matcher(query).matches() ? query : linkedVideo.group(1);
-            result.add(new VideoResult(id, "Видео YouTube", null, thumbnail(id)));
+            if (offset == 0) result.add(new VideoResult(id, "Видео YouTube", null, thumbnail(id)));
         } else {
             Process process = null;
             Path outputFile = null;
             try {
-                // Never wait for yt-dlp before draining its output: JSON for 20 results
+                // Never wait for yt-dlp before draining its output: JSON for many results
                 // can exceed the OS pipe buffer and deadlock until the 22s timeout.
                 // Redirect to a private temporary file instead of a piped stdout.
                 outputFile = Files.createTempFile("hothat-youtube-search-", ".json");
@@ -89,8 +95,8 @@ public class YoutubeMemeSearchController {
                         "--ignore-config", "--skip-download", "--no-warnings",
                         "--socket-timeout", "7",
                         "--retries", "1", "--extractor-retries", "1",
-                        "--playlist-end", String.valueOf(MAX_RESULTS),
-                        "ytsearch" + MAX_RESULTS + ":" + query)
+                        "--playlist-end", String.valueOf(limit),
+                        "ytsearch" + limit + ":" + query)
                         .redirectErrorStream(true)
                         .redirectOutput(outputFile.toFile())
                         .start();
@@ -107,11 +113,14 @@ public class YoutubeMemeSearchController {
                     return ResponseEntity.status(502).body(Map.of(
                             "error", "YouTube отклонил поисковый запрос. Повторите позже."));
                 }
-                result.addAll(parseResults(json, output));
-                if (result.isEmpty()) {
+                List<VideoResult> all = parseResults(json, output, limit);
+                if (all.isEmpty() && offset == 0) {
                     return ResponseEntity.status(502).body(Map.of(
                             "error", "YouTube не вернул результаты. Попробуйте другой запрос."));
                 }
+                hasMore = all.size() > offset + MAX_RESULTS;
+                if (offset < all.size())
+                    result.addAll(all.subList(offset, Math.min(offset + MAX_RESULTS, all.size())));
             } catch (Exception exception) {
                 if (exception instanceof InterruptedException) Thread.currentThread().interrupt();
                 return ResponseEntity.status(502).body(Map.of(
@@ -126,12 +135,16 @@ public class YoutubeMemeSearchController {
         }
         List<VideoResult> items = List.copyOf(result);
         if (cache.size() > 250) cache.clear();
-        cache.put(query.toLowerCase(java.util.Locale.ROOT), new CachedSearch(now + TTL.toMillis(), items));
-        return ResponseEntity.ok(Map.of("items", items));
+        cache.put(cacheKey, new CachedSearch(now + TTL.toMillis(), items, hasMore));
+        return ResponseEntity.ok(Map.of("items", items, "hasMore", hasMore));
     }
 
     // Package-private for parsing regression tests; metadata only, no media downloads.
     static List<VideoResult> parseResults(ObjectMapper json, String output) throws java.io.IOException {
+        return parseResults(json, output, MAX_RESULTS);
+    }
+
+    static List<VideoResult> parseResults(ObjectMapper json, String output, int maxResults) throws java.io.IOException {
         int begin = output.indexOf('{');
         int finish = output.lastIndexOf('}');
         if (begin < 0 || finish <= begin)
@@ -147,7 +160,7 @@ public class YoutubeMemeSearchController {
             Long duration = Double.isFinite(seconds) && seconds > 0 && seconds < 24 * 3600
                     ? Math.round(seconds * 1000) : null;
             videos.add(new VideoResult(id, title, duration, thumbnail(id)));
-            if (videos.size() >= MAX_RESULTS) break;
+            if (videos.size() >= Math.min(MAX_SEARCH_RESULTS, Math.max(1, maxResults))) break;
         }
         return videos;
     }
