@@ -38,7 +38,7 @@ public class YoutubeClipController {
             double startSeconds
     ) { }
 
-    @Operation(summary = "Подготовить 16-секундный MP4 из разрешённого источника YouTube",
+    @Operation(summary = "Подготовить 10-секундный MP4 из разрешённого источника YouTube",
             description = "Только публичные доступные фрагменты без DRM. Ограничения: 24 МБ, до 2 одновременно.")
     @PostMapping(value = "/preview-clips", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = "video/mp4")
