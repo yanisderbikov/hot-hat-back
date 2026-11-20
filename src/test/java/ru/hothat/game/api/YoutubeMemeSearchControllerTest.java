@@ -44,4 +44,13 @@ class YoutubeMemeSearchControllerTest {
             YoutubeMemeSearchController.parseResults(json, output.toString(), 41).size());
     }
 
+    @Test
+    void labelsAgeGatedAndAuthenticationRequiredEmbedsWithoutHidingThemFromSearch() throws Exception {
+        var videos = YoutubeMemeSearchController.parseResults(json, "{\"entries\":[{\"id\":\"JkPLWQK93fE\",\"title\":\"Restricted\",\"duration\":204,\"age_limit\":18},{\"id\":\"aqz-KE-bpKQ\",\"title\":\"Available\",\"duration\":46,\"age_limit\":0},{\"id\":\"aaaaaaaaaaa\",\"title\":\"Private\",\"availability\":\"needs_auth\"}]}");
+        assertEquals(3, videos.size());
+        assertTrue(videos.get(0).embedRestricted());
+        assertFalse(videos.get(1).embedRestricted());
+        assertTrue(videos.get(2).embedRestricted());
+    }
+
 }
