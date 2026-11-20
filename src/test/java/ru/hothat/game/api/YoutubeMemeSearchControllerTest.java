@@ -32,4 +32,16 @@ class YoutubeMemeSearchControllerTest {
         assertThrows(IllegalStateException.class,
                 () -> YoutubeMemeSearchController.parseResults(json, "timeout: no JSON"));
     }
+    @Test
+    void parsingSupportsUpToEightyOneSearchHitsForAdditionalPages() throws Exception {
+        StringBuilder output = new StringBuilder("{\\\"entries\\\":[");
+        for (int i = 0; i < 50; i++) {
+            if (i != 0) output.append(',');
+            output.append("{\\\"id\\\":\\\"aaaaaaaaaaa\\\",\\\"title\\\":\\\"Video\\\"}");
+        }
+        output.append("]}");
+        assertEquals(41,
+            YoutubeMemeSearchController.parseResults(json, output.toString(), 41).size());
+    }
+
 }
