@@ -12,6 +12,11 @@ public final class ErrorMessages {
     }
 
     public static final Map<String, String> BY_CODE = Map.ofEntries(
+            Map.entry("YOUTUBE_AGE_CONFIRMATION_REQUIRED", "YouTube требует подтверждения возраста. Этот ролик недоступен серверу для чистого MP4."),
+            Map.entry("YOUTUBE_BOT_CONFIRMATION_REQUIRED", "YouTube запросил проверку «не бот» у сервера. Чистый MP4 сейчас недоступен."),
+            Map.entry("YOUTUBE_IMPORT_UNAVAILABLE", "YouTube не предоставил серверу исходное видео для этого мема."),
+            Map.entry("YOUTUBE_IMPORT_BUSY", "Подготовка видео занята. Повтори попытку позже."),
+
             Map.entry("CODE_TEAM_CLASS_INVALID", "Выберите существующий класс команды."),
             Map.entry("CODE_TEAM_EVIDENCE_INVALID", "Переданы некорректные сведения о матче."),
             Map.entry("CODE_TEAM_NOT_ENOUGH_REAL_EVIDENCE", "Недостаточно подтверждённых событий настоящей игры для отчёта."),
