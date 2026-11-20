@@ -14,11 +14,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import ru.hothat.common.validation.RoomId;
 
-import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,7 +43,7 @@ public class YoutubeMemeSearchController {
     private static final Pattern VIDEO_ID = Pattern.compile("^[a-zA-Z0-9_-]{11}$");
     private static final Pattern VIDEO_LINK = Pattern.compile(
             "(?:youtu\\.be/|youtube\\.com/(?:watch\\?[^#]*?v=|shorts/|embed/))([a-zA-Z0-9_-]{11})");
-    private static final int MAX_RESULTS = 12;
+    private static final int MAX_RESULTS = 20;
     private static final Duration TTL = Duration.ofMinutes(3);
 
     private final ObjectMapper json;
@@ -65,9 +65,11 @@ public class YoutubeMemeSearchController {
         CachedSearch cached = cache.get(query.toLowerCase(java.util.Locale.ROOT));
         if (cached != null && cached.until() > now) return ResponseEntity.ok(Map.of("items", cached.items()));
         if (lastRequests.size() > 10_000) lastRequests.clear();
-        Long previous = lastRequests.put(user.uid(), now);
-        if (previous != null && now - previous < 900)
+        Long previous = lastRequests.get(user.uid());
+        if (previous != null && now - previous < 650)
             return ResponseEntity.status(429).body(Map.of("error", "Поиск можно повторить через секунду."));
+        // Rejected keystroke requests must not extend the rate-limit window.
+        lastRequests.put(user.uid(), now);
 
         List<VideoResult> result = new ArrayList<>();
         Matcher linkedVideo = VIDEO_LINK.matcher(query);
@@ -76,41 +78,39 @@ public class YoutubeMemeSearchController {
             result.add(new VideoResult(id, "Видео YouTube", null, thumbnail(id)));
         } else {
             Process process = null;
+            Path outputFile = null;
             try {
-                // Each argument is passed literally; never invoke through a shell.
+                // Never wait for yt-dlp before draining its output: JSON for 20 results
+                // can exceed the OS pipe buffer and deadlock until the 22s timeout.
+                // Redirect to a private temporary file instead of a piped stdout.
+                outputFile = Files.createTempFile("hothat-youtube-search-", ".json");
                 process = new ProcessBuilder(
                         "yt-dlp", "--flat-playlist", "--dump-single-json",
-                        "--skip-download", "--no-warnings", "--socket-timeout", "7",
+                        "--ignore-config", "--skip-download", "--no-warnings",
+                        "--no-playlist", "--socket-timeout", "7",
+                        "--retries", "1", "--extractor-retries", "1",
                         "--playlist-end", String.valueOf(MAX_RESULTS),
                         "ytsearch" + MAX_RESULTS + ":" + query)
-                        .redirectErrorStream(true).start();
+                        .redirectErrorStream(true)
+                        .redirectOutput(outputFile.toFile())
+                        .start();
                 boolean exited = process.waitFor(22, TimeUnit.SECONDS);
                 if (!exited) {
                     process.destroyForcibly();
-                    return ResponseEntity.status(504).body(Map.of("error", "YouTube долго отвечает. Повторите поиск."));
+                    return ResponseEntity.status(504).body(Map.of(
+                            "error", "YouTube долго отвечает. Попробуйте повторить поиск."));
                 }
-                try (InputStream input = process.getInputStream()) {
-                    byte[] data = input.readNBytes(400_000);
-                    String output = new String(data, StandardCharsets.UTF_8);
-                    // Extractor may prepend warning text. Locate JSON root.
-                    int first = output.indexOf('{');
-                    if (first < 0) throw new IllegalStateException("No YouTube search response");
-                    JsonNode entries = json.readTree(output.substring(first)).path("entries");
-                    if (entries.isArray()) for (JsonNode entry : entries) {
-                        String id = entry.path("id").asText("");
-                        if (!VIDEO_ID.matcher(id).matches()) continue;
-                        String title = entry.path("title").asText("Видео YouTube");
-                        if (title.length() > 180) title = title.substring(0, 180);
-                        double seconds = entry.path("duration").asDouble(0);
-                        Long duration = seconds > 0 && seconds < 24 * 3600
-                                ? (long) (seconds * 1000) : null;
-                        result.add(new VideoResult(id, title, duration, thumbnail(id)));
-                        if (result.size() >= MAX_RESULTS) break;
-                    }
+                if (Files.size(outputFile) > 4_000_000)
+                    throw new IllegalStateException("YouTube search response too large");
+                String output = Files.readString(outputFile, StandardCharsets.UTF_8);
+                if (process.exitValue() != 0) {
+                    return ResponseEntity.status(502).body(Map.of(
+                            "error", "YouTube отклонил поисковый запрос. Повторите позже."));
                 }
+                result.addAll(parseResults(json, output));
                 if (result.isEmpty()) {
                     return ResponseEntity.status(502).body(Map.of(
-                            "error", "YouTube не вернул результаты поиска. Можно вставить прямую ссылку на ролик."));
+                            "error", "YouTube не вернул результаты. Попробуйте другой запрос."));
                 }
             } catch (Exception exception) {
                 if (exception instanceof InterruptedException) Thread.currentThread().interrupt();
@@ -118,12 +118,38 @@ public class YoutubeMemeSearchController {
                         "error", "Поиск YouTube временно недоступен. Можно вставить прямую ссылку."));
             } finally {
                 if (process != null && process.isAlive()) process.destroyForcibly();
+                if (outputFile != null) {
+                    try { Files.deleteIfExists(outputFile); }
+                    catch (java.io.IOException ignored) { /* ephemeral search result only */ }
+                }
             }
         }
         List<VideoResult> items = List.copyOf(result);
         if (cache.size() > 250) cache.clear();
         cache.put(query.toLowerCase(java.util.Locale.ROOT), new CachedSearch(now + TTL.toMillis(), items));
         return ResponseEntity.ok(Map.of("items", items));
+    }
+
+    // Package-private for parsing regression tests; metadata only, no media downloads.
+    static List<VideoResult> parseResults(ObjectMapper json, String output) throws java.io.IOException {
+        int begin = output.indexOf('{');
+        int finish = output.lastIndexOf('}');
+        if (begin < 0 || finish <= begin)
+            throw new IllegalStateException("No YouTube search JSON");
+        JsonNode entries = json.readTree(output.substring(begin, finish + 1)).path("entries");
+        List<VideoResult> videos = new ArrayList<>();
+        if (entries.isArray()) for (JsonNode entry : entries) {
+            String id = entry.path("id").asText("");
+            if (!VIDEO_ID.matcher(id).matches()) continue;
+            String title = entry.path("title").asText("Видео YouTube");
+            if (title.length() > 180) title = title.substring(0, 180);
+            double seconds = entry.path("duration").asDouble(0);
+            Long duration = Double.isFinite(seconds) && seconds > 0 && seconds < 24 * 3600
+                    ? Math.round(seconds * 1000) : null;
+            videos.add(new VideoResult(id, title, duration, thumbnail(id)));
+            if (videos.size() >= MAX_RESULTS) break;
+        }
+        return videos;
     }
 
     private static String thumbnail(String videoId) {
