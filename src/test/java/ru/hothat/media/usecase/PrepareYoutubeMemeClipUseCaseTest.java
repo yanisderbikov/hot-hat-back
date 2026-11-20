@@ -37,4 +37,16 @@ class PrepareYoutubeMemeClipUseCaseTest {
         assertFalse(cmd.contains("sh"));
         assertFalse(cmd.contains("bash"));
     }
+    @Test
+    void explainsRealRailwayAgeAndBotFailuresInsteadOfGenericImportUnavailable() {
+        assertEquals("YOUTUBE_AGE_CONFIRMATION_REQUIRED",
+                PrepareYoutubeMemeClipUseCase.classifyExtractorFailure(
+                        "ERROR: [youtube] M6vD-iLc_PI: Sign in to confirm your age. This video may be inappropriate for some users."));
+        assertEquals("YOUTUBE_BOT_CONFIRMATION_REQUIRED",
+                PrepareYoutubeMemeClipUseCase.classifyExtractorFailure(
+                        "ERROR: [youtube] brN7JjbWbrA: Sign in to confirm you’re not a bot."));
+        assertEquals("YOUTUBE_IMPORT_UNAVAILABLE",
+                PrepareYoutubeMemeClipUseCase.classifyExtractorFailure("ERROR: Unable to download video data."));
+    }
+
 }
