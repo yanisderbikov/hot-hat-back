@@ -12,6 +12,10 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Semaphore;
@@ -32,10 +36,14 @@ import java.util.stream.Stream;
 @Service
 @Slf4j
 public class PrepareYoutubeMemeClipUseCase {
-    private static final int CLIP_SECONDS = 16;
+    private static final int CLIP_SECONDS = 10;
     private static final long MAX_RESPONSE_BYTES = 24L * 1024 * 1024;
     private static final int PROCESS_TIMEOUT_SECONDS = 75;
     private static final Semaphore PARALLEL = new Semaphore(2, true);
+    private static final long SHARED_TTL_MS = 90_000;
+    private static final int MAX_SHARED_CLIPS = 3;
+    private final Map<String, SharedClip> shared = new LinkedHashMap<>();
+    private record SharedClip(CompletableFuture<byte[]> result, long expiresAt) { }
 
     /**
      * Explicit opt-in Railway smoke test for one supplied public video ID.
@@ -57,8 +65,50 @@ public class PrepareYoutubeMemeClipUseCase {
         }, "youtube-clip-smoke").start();
     }
 
+    /**
+     * Share one ephemeral MP4 between the attacker and all receiving players.
+     * Concurrent requests for the same exact selection await one conversion.
+     */
     public byte[] run(String videoId, double requestedStart) {
         validate(videoId, requestedStart);
+        String key = videoId + ":" + Math.round(requestedStart * 1000);
+        SharedClip clip;
+        boolean producer = false;
+        synchronized (shared) {
+            long now = System.currentTimeMillis();
+            shared.entrySet().removeIf(e -> e.getValue().expiresAt() < now);
+            clip = shared.get(key);
+            if (clip == null) {
+                clip = new SharedClip(new CompletableFuture<>(), now + SHARED_TTL_MS);
+                shared.put(key, clip);
+                producer = true;
+                while (shared.size() > MAX_SHARED_CLIPS) {
+                    String oldest = shared.keySet().iterator().next();
+                    shared.remove(oldest);
+                }
+            }
+        }
+        if (producer) {
+            try {
+                clip.result().complete(prepareUncached(videoId, requestedStart));
+            } catch (RuntimeException error) {
+                clip.result().completeExceptionally(error);
+                synchronized (shared) { shared.remove(key, clip); }
+                throw error;
+            }
+        }
+        try {
+            return clip.result().get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw ApiException.of("YOUTUBE_IMPORT_INTERRUPTED", 503);
+        } catch (ExecutionException error) {
+            if (error.getCause() instanceof RuntimeException problem) throw problem;
+            throw ApiException.of("YOUTUBE_IMPORT_UNAVAILABLE", 503);
+        }
+    }
+
+    private byte[] prepareUncached(String videoId, double requestedStart) {
         if (!PARALLEL.tryAcquire()) throw ApiException.of("YOUTUBE_IMPORT_BUSY", 429);
         Path workspace = null;
         try {
@@ -138,7 +188,7 @@ public class PrepareYoutubeMemeClipUseCase {
                 "--js-runtimes", "node",
                 "--download-sections", String.format(Locale.ROOT, "*%.3f-%.3f", start, end),
                 "--force-keyframes-at-cuts",
-                "--format", "b[ext=mp4][height<=720]/b[height<=720]/bv*[height<=720]+ba/b",
+                "--format", "b[ext=mp4][height<=480]/b[height<=480]/bv*[height<=480]+ba/b",
                 "--merge-output-format", "mp4",
                 "--recode-video", "mp4",
                 "--limit-rate", "2M",
