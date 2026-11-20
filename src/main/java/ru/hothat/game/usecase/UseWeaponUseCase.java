@@ -39,6 +39,7 @@ public class UseWeaponUseCase {
     private final MatchStore matchStore;
     private final SabotageEngine sabotage;
     private final MemeCatalogPort memes;
+    private final EphemeralMemeClipStore ephemeralClips;
     private final MatchViewAssembler views;
     private final ApplicationEventPublisher events;
 
@@ -51,7 +52,10 @@ public class UseWeaponUseCase {
             // In-game YouTube shots are ephemeral. Treat the strict server-
             // validated clip descriptor as media, without reading or writing S3
             // or requiring a pre-uploaded meme library entry.
-            if (YoutubeMemeClip.isYoutubeId(memeId)) {
+            if (EphemeralMemeClipStore.isLocalId(memeId)) {
+                // Authenticated user-supplied temporary MP4; no catalog entry.
+                media = ephemeralClips.mediaForShot(roomId, user.uid(), memeId);
+            } else if (YoutubeMemeClip.isYoutubeId(memeId)) {
                 media = YoutubeMemeClip.parse(memeId)
                         .orElseThrow(() -> ApiException.of("MEME_NOT_FOUND", 404));
             } else {
