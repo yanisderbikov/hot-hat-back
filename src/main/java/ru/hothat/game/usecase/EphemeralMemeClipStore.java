@@ -64,7 +64,7 @@ public class EphemeralMemeClipStore {
                     "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
                     "-ss", String.format(Locale.ROOT, "%.3f", startSeconds),
                     "-i", input.toString(), "-t", "10",
-                    "-vf", "scale=w=854:h=480:force_original_aspect_ratio=decrease,format=yuv420p",
+                    "-vf", "scale=w=854:h=480:force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuv420p",
                     "-r", "24", "-c:v", "libx264", "-preset", "veryfast",
                     "-crf", "27", "-maxrate", "1400k", "-bufsize", "2800k",
                     "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
