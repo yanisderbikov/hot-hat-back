@@ -51,7 +51,7 @@ public class YoutubeMemeSearchController {
     private final Map<String, CachedSearch> cache = new ConcurrentHashMap<>();
     private final Map<String, Long> lastRequests = new ConcurrentHashMap<>();
 
-    public record VideoResult(String id, String title, Long durationMs, String thumbnail) {}
+    public record VideoResult(String id, String title, Long durationMs, String thumbnail, boolean embedRestricted) {}
     private record CachedSearch(long until, List<VideoResult> items, boolean hasMore) {}
 
     @GetMapping("/search")
@@ -81,7 +81,7 @@ public class YoutubeMemeSearchController {
         Matcher linkedVideo = VIDEO_LINK.matcher(query);
         if (VIDEO_ID.matcher(query).matches() || linkedVideo.find()) {
             String id = VIDEO_ID.matcher(query).matches() ? query : linkedVideo.group(1);
-            if (offset == 0) result.add(new VideoResult(id, "Видео YouTube", null, thumbnail(id)));
+            if (offset == 0) result.add(new VideoResult(id, "Видео YouTube", null, thumbnail(id), false));
         } else {
             Process process = null;
             Path outputFile = null;
@@ -159,7 +159,13 @@ public class YoutubeMemeSearchController {
             double seconds = entry.path("duration").asDouble(0);
             Long duration = Double.isFinite(seconds) && seconds > 0 && seconds < 24 * 3600
                     ? Math.round(seconds * 1000) : null;
-            videos.add(new VideoResult(id, title, duration, thumbnail(id)));
+            // ytsearch metadata can flag an age gate or authentication. Such
+            // videos cannot reliably play in the official YouTube iframe.
+            String availability = entry.path("availability").asText("");
+            boolean restricted = entry.path("age_limit").asInt(0) >= 18
+                    || "needs_auth".equals(availability) || "private".equals(availability)
+                    || "premium_only".equals(availability);
+            videos.add(new VideoResult(id, title, duration, thumbnail(id), restricted));
             if (videos.size() >= Math.min(MAX_SEARCH_RESULTS, Math.max(1, maxResults))) break;
         }
         return videos;
