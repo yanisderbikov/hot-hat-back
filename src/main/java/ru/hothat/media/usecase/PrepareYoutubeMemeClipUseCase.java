@@ -46,7 +46,7 @@ public class PrepareYoutubeMemeClipUseCase {
     public void optionalSmokeTest() {
         String videoId = System.getenv("HOT_HAT_YOUTUBE_IMPORT_SMOKE_ID");
         if (videoId == null || !videoId.matches("[A-Za-z0-9_-]{11}")) return;
-        Thread.ofVirtual().name("youtube-clip-smoke").start(() -> {
+        new Thread(() -> {
             log.info("YouTube server import smoke test started id={}", videoId);
             try {
                 byte[] bytes = run(videoId, 0.0);
@@ -54,7 +54,7 @@ public class PrepareYoutubeMemeClipUseCase {
             } catch (RuntimeException error) {
                 log.error("YouTube server import smoke test FAILED id={} detail={}", videoId, error.toString());
             }
-        });
+        }, "youtube-clip-smoke").start();
     }
 
     public byte[] run(String videoId, double requestedStart) {
