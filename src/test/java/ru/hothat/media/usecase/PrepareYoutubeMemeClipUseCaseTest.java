@@ -25,13 +25,13 @@ class PrepareYoutubeMemeClipUseCaseTest {
     }
 
     @Test
-    void exact16SecondClipIsExtractedWithoutShellOrArbitraryUrls() {
+    void exact10SecondClipIsExtractedWithoutShellOrArbitraryUrls() {
         List<String> cmd = PrepareYoutubeMemeClipUseCase.buildCommand(
                 "jKPLWQK93fE", 42.5, Path.of("/tmp/safe"));
         assertEquals("yt-dlp", cmd.get(0));
         assertEquals("https://www.youtube.com/watch?v=jKPLWQK93fE", cmd.get(cmd.size() - 1));
         assertTrue(cmd.contains("--download-sections"));
-        assertTrue(cmd.contains("*42.500-58.500"));
+        assertTrue(cmd.contains("*42.500-52.500"));
         assertTrue(cmd.contains("--recode-video"));
         assertTrue(cmd.contains("mp4"));
         assertFalse(cmd.contains("sh"));
