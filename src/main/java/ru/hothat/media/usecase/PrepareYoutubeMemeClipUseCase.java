@@ -221,10 +221,9 @@ public class PrepareYoutubeMemeClipUseCase {
                 "--fragment-retries", "1",
                 "--concurrent-fragments", "1",
                 "--js-runtimes", "node",
-                // Public, non-authenticated playback clients supported by yt-dlp.
-                // On Railway the default web/visionOS clients trigger a bot gate
-                // even for the public 2005 "Me at the zoo" smoke-test video.
-                "--extractor-args", "youtube:player_client=tv,web_safari,web_embedded",
+                // The alternate TV/Safari/embedded clients were smoke-tested
+                // against a public video on Railway and hit the same bot challenge.
+                // Keep yt-dlp's maintained default client selection here.
                 "--download-sections", String.format(Locale.ROOT, "*%.3f-%.3f", start, end),
                 "--force-keyframes-at-cuts",
                 "--format", "b[ext=mp4][height<=480]/b[height<=480]/bv*[height<=480]+ba/b",
