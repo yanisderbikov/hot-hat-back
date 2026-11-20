@@ -12,6 +12,7 @@ import ru.hothat.game.api.dto.UseWeaponRequestDTO;
 import ru.hothat.game.domain.MatchPlayer;
 import ru.hothat.game.domain.WeaponType;
 import ru.hothat.game.domain.weapon.MemeMedia;
+import ru.hothat.game.domain.weapon.YoutubeMemeClip;
 import ru.hothat.game.domain.weapon.SabotageCommand;
 import ru.hothat.game.domain.weapon.SabotageEngine;
 import ru.hothat.game.domain.weapon.SabotageOutcome;
@@ -46,8 +47,17 @@ public class UseWeaponUseCase {
     public SabotageEventResponseDTO run(HotHatUser user, String roomId, UseWeaponRequestDTO request) {
         MemeMedia media = null;
         if (request.type() == WeaponType.MEME) {
-            media = memes.find(request.memeId() == null ? "" : request.memeId().trim())
-                    .orElseThrow(() -> ApiException.of("MEME_NOT_FOUND", 404));
+            String memeId = request.memeId() == null ? "" : request.memeId().trim();
+            // In-game YouTube shots are ephemeral. Treat the strict server-
+            // validated clip descriptor as media, without reading or writing S3
+            // or requiring a pre-uploaded meme library entry.
+            if (YoutubeMemeClip.isYoutubeId(memeId)) {
+                media = YoutubeMemeClip.parse(memeId)
+                        .orElseThrow(() -> ApiException.of("MEME_NOT_FOUND", 404));
+            } else {
+                media = memes.find(memeId)
+                        .orElseThrow(() -> ApiException.of("MEME_NOT_FOUND", 404));
+            }
         }
         MatchSession session = matchStore.open(roomId);
         MatchPlayer attacker = session.player(user.uid());
