@@ -72,6 +72,11 @@ def _is_age_gate(log):
     return ("confirm your age" in message or "age-restricted" in message
             or "age restricted" in message)
 
+def _is_bot_gate(log):
+    message = str(log).lower()
+    return ("not a bot" in message and ("sign in" in message or
+            "confirm" in message))
+
 def prepare_uncached(video_id, start_seconds):
     if not ID.fullmatch(str(video_id)):
         raise ValueError("invalid YouTube ID")
@@ -100,21 +105,28 @@ def prepare_uncached(video_id, start_seconds):
         ]
         finished = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                   timeout=70, check=False, text=True)
-        # Public extraction remains anonymous and fast. A genuine age gate
-        # retries with the securely provisioned verified YouTube session.
-        # Logging into YouTube in the viewer's browser does NOT log Railway in.
-        if finished.returncode and _is_age_gate(finished.stdout):
+        # Public extraction remains anonymous and fast. If YouTube rejects
+        # the anonymous request with an actual age or bot sign-in challenge,
+        # retry once using the owner's securely provisioned session. This
+        # makes a normal authenticated request, not an automated CAPTCHA.
+        challenge = None
+        if finished.returncode:
+            if _is_age_gate(finished.stdout):
+                challenge = "AGE"
+            elif _is_bot_gate(finished.stdout):
+                challenge = "BOT"
+        if challenge:
             cookie_file = _authorized_cookie_file(temp)
             if cookie_file:
-                print("CLIP_AGE_AUTH_RETRY videoId=%s" % video_id, flush=True)
+                print("CLIP_%s_AUTH_RETRY videoId=%s" % (challenge, video_id), flush=True)
                 authenticated = command[:-1] + ["--cookies", str(cookie_file), command[-1]]
                 finished = subprocess.run(authenticated, stdout=subprocess.PIPE,
                                           stderr=subprocess.STDOUT, timeout=70,
                                           check=False, text=True)
                 if finished.returncode == 0:
-                    print("CLIP_AGE_AUTH_SUCCESS videoId=%s" % video_id, flush=True)
+                    print("CLIP_%s_AUTH_SUCCESS videoId=%s" % (challenge, video_id), flush=True)
                 else:
-                    print("CLIP_AGE_AUTH_REFUSED videoId=%s" % video_id, flush=True)
+                    print("CLIP_%s_AUTH_REFUSED videoId=%s" % (challenge, video_id), flush=True)
         if finished.returncode:
             message = finished.stdout[-1300:]
             code = ("YOUTUBE_BOT_CONFIRMATION_REQUIRED" if "not a bot" in message
