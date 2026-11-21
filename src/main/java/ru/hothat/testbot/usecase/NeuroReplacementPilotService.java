@@ -1709,13 +1709,79 @@ public class NeuroReplacementPilotService {
                 && !job.providerRequests.containsKey(WAN_VIDEO_MODEL_ID);
     }
 
+
+    // GenAPI HTTP 402 is a definitive billing rejection, not a started job.
+    // Never confuse it with a timed-out/ambiguous POST. One owner-confirmed
+    // retry is the absolute limit for this failed billing attempt.
+    private static boolean definitiveWanBalance402(Job job) {
+        return job!=null && WAN_VIDEO_MODEL_ID.equals(job.submittingModel)
+                && job.error!=null
+                && job.error.toLowerCase(java.util.Locale.ROOT)
+                    .startsWith("genapi wan-3 submission: genapi_http_402 ")
+                && job.error.toLowerCase(java.util.Locale.ROOT)
+                    .contains("недостаточно средств")
+                && !job.providerRequests.containsKey(WAN_VIDEO_MODEL_ID);
+    }
+
+    private static boolean wan402RetryNotExhausted(Job job) {
+        return definitiveWanBalance402(job) &&
+                "0".equals(job.providerRequests.getOrDefault(
+                        "__diag.wan402RetryCount","0"));
+    }
+
+    /**
+     * READ ONLY: inspect the balance of the *same* secret GENAPI_API_KEY as
+     * the actual paid POSTs. Safe owner-only output; no token or full profile.
+     * Official API: GET https://api.gen-api.ru/api/v1/user
+     */
+    public Map<String,Object> genApiBalanceDiagnostic() {
+        Map<String,Object> result=new LinkedHashMap<>();
+        result.put("source","GenAPI GET /api/v1/user");
+        result.put("estimatedWan720p10sRubles",250);
+        result.put("charged",false);
+        if(key==null||key.isBlank()){
+            result.put("available",false);
+            result.put("error","GENAPI_API_KEY_MISSING");
+            return result;
+        }
+        try {
+            JsonNode user=send(baseRequest(GENAPI.resolve("user"))
+                    .timeout(Duration.ofSeconds(18)).GET().build());
+            JsonNode balanceNode=user.path("balance");
+            if(!balanceNode.isNumber() ||
+                    balanceNode.decimalValue().signum()<0) {
+                result.put("available",false);
+                result.put("error","GENAPI_BALANCE_NOT_NUMERIC");
+                return result;
+            }
+            java.math.BigDecimal balance=balanceNode.decimalValue();
+            result.put("available",true);
+            result.put("balanceRubles",balance);
+            String address=user.path("email").asText("");
+            int at=address.indexOf('@');
+            result.put("accountHint",at>0 ?
+                    address.substring(0,1)+"***"+address.substring(at) :
+                    "GenAPI account linked to Railway key");
+            result.put("coversPublishedWanVideoPrice",
+                    balance.compareTo(java.math.BigDecimal.valueOf(250))>=0);
+            result.put("discrepancyIfGenApi402",
+                    balance.compareTo(java.math.BigDecimal.valueOf(250))>=0);
+            return result;
+        }catch(Exception e){
+            result.put("available",false);
+            result.put("error","GENAPI_ACCOUNT_LOOKUP_"+e.getClass().getSimpleName());
+            return result;
+        }
+    }
+
     private static boolean keyboardRapVoiceResumeEligible(Job job,String ownerUid) {
         return job!=null && ownerUid!=null && ownerUid.equals(job.ownerUid)
                 && "failed".equals(job.state)
                 && KEYBOARD_RAP_ASSIGNMENT.equals(job.sceneAssignment)
                 && GAME_MODE.equals(job.providerRequests.get("character-mode"))
                 && WAN_VIDEO_MODEL_ID.equals(videoModelFor(job))
-                && (job.submittingModel==null || definiteWanReferenceSchema422(job))
+                && (job.submittingModel==null || definiteWanReferenceSchema422(job) ||
+                    wan402RetryNotExhausted(job))
                 && job.sourceCameraKey!=null && job.sourceVoiceKey!=null
                 && job.cameraMime!=null && job.voiceMime!=null
                 && job.providerRequests.get("tts")!=null
@@ -1739,11 +1805,23 @@ public class NeuroReplacementPilotService {
         quote.put("savedChatterboxId",job.providerRequests.getOrDefault("chatterbox-speech",""));
         quote.put("savedWanId",job.providerRequests.getOrDefault(WAN_VIDEO_MODEL_ID,""));
         boolean schema422=definiteWanReferenceSchema422(job);
+        boolean balance402=definitiveWanBalance402(job);
+        boolean billingRetryAllowed=wan402RetryNotExhausted(job);
         quote.put("definitiveSchema422",schema422);
-        quote.put("ambiguousPaidPost",job.submittingModel!=null && !schema422);
+        quote.put("definitiveBalance402",balance402);
+        quote.put("wan402RetryCount",job.providerRequests.getOrDefault("__diag.wan402RetryCount","0"));
+        quote.put("ambiguousPaidPost",job.submittingModel!=null && !schema422 && !balance402);
         quote.put("costOfStatusCheckRoubles",0);
         boolean eligible=keyboardRapVoiceResumeEligible(job,ownerUid);
         boolean ready=eligible;
+        Map<String,Object> account=balance402?genApiBalanceDiagnostic():Map.of();
+        quote.put("railwayApiAccount",account);
+        if(balance402) {
+            Object verified=account.get("coversPublishedWanVideoPrice");
+            // A disputed 402 is NEVER automatically retried without first
+            // reading the exact API account's wallet on the same key.
+            ready=ready && billingRetryAllowed && Boolean.TRUE.equals(verified);
+        }
         Map<String,String> stages=new LinkedHashMap<>();
         if(eligible) {
             for(String model:new String[]{"tts","chatterbox-speech"}) {
@@ -1765,7 +1843,15 @@ public class NeuroReplacementPilotService {
         quote.put("providerStates",stages);
         quote.put("canResume",ready);
         quote.put("nextPaidStage",ready?WAN_VIDEO_MODEL_ID:"");
-        quote.put("note",ready
+        quote.put("note",balance402
+                ? (!billingRetryAllowed
+                  ? "Вторая ошибка HTTP 402: повторные отправки Wan заблокированы для защиты баланса. Нужна сверка биллинга GenAPI."
+                  : !Boolean.TRUE.equals(account.get("available"))
+                  ? "Не удалось бесплатно проверить баланс GenAPI для ключа Railway. Платный запуск запрещён."
+                  : Boolean.TRUE.equals(account.get("coversPublishedWanVideoPrice"))
+                  ? "GenAPI ответил HTTP 402 при балансе ключа, превышающем опубликованную стоимость видео 250 ₽. Это расхождение провайдера. Допустима только ОДНА новая попытка после отдельного подтверждения; без повторной оплаты речи."
+                  : "На API-ключе Railway баланс ниже опубликованных 250 ₽. Платный Wan запуск запрещён.")
+                : ready
                 ? (schema422
                    ? "Wan отклонил конфликтующую схему image_url + video_urls с HTTP 422. Видео-ID не создан. Схема исправлена: только video_urls. TTS/Chatterbox сохраняются; повторная отправка Wan только после нового подтверждения."
                    : "Речь уже оплачена, повторной оплаты TTS/Chatterbox не будет. После явного подтверждения продолжится прежний заказ, впервые запустив Wan 3.0.")
@@ -1795,16 +1881,27 @@ public class NeuroReplacementPilotService {
         if(!Boolean.TRUE.equals(quote.get("canResume")))
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "NEURO_KEYBOARD_VOICE_NOT_COMPLETE_NO_NEW_PAYMENT");
-        String resumeStage="Восстановление Wan: TTS/Chatterbox сохранены, корректная схема видео";
-        // Confirmed HTTP 422 is a DEFINITE validation rejection, unlike a
-        // network timeout after a POST. Clear submitting_model ONLY with an
-        // atomic SQL lease verifying the exact 422 error and original IDs.
-        // The prior failed request cannot have a paid Wan task ID.
         boolean schema422=definiteWanReferenceSchema422(job);
+        boolean billing402=definitiveWanBalance402(job);
+        String resumeStage=billing402
+                ? "Wan: одно подтверждённое продолжение после проверенного HTTP 402"
+                : "Восстановление Wan: TTS/Chatterbox сохранены, корректная схема видео";
+        // A definitive 402/422 response proves GenAPI rejected the POST
+        // *before* creating a task. Ambiguous timeouts are NOT recoverable.
+        // For 402, one explicit user-confirmed retry is the hard maximum.
         int claimed=jdbc.update("""
                 UPDATE neuro_replacement_job
                    SET state='processing',stage=?,error_message=NULL,
-                       submitting_model=NULL,updated_at=now()
+                       submitting_model=NULL,
+                       provider_requests=CASE
+                         WHEN submitting_model='wan-3'
+                          AND error_message LIKE 'GenAPI wan-3 submission: GENAPI_HTTP_402 %'
+                          AND error_message LIKE '%недостаточно средств%'
+                         THEN jsonb_set(provider_requests,
+                           '{__diag.wan402RetryCount}','"1"'::jsonb,true)
+                         ELSE provider_requests
+                       END,
+                       updated_at=now()
                  WHERE job_id=? AND owner_uid=? AND room_id=? AND state='failed'
                    AND scene_assignment=?
                    AND (
@@ -1813,6 +1910,12 @@ public class NeuroReplacementPilotService {
                        submitting_model='wan-3'
                        AND error_message LIKE 'GenAPI wan-3 submission: GENAPI_HTTP_422 image_url:%'
                        AND error_message LIKE '%video_urls:%'
+                     )
+                     OR (
+                       submitting_model='wan-3'
+                       AND error_message LIKE 'GenAPI wan-3 submission: GENAPI_HTTP_402 %'
+                       AND error_message LIKE '%недостаточно средств%'
+                       AND COALESCE(provider_requests->>'__diag.wan402RetryCount','0')='0'
                      )
                    )
                    AND provider_requests->>'character-mode'=?
@@ -1854,6 +1957,7 @@ public class NeuroReplacementPilotService {
         Map<String,Object> response=snapshot(current);
         response.put("recoveryStarted",true);
         response.put("recoveredFromDefinitiveWan422",schema422);
+        response.put("recoveredFromDefinitiveWan402",billing402);
         return response;
     }
 

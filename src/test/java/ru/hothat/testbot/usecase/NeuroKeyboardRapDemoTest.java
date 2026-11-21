@@ -155,4 +155,67 @@ class NeuroKeyboardRapDemoTest {
         assertEquals("NEURO_KEYBOARD_RECOVERY_EXPLICIT_CONSENT_REQUIRED",
                 error.getReason());
     }
+    @Test
+    void definitiveWan402IsRecoverableOnlyOnceAndNeverResendsVoice() throws Exception {
+        Class<?> jobType=Class.forName(
+                "ru.hothat.testbot.usecase.NeuroReplacementPilotService$Job");
+        Constructor<?> ctor=jobType.getDeclaredConstructor(
+                String.class,String.class,String.class);
+        ctor.setAccessible(true);
+        Object job=ctor.newInstance(UUID,"hat-fac7edkeyboard"+UUID.replace("-",""),"owner");
+        ReflectionTestUtils.setField(job,"state","failed");
+        ReflectionTestUtils.setField(job,"sceneAssignment",
+                ReflectionTestUtils.getField(NeuroReplacementPilotService.class,
+                        "KEYBOARD_RAP_ASSIGNMENT"));
+        ReflectionTestUtils.setField(job,"sourceCameraKey","original.webm");
+        ReflectionTestUtils.setField(job,"sourceVoiceKey","speech.webm");
+        ReflectionTestUtils.setField(job,"cameraMime","video/webm");
+        ReflectionTestUtils.setField(job,"voiceMime","audio/webm");
+        ReflectionTestUtils.setField(job,"submittingModel","wan-3");
+        ReflectionTestUtils.setField(job,"error",
+                "GenAPI wan-3 submission: GENAPI_HTTP_402 На вашем счете " +
+                "недостаточно средств для создания новых генераций.");
+        Field field=jobType.getDeclaredField("providerRequests");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<String,String> saved=(Map<String,String>)field.get(job);
+        saved.put("character-mode","genapi-game-o3-reference-10");
+        saved.put("__diag.videoModel","wan-3");
+        saved.put("tts","58629153");
+        saved.put("chatterbox-speech","58629167");
+        Method definite=NeuroReplacementPilotService.class.getDeclaredMethod(
+                "definitiveWanBalance402",jobType);
+        definite.setAccessible(true);
+        Method eligible=NeuroReplacementPilotService.class.getDeclaredMethod(
+                "keyboardRapVoiceResumeEligible",jobType,String.class);
+        eligible.setAccessible(true);
+        assertEquals(Boolean.TRUE,definite.invoke(null,job));
+        assertEquals(Boolean.TRUE,eligible.invoke(null,job,"owner"));
+        assertEquals(Boolean.FALSE,eligible.invoke(null,job,"other-owner"));
+        saved.put("__diag.wan402RetryCount","1");
+        assertEquals(Boolean.FALSE,eligible.invoke(null,job,"owner"),
+                "a second HTTP 402 cannot cause another paid attempt");
+        saved.remove("__diag.wan402RetryCount");
+        saved.put("wan-3","previous-video-task");
+        assertEquals(Boolean.FALSE,definite.invoke(null,job),
+                "a paid video ID invalidates 402 recovery entirely");
+        assertEquals(Boolean.FALSE,eligible.invoke(null,job,"owner"));
+        saved.remove("wan-3");
+        ReflectionTestUtils.setField(job,"error","request timed out");
+        assertEquals(Boolean.FALSE,eligible.invoke(null,job,"owner"),
+                "ambiguous timeout never permits a second paid POST");
+        assertEquals("58629153",saved.get("tts"));
+        assertEquals("58629167",saved.get("chatterbox-speech"));
+    }
+
+    @Test
+    void walletReadOnlyProbeDoesNotAttemptGenerationWithoutKey() {
+        Map<String,Object> result=pilot.genApiBalanceDiagnostic();
+        assertEquals("GenAPI GET /api/v1/user",result.get("source"));
+        assertEquals(250,result.get("estimatedWan720p10sRubles"));
+        assertEquals(false,result.get("charged"));
+        assertEquals(false,result.get("available"));
+        assertEquals("GENAPI_API_KEY_MISSING",result.get("error"));
+    }
+
 }
