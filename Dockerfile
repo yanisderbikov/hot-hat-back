@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3 
 # Include both supported Node 22 and yt-dlp-ejs from its default extras;
 # fail the image build instead of silently deploying a broken extractor.
 COPY --from=youtube_node /usr/local/bin/node /usr/local/bin/node
-RUN node -e 'if(Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' \\
+RUN node -e 'if(Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' \
     && /opt/yt-dlp/bin/python -c "import importlib.metadata as m; print('yt-dlp',m.version('yt-dlp'),'yt-dlp-ejs',m.version('yt-dlp-ejs'))"
 ENV PATH="/opt/yt-dlp/bin:$PATH"
 WORKDIR /app
