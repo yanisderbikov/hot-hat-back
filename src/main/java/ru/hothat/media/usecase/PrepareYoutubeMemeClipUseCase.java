@@ -13,7 +13,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -45,10 +44,11 @@ public class PrepareYoutubeMemeClipUseCase {
     private static final long SHARED_TTL_MS = 90_000;
     private static final int MAX_SHARED_CLIPS = 3;
     private final Map<String, SharedClip> shared = new LinkedHashMap<>();
-    // A 422 age gate cannot be solved by hammering the same video ten times.
-    // Railway also sees occasional cloud-IP bot challenges from YouTube.
+    // Back off only the VIDEO ID which actually failed. A separate public
+    // video must remain eligible after another video triggers an age/bot gate.
+    // The shared cache, semaphore and fixed 10-second limit still protect
+    // Railway and YouTube from excessive concurrent requests.
     private final ConcurrentHashMap<String, DeniedClip> denied = new ConcurrentHashMap<>();
-    private final AtomicLong botChallengeUntil = new AtomicLong();
     private record DeniedClip(String code, long until) { }
     static final String AGE_REQUIRED = "YOUTUBE_AGE_CONFIRMATION_REQUIRED";
     static final String BOT_REQUIRED = "YOUTUBE_BOT_CONFIRMATION_REQUIRED";
@@ -84,8 +84,6 @@ public class PrepareYoutubeMemeClipUseCase {
         DeniedClip refusal = denied.get(videoId);
         if (refusal != null && refusal.until() > nowMs)
             throw ApiException.of(refusal.code(), 422);
-        if (botChallengeUntil.get() > nowMs)
-            throw ApiException.of(BOT_REQUIRED, 422);
         String key = videoId + ":" + Math.round(requestedStart * 1000);
         SharedClip clip;
         boolean producer = false;
@@ -159,8 +157,10 @@ public class PrepareYoutubeMemeClipUseCase {
                 if (AGE_REQUIRED.equals(code))
                     denied.put(videoId, new DeniedClip(code, System.currentTimeMillis() + 10 * 60_000L));
                 if (BOT_REQUIRED.equals(code)) {
+                    // Never poison unrelated videos for 30 seconds due to
+                    // one YouTube bot challenge: it disabled otherwise
+                    // public, previously playable memes in the same game.
                     denied.put(videoId, new DeniedClip(code, System.currentTimeMillis() + 60_000L));
-                    botChallengeUntil.set(System.currentTimeMillis() + 30_000L);
                 }
                 throw ApiException.of(code, 422);
             }
