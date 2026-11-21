@@ -6,6 +6,8 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -13,8 +15,12 @@ ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 TOKEN = os.environ.get("HOT_HAT_CLIP_SOURCE_TOKEN", "")
 SEM = threading.BoundedSemaphore(2)
 MAX_BYTES = 24 * 1024 * 1024
+CACHE_MAX_BYTES = 24 * 1024 * 1024
+CACHE_TTL_SECONDS = 240
+_CACHE = OrderedDict()
+_CACHE_LOCK = threading.Lock()
 
-def prepare(video_id, start_seconds):
+def prepare_uncached(video_id, start_seconds):
     if not ID.fullmatch(str(video_id)):
         raise ValueError("invalid YouTube ID")
     start = float(start_seconds)
@@ -29,6 +35,11 @@ def prepare(video_id, start_seconds):
             "--concurrent-fragments", "1", "--js-runtimes", "node",
             "--download-sections", "*%.3f-%.3f" % (start, start + 10),
             "--force-keyframes-at-cuts",
+            # FFmpegFD normally re-encodes selected 10s with its default slow
+            # preset. Use an explicitly selected fast encoding only when
+            # enabled by a Railway variable; retain exact frame cuts.
+            *(["--downloader-args", "ffmpeg_o:-preset ultrafast"]
+              if os.environ.get("HOT_HAT_CLIP_FAST_ENCODING") == "1" else []),
             "--format", "b[ext=mp4][height<=480]/b[height<=480]/bv*[height<=480]+ba/b",
             "--merge-output-format", "mp4", "--recode-video", "mp4",
             "--limit-rate", "2M",
@@ -51,6 +62,31 @@ def prepare(video_id, start_seconds):
         if len(clip) < 2048 or len(clip) > MAX_BYTES:
             raise RuntimeError("YOUTUBE_IMPORT_UNAVAILABLE: invalid mp4 size")
         return clip
+
+def prepare(video_id, start_seconds):
+    # Reuse an exact 10-second MP4 across different rooms and backend pods.
+    # Cache no URLs/tokens/account data; bounded by TTL and total byte size.
+    key = (str(video_id), round(float(start_seconds) * 1000))
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        for existing, item in list(_CACHE.items()):
+            if item[0] <= now:
+                del _CACHE[existing]
+        hit = _CACHE.get(key)
+        if hit is not None:
+            _CACHE.move_to_end(key)
+            print("CLIP_CACHE_HIT videoId=%s startMs=%s bytes=%s" %
+                  (video_id, key[1], len(hit[1])), flush=True)
+            return hit[1]
+    clip = prepare_uncached(video_id, start_seconds)
+    with _CACHE_LOCK:
+        _CACHE[key] = (time.monotonic() + CACHE_TTL_SECONDS, clip)
+        _CACHE.move_to_end(key)
+        size = sum(len(item[1]) for item in _CACHE.values())
+        while len(_CACHE) > 20 or size > CACHE_MAX_BYTES:
+            _, removed = _CACHE.popitem(last=False)
+            size -= len(removed[1])
+    return clip
 
 class Handler(BaseHTTPRequestHandler):
     def answer(self, status, data, mime="application/json"):
@@ -81,10 +117,13 @@ class Handler(BaseHTTPRequestHandler):
             if not SEM.acquire(blocking=False):
                 return self.answer(503, b'{"error":"busy"}')
             try:
+                started_at = time.monotonic()
                 clip = prepare(video_id, start)
             finally:
                 SEM.release()
-            print("CLIP_OK videoId=%s start=%s bytes=%s" % (video_id, start, len(clip)), flush=True)
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            print("CLIP_OK videoId=%s start=%s bytes=%s elapsedMs=%s" %
+                  (video_id, start, len(clip), elapsed_ms), flush=True)
             return self.answer(200, clip, "video/mp4")
         except ValueError as e:
             return self.answer(400, json.dumps({"error":str(e)}).encode())
@@ -100,9 +139,11 @@ def smoke():
     video_id = os.environ.get("HOT_HAT_CLIP_SOURCE_SMOKE_ID", "").strip()
     if not video_id: return
     print("CLIP_SOURCE_SMOKE_START id=" + video_id,flush=True)
+    started_at = time.monotonic()
     try:
         clip = prepare(video_id, 0)
-        print("CLIP_SOURCE_SMOKE_OK id=%s bytes=%s" % (video_id,len(clip)),flush=True)
+        print("CLIP_SOURCE_SMOKE_OK id=%s bytes=%s elapsedMs=%s" %
+              (video_id,len(clip),int((time.monotonic()-started_at)*1000)),flush=True)
     except Exception as e:
         print("CLIP_SOURCE_SMOKE_FAILED id=%s reason=%s" % (video_id,str(e)[:400]),flush=True)
 
