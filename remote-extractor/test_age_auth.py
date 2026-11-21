@@ -59,8 +59,8 @@ class AgeVerifiedSessionTests(unittest.TestCase):
         from pathlib import Path
         video_id = "hAmi3ddwJIg"
         public_message = "ERROR: Sign in to confirm you're not a bot"
-        cookie_text = ("# Netscape HTTP Cookie File\\n"
-                       ".youtube.com\\tTRUE\\t/\\tTRUE\\t2100000000\\tSAPISID\\tsecret-test-token\\n")
+        cookie_text = ("# Netscape HTTP Cookie File\n"
+                       ".youtube.com\tTRUE\t/\tTRUE\t2100000000\tSAPISID\tsecret-test-token\n")
         calls = []
         def fake_run(args, **kwargs):
             calls.append(args)
