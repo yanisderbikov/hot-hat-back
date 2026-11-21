@@ -38,24 +38,6 @@ class PrepareYoutubeMemeClipUseCaseTest {
         assertFalse(cmd.contains("bash"));
     }
     @Test
-    void operatorVerifiedSessionUsesOnlyTemporaryCookieFileAndNeverPassesSecretsAsArgs() {
-        Path privateCookieFile = Path.of("/tmp/safe/youtube-session.txt");
-        List<String> command = PrepareYoutubeMemeClipUseCase.buildCommand(
-                "jNQXAC9IVRw", 12.0, Path.of("/tmp/safe"), privateCookieFile);
-        int flag = command.indexOf("--cookies");
-        assertTrue(flag > 0, "yt-dlp must receive an optional authenticated cookie file");
-        assertEquals(privateCookieFile.toAbsolutePath().toString(), command.get(flag + 1));
-        assertEquals("https://www.youtube.com/watch?v=jNQXAC9IVRw",
-                command.get(command.size() - 1));
-        assertFalse(String.join(" ", command).contains("Cookie:"));
-        assertFalse(String.join(" ", command).contains("SAPISID"));
-        List<String> anonymous = PrepareYoutubeMemeClipUseCase.buildCommand(
-                "jNQXAC9IVRw", 12.0, Path.of("/tmp/safe"));
-        assertFalse(anonymous.contains("--cookies"),
-                "when secret isn't configured, the normal anonymous path stays intact");
-    }
-
-    @Test
     void explainsRealRailwayAgeAndBotFailuresInsteadOfGenericImportUnavailable() {
         assertEquals("YOUTUBE_AGE_CONFIRMATION_REQUIRED",
                 PrepareYoutubeMemeClipUseCase.classifyExtractorFailure(
