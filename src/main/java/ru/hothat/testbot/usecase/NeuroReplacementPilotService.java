@@ -1607,6 +1607,91 @@ public class NeuroReplacementPilotService {
         }
         return NeuroScenePlan.planWithinSeconds(job.sceneAssignment,maxSeconds);
     }
+
+    /**
+     * SCRUM-60. Exact owner-requested keyboard demonstration. The reference
+     * never contains a keyboard: Wan generates one foreground prop from BELOW
+     * the camera, holds it with both hands ON the head throughout the Russian
+     * advertising rap, then lowers it out of view to the invisible desk.
+     */
+    private static final String KEYBOARD_RAP_REQUEST =
+            "Пусть игрок возьмет клавиатуру в руки и поставит себе на голову и будет держать ее руками на голове, " +
+            "повернется лицом в камеру и скажет выразительно четко как рекламу - мы на яхте провисели две недели " +
+            "(пауза) и все это время ты жуешь коктейли. пусть эту рекламу он говорит как рэп читает, " +
+            "потом положит клавиатуру обратно в невидимую зону на стол.";
+    private static final String KEYBOARD_RAP_SPOKEN =
+            "мы на яхте провисели две недели ... и все это время ты жуешь коктейли";
+    private static final String KEYBOARD_RAP_ASSIGNMENT =
+            "Пусть игрок возьмет отсутствующую в референсе клавиатуру из невидимой зоны СНИЗУ кадра, " +
+            "поднимет ее обеими руками, поставит себе НА ГОЛОВУ и будет держать ее обеими руками на голове. " +
+            "Повернется лицом в камеру и выразительно, четко, как рекламу и ритмичный РЭП, скажет: «" +
+            KEYBOARD_RAP_SPOKEN + "». Только эти слова, с паузой после слов две недели, " +
+            "без пения, дополнительной речи и фоновой музыки. " +
+            "Затем ПОЛОЖИТ ТУ ЖЕ клавиатуру обратно СНИЗУ за границу кадра в невидимую зону на стол. " +
+            "Клавиатуры НЕТ в исходной записи: сгенерировать её как новый реальный непрерывно движущийся предмет, " +
+            "который полностью виден вместе с руками и головой; не делать её частью фона.";
+    private static String keyboardRapRoom(String testId) {
+        if(testId==null || !testId.matches(
+                "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_KEYBOARD_TEST_ID_INVALID");
+        return "hat-fac7edkeyboard"+testId.replace("-","");
+    }
+    private static NeuroScenePlan keyboardRapScene() {
+        NeuroScenePlan scene=NeuroScenePlan.planWithinSeconds(KEYBOARD_RAP_ASSIGNMENT,10);
+        if(!KEYBOARD_RAP_SPOKEN.equals(scene.spokenText()))
+            throw new IllegalStateException("NEURO_KEYBOARD_SPEECH_CHANGED_NO_CHARGE");
+        return scene;
+    }
+
+    /** No GenAPI POST: a quote and exactly the persisted scene text. */
+    public Map<String,Object> keyboardRapConfig() {
+        if(!WAN_VIDEO_MODEL_ID.equals(newVideoModelId()))
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_KEYBOARD_WAN_NOT_SELECTED_NO_CHARGE");
+        NeuroScenePlan scene=keyboardRapScene();
+        Map<String,Object> config=new LinkedHashMap<>();
+        config.put("requestedAssignment",KEYBOARD_RAP_REQUEST);
+        config.put("processedAssignment",scene.assignment());
+        config.put("spokenText",scene.spokenText());
+        config.put("durationSeconds",scene.durationSeconds());
+        config.put("videoModel",WAN_VIDEO_MODEL_ID);
+        config.put("resolution","720p");
+        config.put("priceEstimateRoubles",
+                (int)Math.ceil(scene.durationSeconds()*(25.0+200.0/60)+20));
+        config.put("priceIsEstimate",true);
+        config.put("readiness",readiness());
+        config.put("providerReady",enabled && key!=null && !key.isBlank());
+        config.put("promptAdaptation",
+                scene.videoPrompt().contains("The brief exceeds the time available:")
+                    ? "Secondary gestures are deprioritized to fit duration; full dialogue retained."
+                    : "No textual simplification; full dialogue and main gestures retained.");
+        return config;
+    }
+
+    /** Persist a separate Wan identity and full raw webcam+voice BEFORE billing. */
+    public Map<String,Object> startKeyboardRap(String ownerUid,String testId,boolean consented,
+                                                MultipartFile video,MultipartFile voice) {
+        String room=keyboardRapRoom(testId);
+        if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "NEURO_KEYBOARD_EXPLICIT_PAYMENT_CONSENT_REQUIRED");
+        if(!WAN_VIDEO_MODEL_ID.equals(newVideoModelId()))
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_KEYBOARD_WAN_NOT_SELECTED_NO_CHARGE");
+        keyboardRapScene();
+        return start(room,ownerUid,true,video,voice,0,KEYBOARD_RAP_ASSIGNMENT,10);
+    }
+
+    /** Idempotent recovery across refresh/device/network failures. FREE GET. */
+    public Map<String,Object> keyboardRapByTestId(String ownerUid,String testId) {
+        Job saved=existingRoomJob(keyboardRapRoom(testId));
+        if(saved==null || !ownerUid.equals(saved.ownerUid) ||
+                !KEYBOARD_RAP_ASSIGNMENT.equals(saved.sceneAssignment))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "NEURO_KEYBOARD_JOB_NOT_FOUND");
+        return snapshot(saved);
+    }
+
     private static final String CHARACTER_TASK = "kling-character";
     private static final String ACTING_TASK = "kling-omni";
 

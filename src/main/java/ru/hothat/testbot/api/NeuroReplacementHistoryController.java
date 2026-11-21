@@ -63,6 +63,34 @@ public class NeuroReplacementHistoryController {
      * Simple 25-second video upload UI. One owner-confirmed payment action,
      * all subsequent stages are the saved GenAPI pipeline; no extra Kling key.
      */
+
+    /**
+     * SCRUM-60: separate 10s Wan keyboard-rap studio above the legacy upload.
+     * Never submits a paid model on configuration/status/restore GET requests.
+     */
+    @GetMapping("/studio/keyboard-rap/config")
+    public Map<String,Object> keyboardRapConfig(@AuthenticationPrincipal HotHatUser owner) {
+        return pilot.keyboardRapConfig();
+    }
+
+    @GetMapping("/studio/keyboard-rap/by-test/{testId}")
+    public Map<String,Object> keyboardRapByTestId(@AuthenticationPrincipal HotHatUser owner,
+                                                   @PathVariable String testId) {
+        return pilot.keyboardRapByTestId(owner.uid(),testId);
+    }
+
+    @PostMapping(value="/studio/keyboard-rap",consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ApiResponse(responseCode="202",description="Owner-confirmed idempotent 10s Wan 3.0 keyboard rap, raw camera and mic stored first")
+    public ResponseEntity<Map<String,Object>> startKeyboardRap(
+            @AuthenticationPrincipal HotHatUser owner,
+            @RequestParam("testId") String testId,
+            @RequestParam(name="consented",defaultValue="false") boolean consented,
+            @RequestPart("video") MultipartFile video,
+            @RequestPart("voice") MultipartFile voice) {
+        return ResponseEntity.accepted().body(
+                pilot.startKeyboardRap(owner.uid(),testId,consented,video,voice));
+    }
+
     @GetMapping("/studio/upload/config")
         @ApiResponse(responseCode = "200", description = "Бесплатный расчёт стоимости и настроек загрузки видео Нейроподмены",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = NeuroDetailedResponseDTO.UploadConfig.class)))
