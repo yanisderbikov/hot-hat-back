@@ -117,6 +117,23 @@ class NeuroKeyboardRapDemoTest {
         ReflectionTestUtils.setField(job,"submittingModel","wan-3");
         assertEquals(Boolean.FALSE,allowed.invoke(null,job,"owner"),
                 "never retry ambiguous paid POST");
+        ReflectionTestUtils.setField(job,"error",
+                "GenAPI wan-3 submission: GENAPI_HTTP_422 image_url: " +
+                "Значение поля image url запрещает присутствие image urls / video urls / audio urls.; " +
+                "video_urls: Значение поля video urls запрещает присутствие image url / end image url.");
+        assertEquals(Boolean.TRUE,allowed.invoke(null,job,"owner"),
+                "definite input-schema 422 with saved voice IDs and NO Wan request ID is recoverable");
+        saved.put("wan-3","paid-wan-should-never-be-resent");
+        assertEquals(Boolean.FALSE,allowed.invoke(null,job,"owner"),
+                "a persisted Wan video ID MUST prohibit a second paid request, even on 422");
+        saved.remove("wan-3");
+        ReflectionTestUtils.setField(job,"error",
+                "GenAPI wan-3 submission: GENAPI_HTTP_422 unrelated provider validation");
+        assertEquals(Boolean.FALSE,allowed.invoke(null,job,"owner"),
+                "other 422 errors cannot clear the paid submission guard");
+        ReflectionTestUtils.setField(job,"error","request timed out");
+        assertEquals(Boolean.FALSE,allowed.invoke(null,job,"owner"),
+                "network timeout is ambiguous and cannot be retried");
         ReflectionTestUtils.setField(job,"submittingModel",null);
         saved.remove("chatterbox-speech");
         assertEquals(Boolean.FALSE,allowed.invoke(null,job,"owner"),

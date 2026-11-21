@@ -1698,13 +1698,24 @@ public class NeuroReplacementPilotService {
      * re-submitted. No Wan submission is made without a second owner click.
      * Ambiguous HTTP POSTs (submitting_model != NULL) remain blocked.
      */
+    // A definitive HTTP 422 from the Wan INPUT validator has no request_id.
+    // Only this exact reported conflict can clear the ambiguous-submission
+    // marker after an additional owner confirmation. Network timeouts cannot.
+    private static boolean definiteWanReferenceSchema422(Job job) {
+        return job!=null && "wan-3".equals(job.submittingModel)
+                && job.error!=null
+                && job.error.startsWith("GenAPI wan-3 submission: GENAPI_HTTP_422 image_url:")
+                && job.error.contains("video_urls:")
+                && !job.providerRequests.containsKey(WAN_VIDEO_MODEL_ID);
+    }
+
     private static boolean keyboardRapVoiceResumeEligible(Job job,String ownerUid) {
         return job!=null && ownerUid!=null && ownerUid.equals(job.ownerUid)
                 && "failed".equals(job.state)
                 && KEYBOARD_RAP_ASSIGNMENT.equals(job.sceneAssignment)
                 && GAME_MODE.equals(job.providerRequests.get("character-mode"))
                 && WAN_VIDEO_MODEL_ID.equals(videoModelFor(job))
-                && job.submittingModel==null
+                && (job.submittingModel==null || definiteWanReferenceSchema422(job))
                 && job.sourceCameraKey!=null && job.sourceVoiceKey!=null
                 && job.cameraMime!=null && job.voiceMime!=null
                 && job.providerRequests.get("tts")!=null
@@ -1727,7 +1738,9 @@ public class NeuroReplacementPilotService {
         quote.put("savedTtsId",job.providerRequests.getOrDefault("tts",""));
         quote.put("savedChatterboxId",job.providerRequests.getOrDefault("chatterbox-speech",""));
         quote.put("savedWanId",job.providerRequests.getOrDefault(WAN_VIDEO_MODEL_ID,""));
-        quote.put("ambiguousPaidPost",job.submittingModel!=null);
+        boolean schema422=definiteWanReferenceSchema422(job);
+        quote.put("definitiveSchema422",schema422);
+        quote.put("ambiguousPaidPost",job.submittingModel!=null && !schema422);
         quote.put("costOfStatusCheckRoubles",0);
         boolean eligible=keyboardRapVoiceResumeEligible(job,ownerUid);
         boolean ready=eligible;
@@ -1753,7 +1766,9 @@ public class NeuroReplacementPilotService {
         quote.put("canResume",ready);
         quote.put("nextPaidStage",ready?WAN_VIDEO_MODEL_ID:"");
         quote.put("note",ready
-                ? "Речь уже оплачена, повторной оплаты TTS/Chatterbox не будет. После явного подтверждения продолжится прежний заказ, впервые запустив Wan 3.0."
+                ? (schema422
+                   ? "Wan отклонил конфликтующую схему image_url + video_urls с HTTP 422. Видео-ID не создан. Схема исправлена: только video_urls. TTS/Chatterbox сохраняются; повторная отправка Wan только после нового подтверждения."
+                   : "Речь уже оплачена, повторной оплаты TTS/Chatterbox не будет. После явного подтверждения продолжится прежний заказ, впервые запустив Wan 3.0.")
                 : "Повторная оплата заблокирована. Бесплатно проверь сохранённые ID и статус сервиса.");
         return quote;
     }
@@ -1780,13 +1795,26 @@ public class NeuroReplacementPilotService {
         if(!Boolean.TRUE.equals(quote.get("canResume")))
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "NEURO_KEYBOARD_VOICE_NOT_COMPLETE_NO_NEW_PAYMENT");
-        String resumeStage="Восстановление Wan: TTS и Chatterbox уже оплачены, ID сохранены";
+        String resumeStage="Восстановление Wan: TTS/Chatterbox сохранены, корректная схема видео";
+        // Confirmed HTTP 422 is a DEFINITE validation rejection, unlike a
+        // network timeout after a POST. Clear submitting_model ONLY with an
+        // atomic SQL lease verifying the exact 422 error and original IDs.
+        // The prior failed request cannot have a paid Wan task ID.
+        boolean schema422=definiteWanReferenceSchema422(job);
         int claimed=jdbc.update("""
                 UPDATE neuro_replacement_job
-                   SET state='processing',stage=?,error_message=NULL,updated_at=now()
+                   SET state='processing',stage=?,error_message=NULL,
+                       submitting_model=NULL,updated_at=now()
                  WHERE job_id=? AND owner_uid=? AND room_id=? AND state='failed'
                    AND scene_assignment=?
-                   AND submitting_model IS NULL
+                   AND (
+                     submitting_model IS NULL
+                     OR (
+                       submitting_model='wan-3'
+                       AND error_message LIKE 'GenAPI wan-3 submission: GENAPI_HTTP_422 image_url:%'
+                       AND error_message LIKE '%video_urls:%'
+                     )
+                   )
                    AND provider_requests->>'character-mode'=?
                    AND provider_requests->>'__diag.videoModel'=?
                    AND provider_requests->>'tts'=?
@@ -1825,6 +1853,7 @@ public class NeuroReplacementPilotService {
         });
         Map<String,Object> response=snapshot(current);
         response.put("recoveryStarted",true);
+        response.put("recoveredFromDefinitiveWan422",schema422);
         return response;
     }
 
@@ -3117,9 +3146,11 @@ public class NeuroReplacementPilotService {
     }
 
     /**
-     * Wan 3.0 accepts video_urls (identity) and image_url (first frame).
-     * Disable generated audio; verified Gemini TTS / Chatterbox / Lip Sync
-     * keep the original voice and exact Russian words separately.
+     * Wan 3.0 GenAPI reference-to-video: video_urls (identity) ONLY.
+     * The PROVIDER'S DEFINITIVE 422 rejects image_url alongside video_urls.
+     * We still archive/offer the original JPG for owner download, but NEVER
+     * send it as image_url/end_image_url in the same paid Wan request.
+     * Gemini TTS, Chatterbox and Lip Sync preserve the exact Russian voice.
      */
     private Map<String,Object> wanReferenceFields(NeuroScenePlan scene,
                                                    String videoUrl,String startImageUrl) {
@@ -3130,15 +3161,19 @@ public class NeuroReplacementPilotService {
             throw new IllegalArgumentException("NEURO_WAN_REFERENCES_INVALID_NO_CHARGE");
         String prompt=buildGenApiVisualPrompt(scene)
                 .replace("@Element1","the person in the attached reference video")
+                .replace("The supplied first frame anchors the room. ",
+                         "Keep the room framing and lighting from the identity video. ")
                 + " Reference is IDENTITY only; perform entirely NEW movements." +
-                " Use the reference image as the exact first frame. " +
-                "Final speech and lip synchronization will be provided separately.";
+                " The identity video itself is the sole visual reference; " +
+                "do NOT replay the video unchanged. Final speech and lip " +
+                "synchronization will be provided separately.";
         if(prompt.length()>MAX_GENAPI_VISUAL_PROMPT_CHARS+300)
             throw new IllegalArgumentException("NEURO_WAN_PROMPT_TOO_LONG_NO_CHARGE");
         return Map.of(
                 "prompt",prompt,
                 "video_urls",List.of(videoUrl),
-                "image_url",startImageUrl,
+                // GenAPI 422: image_url and video_urls are mutually exclusive.
+                // JPG is archived for owner but never included in this body.
                 "duration",scene.durationSeconds(),
                 "resolution","720p",
                 "aspect_ratio","16:9",

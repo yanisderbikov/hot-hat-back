@@ -37,7 +37,15 @@ class NeuroWanVideoProviderTest {
                     "Gemini, Chatterbox and Lip Sync must preserve the spoken voice");
             assertEquals(false,body.get("enable_prompt_expansion"));
             assertEquals(List.of(video),body.get("video_urls"));
-            assertEquals(image,body.get("image_url"));
+            // Real GenAPI 422: image_url cannot coexist with video_urls.
+            // The JPEG remains in S3 for the owner, NOT a provider input.
+            assertFalse(body.containsKey("image_url"));
+            assertFalse(body.containsKey("end_image_url"));
+            assertFalse(body.containsKey("image_urls"));
+            assertFalse(body.containsKey("audio_urls"));
+            assertEquals(1,((List<?>)body.get("video_urls")).size());
+            assertFalse(((String)body.get("prompt"))
+                    .contains("Use the reference image as the exact first frame"));
             assertTrue(((String)body.get("prompt")).contains(scene.spokenText()));
             assertFalse(((String)body.get("prompt")).contains("@Element1"));
             assertFalse(body.containsKey("elements"),"Kling elements are not Wan inputs");
