@@ -9,6 +9,9 @@ import ru.hothat.config.ApiException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -127,7 +130,12 @@ public class PrepareYoutubeMemeClipUseCase {
         try {
             workspace = Files.createTempDirectory("hot-hat-yt-");
             Path processLog = workspace.resolve("extractor.log");
-            List<String> command = buildCommand(videoId, requestedStart, workspace);
+            // Optional operator-owned authenticated YouTube session. This is
+            // NOT obtained from players' browsers or Google OAuth. Decode
+            // the sealed Railway variable into a short-lived 0600 file only;
+            // never log the raw cookie data or store it in the clip library.
+            Path cookieFile = materializeAuthCookies(workspace);
+            List<String> command = buildCommand(videoId, requestedStart, workspace, cookieFile);
             ProcessBuilder builder = new ProcessBuilder(command);
             builder.directory(workspace.toFile());
             builder.redirectErrorStream(true);
@@ -207,6 +215,10 @@ public class PrepareYoutubeMemeClipUseCase {
     }
 
     static List<String> buildCommand(String videoId, double start, Path directory) {
+        return buildCommand(videoId, start, directory, null);
+    }
+
+    static List<String> buildCommand(String videoId, double start, Path directory, Path cookieFile) {
         validate(videoId, start);
         double end = start + CLIP_SECONDS;
         List<String> command = new ArrayList<>(List.of(
@@ -232,8 +244,42 @@ public class PrepareYoutubeMemeClipUseCase {
                 "--limit-rate", "2M",
                 "--output", directory.resolve("clip.%(ext)s").toString()
         ));
+        if (cookieFile != null) {
+            // Use yt-dlp's supported authenticated request mechanism, never
+            // pass cookies in URLs, console args or request payloads.
+            command.add("--cookies");
+            command.add(cookieFile.toAbsolutePath().toString());
+        }
         command.add("https://www.youtube.com/watch?v=" + videoId);
         return command;
+    }
+
+    // A session exported from a dedicated, age-verified operator account may
+    // optionally be supplied as a sealed base64 Netscape cookie file. This
+    // never requires users to disclose their Google password to HOT-HAT.
+    // No authenticated session: anonymous request path stays unchanged.
+    private static Path materializeAuthCookies(Path directory) throws IOException {
+        String encoded = System.getenv("HOT_HAT_YOUTUBE_COOKIES_BASE64");
+        if (encoded == null || encoded.isBlank()) return null;
+        if (encoded.length() > 350_000)
+            throw ApiException.of("YOUTUBE_AUTH_CONFIG_INVALID", 503);
+        final byte[] content;
+        try {
+            content = Base64.getDecoder().decode(encoded.trim());
+        } catch (IllegalArgumentException malformed) {
+            throw ApiException.of("YOUTUBE_AUTH_CONFIG_INVALID", 503);
+        }
+        if (content.length < 40 || content.length > 256 * 1024)
+            throw ApiException.of("YOUTUBE_AUTH_CONFIG_INVALID", 503);
+        String text = new String(content, StandardCharsets.UTF_8);
+        if (!(text.startsWith("# Netscape HTTP Cookie File")
+                || text.startsWith("# HTTP Cookie File")) || !text.contains("youtube.com"))
+            throw ApiException.of("YOUTUBE_AUTH_CONFIG_INVALID", 503);
+        Path file = directory.resolve("youtube-session.txt");
+        Files.createFile(file, PosixFilePermissions.asFileAttribute(
+                PosixFilePermissions.fromString("rw-------")));
+        Files.write(file, content);
+        return file;
     }
 
     private static String tail(Path logFile) {
