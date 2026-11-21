@@ -126,6 +126,10 @@ public class PrepareYoutubeMemeClipUseCase {
         if (!PARALLEL.tryAcquire()) throw ApiException.of("YOUTUBE_IMPORT_BUSY", 429);
         Path workspace = null;
         try {
+            // Use the isolated, token-protected MP4 source first when configured.
+            // The local yt-dlp process remains a fallback if its region is temporarily unavailable.
+            byte[] remote = PrivateYoutubeClipSource.fetchFromEnvironment(videoId, requestedStart);
+            if (remote != null) return remote;
             workspace = Files.createTempDirectory("hot-hat-yt-");
             Path processLog = workspace.resolve("extractor.log");
             List<String> command = buildCommand(videoId, requestedStart, workspace);
