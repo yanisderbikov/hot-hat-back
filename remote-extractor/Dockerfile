@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
 RUN node -e 'if(Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' \
     && /opt/yt-dlp/bin/python -c "import importlib.metadata as m; print('yt-dlp-ejs',m.version('yt-dlp-ejs'))"
 COPY remote-extractor/clip_server.py /app/clip_server.py
+COPY remote-extractor/test_age_auth.py /app/test_age_auth.py
+RUN python3 -m unittest -q /app/test_age_auth.py
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENTRYPOINT ["python3","/app/clip_server.py"]

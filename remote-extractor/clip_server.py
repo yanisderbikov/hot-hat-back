@@ -1,4 +1,6 @@
 """Isolated, private Railway clip source. No public video links or account credentials."""
+import base64
+import binascii
 import hmac
 import json
 import os
@@ -19,6 +21,56 @@ CACHE_MAX_BYTES = 24 * 1024 * 1024
 CACHE_TTL_SECONDS = 240
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
+
+
+# Optional age-verified SESSION AUTH for restricted videos, NOT an OAuth login.
+# A secure Railway service variable holds a Netscape cookie jar as base64.
+# Never expose credentials through HTTP, browser JavaScript, logs, or Git.
+AUTH_COOKIES_ENV = "HOT_HAT_YOUTUBE_COOKIES_B64"
+AUTH_COOKIE_MAX_BYTES = 128 * 1024
+
+def _authorized_cookie_file(temp_dir):
+    encoded = os.environ.get(AUTH_COOKIES_ENV, "").strip()
+    if not encoded:
+        return None
+    try:
+        if len(encoded) > AUTH_COOKIE_MAX_BYTES * 2:
+            raise ValueError("too large")
+        raw = base64.b64decode(encoded, validate=True)
+        if not raw or len(raw) > AUTH_COOKIE_MAX_BYTES:
+            raise ValueError("invalid size")
+        source = raw.decode("utf-8")
+        if not (source.startswith("# Netscape HTTP Cookie File") or
+                source.startswith("# HTTP Cookie File")):
+            raise ValueError("invalid Netscape header")
+        filtered = []
+        for line in source.splitlines()[1:]:
+            if not line or line.startswith("#") and not line.startswith("#HttpOnly_"):
+                continue
+            fields = line.split("\t")
+            if len(fields) != 7:
+                continue
+            domain = fields[0].removeprefix("#HttpOnly_").strip().lower().lstrip(".")
+            if domain not in ("youtube.com", "google.com") and not (
+                    domain.endswith(".youtube.com") or domain.endswith(".google.com")):
+                continue
+            filtered.append(line)
+        if not filtered:
+            raise ValueError("no valid YouTube login cookies")
+        dest = Path(temp_dir) / "age-verified-youtube-cookies.txt"
+        dest.write_text("# Netscape HTTP Cookie File\n" + "\n".join(filtered) + "\n",
+                        encoding="utf-8")
+        dest.chmod(0o600)
+        return dest
+    except (UnicodeError, ValueError, binascii.Error):
+        # Never echo even a prefix of an account cookie into service logs.
+        print("CLIP_AGE_AUTH_CONFIGURATION_INVALID", flush=True)
+        return None
+
+def _is_age_gate(log):
+    message = str(log).lower()
+    return ("confirm your age" in message or "age-restricted" in message
+            or "age restricted" in message)
 
 def prepare_uncached(video_id, start_seconds):
     if not ID.fullmatch(str(video_id)):
@@ -48,11 +100,25 @@ def prepare_uncached(video_id, start_seconds):
         ]
         finished = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                   timeout=70, check=False, text=True)
+        # Public extraction remains anonymous and fast. A genuine age gate
+        # retries with the securely provisioned verified YouTube session.
+        # Logging into YouTube in the viewer's browser does NOT log Railway in.
+        if finished.returncode and _is_age_gate(finished.stdout):
+            cookie_file = _authorized_cookie_file(temp)
+            if cookie_file:
+                print("CLIP_AGE_AUTH_RETRY videoId=%s" % video_id, flush=True)
+                authenticated = command[:-1] + ["--cookies", str(cookie_file), command[-1]]
+                finished = subprocess.run(authenticated, stdout=subprocess.PIPE,
+                                          stderr=subprocess.STDOUT, timeout=70,
+                                          check=False, text=True)
+                if finished.returncode == 0:
+                    print("CLIP_AGE_AUTH_SUCCESS videoId=%s" % video_id, flush=True)
+                else:
+                    print("CLIP_AGE_AUTH_REFUSED videoId=%s" % video_id, flush=True)
         if finished.returncode:
             message = finished.stdout[-1300:]
             code = ("YOUTUBE_BOT_CONFIRMATION_REQUIRED" if "not a bot" in message
-                    else "YOUTUBE_AGE_CONFIRMATION_REQUIRED" if ("age" in message.lower() and
-                          ("sign in" in message.lower() or "confirm" in message.lower()))
+                    else "YOUTUBE_AGE_CONFIRMATION_REQUIRED" if _is_age_gate(message)
                     else "YOUTUBE_IMPORT_UNAVAILABLE")
             raise RuntimeError(code + ": " + message[-350:])
         clips = sorted(Path(temp).glob("clip*.mp4"), key=lambda p: p.stat().st_size, reverse=True)
