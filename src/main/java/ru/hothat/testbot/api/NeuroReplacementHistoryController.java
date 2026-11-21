@@ -79,6 +79,24 @@ public class NeuroReplacementHistoryController {
         return pilot.keyboardRapByTestId(owner.uid(),testId);
     }
 
+    /** Read-only GenAPI GET for saved TTS/Chatterbox IDs, no paid POST. */
+    @GetMapping("/studio/keyboard-rap/{jobId}/recovery-quote")
+    public Map<String,Object> keyboardRapRecoveryQuote(
+            @AuthenticationPrincipal HotHatUser owner,@PathVariable String jobId) {
+        return pilot.keyboardRapRecoveryQuote(owner.uid(),jobId);
+    }
+
+    /** Owner-confirmed continuation of EXISTING failed job. No duplicate voice. */
+    @PostMapping("/studio/keyboard-rap/{jobId}/resume-voice-timeout")
+    @ApiResponse(responseCode="202",
+            description="Resume one already-authorized Wan attempt after free verification of saved TTS/Chatterbox IDs")
+    public ResponseEntity<Map<String,Object>> resumeKeyboardRap(
+            @AuthenticationPrincipal HotHatUser owner,@PathVariable String jobId,
+            @RequestParam(name="consented",defaultValue="false") boolean consented) {
+        return ResponseEntity.accepted().body(
+                pilot.resumeKeyboardRapFromVoiceTimeout(owner.uid(),jobId,consented));
+    }
+
     @PostMapping(value="/studio/keyboard-rap",consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
     @ApiResponse(responseCode="202",description="Owner-confirmed idempotent 10s Wan 3.0 keyboard rap, raw camera and mic stored first")
     public ResponseEntity<Map<String,Object>> startKeyboardRap(

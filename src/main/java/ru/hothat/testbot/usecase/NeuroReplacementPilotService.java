@@ -1691,6 +1691,143 @@ public class NeuroReplacementPilotService {
         return snapshot(saved);
     }
 
+
+    /**
+     * SCRUM-61: this is the ONLY allowed recovery of the keyboard/Wan first
+     * paid attempt. The two saved TTS/Chatterbox request IDs are read, NEVER
+     * re-submitted. No Wan submission is made without a second owner click.
+     * Ambiguous HTTP POSTs (submitting_model != NULL) remain blocked.
+     */
+    private static boolean keyboardRapVoiceResumeEligible(Job job,String ownerUid) {
+        return job!=null && ownerUid!=null && ownerUid.equals(job.ownerUid)
+                && "failed".equals(job.state)
+                && KEYBOARD_RAP_ASSIGNMENT.equals(job.sceneAssignment)
+                && GAME_MODE.equals(job.providerRequests.get("character-mode"))
+                && WAN_VIDEO_MODEL_ID.equals(videoModelFor(job))
+                && job.submittingModel==null
+                && job.sourceCameraKey!=null && job.sourceVoiceKey!=null
+                && job.cameraMime!=null && job.voiceMime!=null
+                && job.providerRequests.get("tts")!=null
+                && job.providerRequests.get("chatterbox-speech")!=null
+                && !job.providerRequests.containsKey(WAN_VIDEO_MODEL_ID)
+                && !job.providerRequests.containsKey("lipsync");
+    }
+
+    /** Read-only statuses and resume eligibility; NEVER a billable POST. */
+    public Map<String,Object> keyboardRapRecoveryQuote(String ownerUid,String jobId) {
+        Job job=loadJobById(jobId);
+        if(job==null||!ownerUid.equals(job.ownerUid)||
+                !KEYBOARD_RAP_ASSIGNMENT.equals(job.sceneAssignment))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "NEURO_KEYBOARD_JOB_NOT_FOUND");
+        Map<String,Object> quote=new LinkedHashMap<>();
+        quote.put("jobId",job.id);
+        quote.put("status",job.state);
+        quote.put("videoModel",videoModelFor(job));
+        quote.put("savedTtsId",job.providerRequests.getOrDefault("tts",""));
+        quote.put("savedChatterboxId",job.providerRequests.getOrDefault("chatterbox-speech",""));
+        quote.put("savedWanId",job.providerRequests.getOrDefault(WAN_VIDEO_MODEL_ID,""));
+        quote.put("ambiguousPaidPost",job.submittingModel!=null);
+        quote.put("costOfStatusCheckRoubles",0);
+        boolean eligible=keyboardRapVoiceResumeEligible(job,ownerUid);
+        boolean ready=eligible;
+        Map<String,String> stages=new LinkedHashMap<>();
+        if(eligible) {
+            for(String model:new String[]{"tts","chatterbox-speech"}) {
+                String id=job.providerRequests.get(model);
+                try {
+                    // GET only, with a shorter timeout than the normal
+                    // production poll. Provider latency never causes a new POST.
+                    JsonNode response=send(baseRequest(GENAPI.resolve("request/get/"+id))
+                            .timeout(Duration.ofSeconds(25)).GET().build());
+                    String state=response.path("status").asText("unknown").toLowerCase(java.util.Locale.ROOT);
+                    stages.put(model,state);
+                    if(!"success".equals(state)&&!"completed".equals(state))ready=false;
+                }catch(Exception network) {
+                    ready=false;
+                    stages.put(model,"NETWORK_CHECK_FAILED_"+network.getClass().getSimpleName());
+                }
+            }
+        }
+        quote.put("providerStates",stages);
+        quote.put("canResume",ready);
+        quote.put("nextPaidStage",ready?WAN_VIDEO_MODEL_ID:"");
+        quote.put("note",ready
+                ? "Речь уже оплачена, повторной оплаты TTS/Chatterbox не будет. После явного подтверждения продолжится прежний заказ, впервые запустив Wan 3.0."
+                : "Повторная оплата заблокирована. Бесплатно проверь сохранённые ID и статус сервиса.");
+        return quote;
+    }
+
+    /**
+     * One atomic DB claim before resuming. The original video/voice are
+     * retrieved from S3; old provider IDs remain immutable and reused by GET.
+     */
+    public synchronized Map<String,Object> resumeKeyboardRapFromVoiceTimeout(
+            String ownerUid,String jobId,boolean consented) {
+        if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "NEURO_KEYBOARD_RECOVERY_EXPLICIT_CONSENT_REQUIRED");
+        Job job=loadJobById(jobId);
+        if(job==null||!ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_JOB_NOT_FOUND");
+        if(!keyboardRapVoiceResumeEligible(job,ownerUid))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_KEYBOARD_RECOVERY_NOT_ELIGIBLE_NO_PAID_RETRY");
+        if(!enabled || key==null || key.isBlank() || jdbc==null ||
+                objectStore==null || !objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_KEYBOARD_RECOVERY_PROVIDER_OR_ARCHIVE_NOT_READY");
+        Map<String,Object> quote=keyboardRapRecoveryQuote(ownerUid,jobId);
+        if(!Boolean.TRUE.equals(quote.get("canResume")))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_KEYBOARD_VOICE_NOT_COMPLETE_NO_NEW_PAYMENT");
+        String resumeStage="Восстановление Wan: TTS и Chatterbox уже оплачены, ID сохранены";
+        int claimed=jdbc.update("""
+                UPDATE neuro_replacement_job
+                   SET state='processing',stage=?,error_message=NULL,updated_at=now()
+                 WHERE job_id=? AND owner_uid=? AND room_id=? AND state='failed'
+                   AND scene_assignment=?
+                   AND submitting_model IS NULL
+                   AND provider_requests->>'character-mode'=?
+                   AND provider_requests->>'__diag.videoModel'=?
+                   AND provider_requests->>'tts'=?
+                   AND provider_requests->>'chatterbox-speech'=?
+                   AND NOT jsonb_exists(provider_requests,'wan-3')
+                   AND NOT jsonb_exists(provider_requests,'lipsync')
+                   AND source_camera_key IS NOT NULL
+                   AND source_voice_key IS NOT NULL
+                """,resumeStage,jobId,ownerUid,job.roomId,KEYBOARD_RAP_ASSIGNMENT,
+                GAME_MODE,WAN_VIDEO_MODEL_ID,job.providerRequests.get("tts"),
+                job.providerRequests.get("chatterbox-speech"));
+        if(claimed!=1)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "NEURO_KEYBOARD_RECOVERY_ALREADY_CLAIMED");
+        Job current=loadJobById(jobId);
+        if(current==null)throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                "NEURO_KEYBOARD_RECOVERY_CHECKPOINT_MISSING");
+        byRoom.put(current.roomId,current);
+        executor.execute(()->{
+            try{
+                // This resumes the original job, no new UUID, no new camera.
+                // paidStage() consumes the recorded IDs before any new POST.
+                process(current,objectStore.get(current.sourceCameraKey),current.cameraMime,
+                        objectStore.get(current.sourceVoiceKey),current.voiceMime,
+                        current.startSeconds);
+            }catch(Exception error){
+                if(error instanceof InterruptedException||Thread.currentThread().isInterrupted())return;
+                current.state="failed";
+                current.stage="Восстановление оплаченных этапов остановлено";
+                current.error="NEURO_KEYBOARD_RECOVERY_SOURCE_OR_PROCESS_FAILURE: "+
+                        error.getClass().getSimpleName();
+                checkpoint(current);
+                LOG.warn("Keyboard Wan original job recovery failed job={} cause={}",
+                        jobId,error.getClass().getSimpleName());
+            }
+        });
+        Map<String,Object> response=snapshot(current);
+        response.put("recoveryStarted",true);
+        return response;
+    }
+
     private static final String CHARACTER_TASK = "kling-character";
     private static final String ACTING_TASK = "kling-omni";
 
@@ -2859,6 +2996,8 @@ public class NeuroReplacementPilotService {
             job.state="failed";
             String message=String.valueOf(e.getMessage());
             job.error=message.substring(0,Math.min(message.length(),350));
+            job.providerRequests.put("__diag.lastFailedStage",job.stage);
+            job.providerRequests.put("__diag.lastFailureClass",e.getClass().getSimpleName());
             // A local preflight refusal before paidStage is not a paid task.
             // If any POST could have begun, preserve the non-retry warning.
             boolean providerMayHaveBeenCharged=job.submittingModel!=null ||
@@ -4726,7 +4865,23 @@ public class NeuroReplacementPilotService {
         LOG.info("Neuro provider started job={} model={} request_id={}", job.id, model, id);
         long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(30);
         while (System.nanoTime() < deadline) {
-            JsonNode data = send(baseRequest(GENAPI.resolve("request/get/" + id)).GET().build());
+            JsonNode data;
+            try {
+                // GET is free/idempotent. Transient network timeouts must
+                // NOT mark paid remote requests as failed after only 100 sec.
+                data = send(baseRequest(GENAPI.resolve("request/get/" + id))
+                        .timeout(Duration.ofSeconds(35)).GET().build());
+            } catch(java.net.http.HttpTimeoutException timeout) {
+                LOG.warn("Transient GenAPI GET timeout: job={} model={} existingId={}; polling same ID",
+                        job.id,model,id);
+                Thread.sleep(3500);
+                continue;
+            } catch(java.net.ConnectException refused) {
+                LOG.warn("Transient GenAPI connection issue: job={} model={} same saved ID; retry GET",
+                        job.id,model);
+                Thread.sleep(3500);
+                continue;
+            }
             String status = data.path("status").asText("").toLowerCase();
             if(!status.equals(job.providerRequests.get("__diag.providerState."+model))) {
                 job.providerRequests.put("__diag.providerState."+model,status);

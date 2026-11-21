@@ -8,6 +8,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
+import java.lang.reflect.Method;
+import java.lang.reflect.Field;
+import java.lang.reflect.Constructor;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -76,5 +79,63 @@ class NeuroKeyboardRapDemoTest {
                     ()->pilot.keyboardRapByTestId("owner",UUID));
             assertEquals(HttpStatus.NOT_FOUND,err.getStatusCode());
         }
+    }
+
+    @Test
+    void keyboardVoiceRecoveryRequiresExactlyTheOriginalSavedIdsAndNoAmbiguousPost() throws Exception {
+        Class<?> jobType=Class.forName(
+                "ru.hothat.testbot.usecase.NeuroReplacementPilotService$Job");
+        Constructor<?> ctor=jobType.getDeclaredConstructor(
+                String.class,String.class,String.class);
+        ctor.setAccessible(true);
+        Object job=ctor.newInstance(UUID,"hat-fac7edkeyboard"+UUID.replace("-",""),"owner");
+        ReflectionTestUtils.setField(job,"state","failed");
+        ReflectionTestUtils.setField(job,"sceneAssignment",
+                ReflectionTestUtils.getField(NeuroReplacementPilotService.class,
+                        "KEYBOARD_RAP_ASSIGNMENT"));
+        ReflectionTestUtils.setField(job,"sourceCameraKey","archived-original.webm");
+        ReflectionTestUtils.setField(job,"sourceVoiceKey","archived-voice.webm");
+        ReflectionTestUtils.setField(job,"cameraMime","video/webm");
+        ReflectionTestUtils.setField(job,"voiceMime","audio/webm");
+        Field field=jobType.getDeclaredField("providerRequests");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<String,String> saved=(Map<String,String>)field.get(job);
+        saved.put("character-mode","genapi-game-o3-reference-10");
+        saved.put("__diag.videoModel","wan-3");
+        saved.put("tts","58629153");
+        saved.put("chatterbox-speech","58629167");
+        Method allowed=NeuroReplacementPilotService.class.getDeclaredMethod(
+                "keyboardRapVoiceResumeEligible",jobType,String.class);
+        allowed.setAccessible(true);
+        assertEquals(Boolean.TRUE,allowed.invoke(null,job,"owner"));
+        assertEquals(Boolean.FALSE,allowed.invoke(null,job,"not-owner"));
+        saved.put("wan-3","already-paid-wan-id");
+        assertEquals(Boolean.FALSE,allowed.invoke(null,job,"owner"),
+                "never submit a second Wan when an existing video ID exists");
+        saved.remove("wan-3");
+        ReflectionTestUtils.setField(job,"submittingModel","wan-3");
+        assertEquals(Boolean.FALSE,allowed.invoke(null,job,"owner"),
+                "never retry ambiguous paid POST");
+        ReflectionTestUtils.setField(job,"submittingModel",null);
+        saved.remove("chatterbox-speech");
+        assertEquals(Boolean.FALSE,allowed.invoke(null,job,"owner"),
+                "missing paid voice ID must stop recovery");
+        saved.put("chatterbox-speech","58629167");
+        saved.put("__diag.videoModel","kling-video-o3");
+        assertEquals(Boolean.FALSE,allowed.invoke(null,job,"owner"),
+                "never cross-charge Kling instead of Wan");
+        assertEquals("58629153",saved.get("tts"));
+        assertEquals("58629167",saved.get("chatterbox-speech"));
+    }
+
+    @Test
+    void keyboardVoiceRecoveryNeedsExplicitConsentEvenForAnOldFailedJob(){
+        ResponseStatusException error=assertThrows(ResponseStatusException.class,
+                ()->pilot.resumeKeyboardRapFromVoiceTimeout(
+                        "owner",UUID,false));
+        assertEquals(HttpStatus.BAD_REQUEST,error.getStatusCode());
+        assertEquals("NEURO_KEYBOARD_RECOVERY_EXPLICIT_CONSENT_REQUIRED",
+                error.getReason());
     }
 }
