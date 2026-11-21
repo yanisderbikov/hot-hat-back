@@ -9,13 +9,11 @@ import ru.hothat.config.ApiException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermissions;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -47,11 +45,10 @@ public class PrepareYoutubeMemeClipUseCase {
     private static final long SHARED_TTL_MS = 90_000;
     private static final int MAX_SHARED_CLIPS = 3;
     private final Map<String, SharedClip> shared = new LinkedHashMap<>();
-    // Back off only the VIDEO ID which actually failed. A separate public
-    // video must remain eligible after another video triggers an age/bot gate.
-    // The shared cache, semaphore and fixed 10-second limit still protect
-    // Railway and YouTube from excessive concurrent requests.
+    // A 422 age gate cannot be solved by hammering the same video ten times.
+    // Railway also sees occasional cloud-IP bot challenges from YouTube.
     private final ConcurrentHashMap<String, DeniedClip> denied = new ConcurrentHashMap<>();
+    private final AtomicLong botChallengeUntil = new AtomicLong();
     private record DeniedClip(String code, long until) { }
     static final String AGE_REQUIRED = "YOUTUBE_AGE_CONFIRMATION_REQUIRED";
     static final String BOT_REQUIRED = "YOUTUBE_BOT_CONFIRMATION_REQUIRED";
@@ -87,6 +84,8 @@ public class PrepareYoutubeMemeClipUseCase {
         DeniedClip refusal = denied.get(videoId);
         if (refusal != null && refusal.until() > nowMs)
             throw ApiException.of(refusal.code(), 422);
+        if (botChallengeUntil.get() > nowMs)
+            throw ApiException.of(BOT_REQUIRED, 422);
         String key = videoId + ":" + Math.round(requestedStart * 1000);
         SharedClip clip;
         boolean producer = false;
@@ -130,12 +129,7 @@ public class PrepareYoutubeMemeClipUseCase {
         try {
             workspace = Files.createTempDirectory("hot-hat-yt-");
             Path processLog = workspace.resolve("extractor.log");
-            // Optional operator-owned authenticated YouTube session. This is
-            // NOT obtained from players' browsers or Google OAuth. Decode
-            // the sealed Railway variable into a short-lived 0600 file only;
-            // never log the raw cookie data or store it in the clip library.
-            Path cookieFile = materializeAuthCookies(workspace);
-            List<String> command = buildCommand(videoId, requestedStart, workspace, cookieFile);
+            List<String> command = buildCommand(videoId, requestedStart, workspace);
             ProcessBuilder builder = new ProcessBuilder(command);
             builder.directory(workspace.toFile());
             builder.redirectErrorStream(true);
@@ -165,10 +159,8 @@ public class PrepareYoutubeMemeClipUseCase {
                 if (AGE_REQUIRED.equals(code))
                     denied.put(videoId, new DeniedClip(code, System.currentTimeMillis() + 10 * 60_000L));
                 if (BOT_REQUIRED.equals(code)) {
-                    // Never poison unrelated videos for 30 seconds due to
-                    // one YouTube bot challenge: it disabled otherwise
-                    // public, previously playable memes in the same game.
                     denied.put(videoId, new DeniedClip(code, System.currentTimeMillis() + 60_000L));
+                    botChallengeUntil.set(System.currentTimeMillis() + 30_000L);
                 }
                 throw ApiException.of(code, 422);
             }
@@ -215,10 +207,6 @@ public class PrepareYoutubeMemeClipUseCase {
     }
 
     static List<String> buildCommand(String videoId, double start, Path directory) {
-        return buildCommand(videoId, start, directory, null);
-    }
-
-    static List<String> buildCommand(String videoId, double start, Path directory, Path cookieFile) {
         validate(videoId, start);
         double end = start + CLIP_SECONDS;
         List<String> command = new ArrayList<>(List.of(
@@ -244,42 +232,8 @@ public class PrepareYoutubeMemeClipUseCase {
                 "--limit-rate", "2M",
                 "--output", directory.resolve("clip.%(ext)s").toString()
         ));
-        if (cookieFile != null) {
-            // Use yt-dlp's supported authenticated request mechanism, never
-            // pass cookies in URLs, console args or request payloads.
-            command.add("--cookies");
-            command.add(cookieFile.toAbsolutePath().toString());
-        }
         command.add("https://www.youtube.com/watch?v=" + videoId);
         return command;
-    }
-
-    // A session exported from a dedicated, age-verified operator account may
-    // optionally be supplied as a sealed base64 Netscape cookie file. This
-    // never requires users to disclose their Google password to HOT-HAT.
-    // No authenticated session: anonymous request path stays unchanged.
-    private static Path materializeAuthCookies(Path directory) throws IOException {
-        String encoded = System.getenv("HOT_HAT_YOUTUBE_COOKIES_BASE64");
-        if (encoded == null || encoded.isBlank()) return null;
-        if (encoded.length() > 350_000)
-            throw ApiException.of("YOUTUBE_AUTH_CONFIG_INVALID", 503);
-        final byte[] content;
-        try {
-            content = Base64.getDecoder().decode(encoded.trim());
-        } catch (IllegalArgumentException malformed) {
-            throw ApiException.of("YOUTUBE_AUTH_CONFIG_INVALID", 503);
-        }
-        if (content.length < 40 || content.length > 256 * 1024)
-            throw ApiException.of("YOUTUBE_AUTH_CONFIG_INVALID", 503);
-        String text = new String(content, StandardCharsets.UTF_8);
-        if (!(text.startsWith("# Netscape HTTP Cookie File")
-                || text.startsWith("# HTTP Cookie File")) || !text.contains("youtube.com"))
-            throw ApiException.of("YOUTUBE_AUTH_CONFIG_INVALID", 503);
-        Path file = directory.resolve("youtube-session.txt");
-        Files.createFile(file, PosixFilePermissions.asFileAttribute(
-                PosixFilePermissions.fromString("rw-------")));
-        Files.write(file, content);
-        return file;
     }
 
     private static String tail(Path logFile) {
