@@ -8,3 +8,5 @@ __pycache__
 tests
 README.md
 deploy.sh
+models
+clips
