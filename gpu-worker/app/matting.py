@@ -23,6 +23,21 @@ MAX_SECONDS = 15
 class MattingError(RuntimeError):
     pass
 
+def stream_duration(stream: dict) -> float:
+    """Read per-stream duration from ffprobe's numeric or timestamp formats."""
+    raw = stream.get("duration") or (stream.get("tags") or {}).get("DURATION")
+    if raw is None:
+        return 0.
+    try:
+        parts = str(raw).split(":")
+        secs = float(parts[-1])
+        if len(parts) >= 2: secs += int(parts[-2]) * 60
+        if len(parts) >= 3: secs += int(parts[-3]) * 3600
+        return max(0., secs)
+    except (ValueError, TypeError):
+        return 0.
+
+
 def probe(source: Path):
     if not source.is_file() or not 1200 <= source.stat().st_size <= MAX_SIZE:
         raise MattingError("MP4 source is missing or too large")
@@ -35,14 +50,14 @@ def probe(source: Path):
         if len(videos) != 1: raise MattingError("Expected exactly one video")
         video = videos[0]
         w, h = int(video["width"]), int(video["height"])
-        duration = float(video.get("duration") or data["format"].get("duration") or 0)
+        duration = stream_duration(video) or float(data["format"].get("duration") or 0)
         fps = float(Fraction(video.get("avg_frame_rate", "0/1")))
         if w <= 0 or h <= 0 or w * h > 1920 * 1080:
             raise MattingError("Video dimensions outside limit")
         if not 0 < duration <= MAX_SECONDS or not 5 <= fps <= 120:
             raise MattingError("Video FPS/duration outside limit")
-        audio = any(s["codec_type"] == "audio" for s in data["streams"])
-        return w, h, min(30., fps), audio
+        audio_stream = next((s for s in data["streams"] if s["codec_type"] == "audio"), None)
+        return w, h, min(30., fps), bool(audio_stream), duration, (stream_duration(audio_stream) if audio_stream else 0.)
     except (ValueError, KeyError, ZeroDivisionError, subprocess.SubprocessError) as e:
         raise MattingError("Invalid MP4 metadata") from e
 
@@ -132,7 +147,7 @@ def process(source: Path, output: Path, model_dir: Path):
     source, output = source.resolve(), output.resolve()
     if output == source or output.suffix.lower() != ".webm" or output.exists():
         raise MattingError("Output must be a NEW .webm file")
-    w, h, fps, has_audio = probe(source)
+    w, h, fps, has_audio, source_duration, source_audio_duration = probe(source)
     models = ModelPipeline(model_dir.resolve())  # No inference without models.
     partial = output.with_suffix(".webm.partial")
     if partial.exists(): raise MattingError("Partial output already exists")
@@ -146,7 +161,7 @@ def process(source: Path, output: Path, model_dir: Path):
         encode += ["-map", "1:a:0", "-c:a", "libopus", "-b:a", "128k"]
     encode += ["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0",
                "-crf", "23", "-b:v", "0", "-deadline", "good", "-cpu-used", "3",
-               "-shortest", "-f", "webm", str(partial)]
+               "-t", f"{source_duration:.6f}", "-f", "webm", str(partial)]
     count = 0
     with tempfile.TemporaryFile() as decode_log, tempfile.TemporaryFile() as encode_log:
         reader = subprocess.Popen(decode, stdout=subprocess.PIPE, stderr=decode_log)
@@ -173,11 +188,17 @@ def process(source: Path, output: Path, model_dir: Path):
             video = next((s for s in meta["streams"] if s["codec_type"] == "video"), None)
             if not video or video.get("codec_name") != "vp9" or video.get("tags", {}).get("alpha_mode") != "1":
                 raise MattingError("WebM alpha channel missing")
-            if has_audio and not any(s["codec_type"] == "audio" for s in meta["streams"]):
+            output_audio = next((s for s in meta["streams"] if s["codec_type"] == "audio"), None)
+            if has_audio and not output_audio:
                 raise MattingError("Audio was lost")
+            output_audio_duration = stream_duration(output_audio) if output_audio else 0.
+            expected_audio = min(source_audio_duration, source_duration)
+            if has_audio and expected_audio > 0 and output_audio_duration + .20 < expected_audio:
+                raise MattingError(f"Audio truncated: expected {expected_audio:.3f}s, got {output_audio_duration:.3f}s")
             partial.rename(output)
             return {"frames": count, "width": w, "height": h, "fps": fps,
-                    "has_audio": has_audio, "format": "VP9 WebM alpha"}
+                    "has_audio": has_audio, "source_audio_seconds": source_audio_duration,
+                    "export_audio_seconds": output_audio_duration, "format": "VP9 WebM alpha"}
         finally:
             if writer.stdin and not writer.stdin.closed: writer.stdin.close()
             if reader.poll() is None: reader.kill(); reader.wait()
