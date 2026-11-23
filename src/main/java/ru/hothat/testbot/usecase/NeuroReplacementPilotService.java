@@ -1629,6 +1629,50 @@ public class NeuroReplacementPilotService {
             "После речи ПОЛОЖИТ ТУ ЖЕ клавиатуру СНИЗУ за кадр на невидимый стол; " +
             "предмет полностью виден, не исчезает и не подменяется.";
 
+    // SCRUM-65: independent fresh test. Its finished clip is ALWAYS matted
+    // on the Immers RTX 4090. Neither Lip Sync nor browser WebGPU is used.
+    private static final String KEYBOARD_GPU_ROOM_PREFIX="hat-fac7edkeyboardgpu";
+    private static boolean keyboardGpuMode(Job job) {
+        return job.roomId.startsWith(KEYBOARD_GPU_ROOM_PREFIX)
+                && KEYBOARD_RAP_ASSIGNMENT.equals(job.sceneAssignment);
+    }
+    private static String keyboardGpuRoom(String testId) {
+        if(testId==null || !testId.matches(
+                "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_GPU_KEYBOARD_TEST_ID_INVALID");
+        return KEYBOARD_GPU_ROOM_PREFIX+testId.replace("-","");
+    }
+
+    public Map<String,Object> keyboardGpuConfig() {
+        Map<String,Object> quote=new LinkedHashMap<>(keyboardRapConfig());
+        quote.put("pipeline","wan3-tts-chatterbox-no-lipsync-rtx4090-only");
+        quote.put("lipSyncEnabled",false);
+        quote.put("mattingBackend","Immers RTX 4090");
+        quote.put("priceEstimateRoubles",
+                Math.max(0,((Number)quote.get("priceEstimateRoubles")).intValue()-20));
+        return quote;
+    }
+
+    public Map<String,Object> keyboardGpuByTest(String ownerUid,String testId) {
+        Job saved=existingRoomJob(keyboardGpuRoom(testId));
+        if(saved==null || !ownerUid.equals(saved.ownerUid) || !keyboardGpuMode(saved))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_GPU_KEYBOARD_JOB_NOT_FOUND");
+        return snapshot(saved);
+    }
+
+    public Map<String,Object> startKeyboardGpu(String ownerUid,String testId,
+            boolean consented,MultipartFile video,MultipartFile voice) {
+        if(!consented)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "NEURO_GPU_KEYBOARD_EXPLICIT_PAYMENT_CONSENT_REQUIRED");
+        if(!WAN_VIDEO_MODEL_ID.equals(newVideoModelId()))
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_GPU_KEYBOARD_WAN_NOT_SELECTED_NO_CHARGE");
+        keyboardRapScene();
+        return start(keyboardGpuRoom(testId),ownerUid,true,video,voice,0,
+                KEYBOARD_RAP_ASSIGNMENT,10);
+    }
+
     private static String keyboardRapRoom(String testId) {
         if(testId==null || !testId.matches(
                 "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
@@ -2640,6 +2684,12 @@ public class NeuroReplacementPilotService {
         result.put("effectiveAssignment", job.sceneAssignment);
         result.put("kling422RetryCount", job.kling422Retries);
         result.put("videoModel",videoModelFor(job));
+        result.put("noLipSync",keyboardGpuMode(job));
+        result.put("serverMatte",keyboardGpuMode(job)
+                ? job.providerRequests.getOrDefault("__diag.serverMatte","waiting-for-wan")
+                : "not-applicable");
+        result.put("serverMatteReady",keyboardGpuMode(job)
+                && "ready".equals(job.providerRequests.get("__diag.serverMatte")));
         result.put("originalAvailable",job.sourceCameraKey!=null && !job.sourceCameraKey.isBlank());
         // Both saved camera and separate microphone are needed for the 8s
         // video-character sample. No raw S3 keys are exposed to the client.
@@ -3106,6 +3156,31 @@ public class NeuroReplacementPilotService {
                 preparedVoice=prepareVerifiedNeuroVoice(job,scene,voice,voiceMime);
             String aligned=alignSpeechToActingTimeline(job,
                     preparedVoice.audioUrl(),scene,preparedVoice.tempo());
+            if(keyboardGpuMode(job)) {
+                // The voice is synthesized by the EXISTING GenAPI TTS and
+                // Chatterbox stages. We only mux that voice onto Wan; the actor
+                // mouth animation comes from Wan itself (not a lip-sync claim).
+                String alignedKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
+                        "-lipsync-voice.wav";
+                job.stage="Без Lip Sync: сохраняю оригинальные движения Wan и синтезированный голос";
+                checkpoint(job);
+                byte[] withVoice=muxWanAndVoice(acting,objectStore.get(alignedKey),
+                        scene.durationSeconds());
+                verifyPlayableMp4(withVoice,scene.durationSeconds());
+                String finalKey="neuro-replacements/"+job.ownerUid+"/"+job.id+".mp4";
+                objectStore.put(finalKey,withVoice,"video/mp4");
+                job.finalVideo=videoUrl;
+                job.finalVideoKey=finalKey;
+                // Persist queue state before reporting. If GPU is asleep the
+                // job stays processing: NO local/client fallback and NO extra
+                // GenAPI charge or paid POST.
+                job.providerRequests.put("__diag.serverMatte","pending");
+                job.stage="RTX 4090: удаление фона готового Wan MP4 в очереди";
+                job.state="processing";
+                job.error=null;
+                checkpoint(job);
+                return;
+            }
             // GenAPI must be able to GET and HEAD the full WAV before paid Lip Sync.
             checkGenApiMediaDownload(aligned,"audio/wav");
             job.stage="GenAPI Lip Sync: синхронизирую губы с новой речью";checkpoint(job);
@@ -4445,6 +4520,36 @@ public class NeuroReplacementPilotService {
      * Keep strict validation: a malformed/empty video cannot be passed off as
      * a complete replacement.
      */
+    /** Voice-only audio mux. Zero Lip Sync requests, unchanged Wan video frames. */
+    private byte[] muxWanAndVoice(byte[] acting,byte[] speech,int seconds) throws Exception {
+        Path video=Files.createTempFile("neuro-wan-original-", ".mp4");
+        Path audio=Files.createTempFile("neuro-voice-aligned-", ".wav");
+        Path output=Files.createTempFile("neuro-wan-with-voice-", ".mp4");
+        try {
+            Files.write(video,acting);
+            Files.write(audio,speech);
+            List<String> cmd=List.of("ffmpeg","-hide_banner","-loglevel","error",
+                    "-nostdin","-y","-i",video.toString(),"-i",audio.toString(),
+                    "-map","0:v:0","-map","1:a:0",
+                    "-c:v","copy","-c:a","aac","-b:a","160k","-af","apad",
+                    "-t",String.valueOf(seconds),"-movflags","+faststart",output.toString());
+            Process ff=new ProcessBuilder(cmd).redirectErrorStream(true).start();
+            if(!ff.waitFor(90,TimeUnit.SECONDS)) {
+                ff.destroyForcibly();
+                throw new IOException("NEURO_WAN_VOICE_MUX_TIMEOUT");
+            }
+            if(ff.exitValue()!=0)
+                throw new IOException("NEURO_WAN_VOICE_MUX_FAILED");
+            if(Files.size(output)<1000 || Files.size(output)>MAX_RESULT_BYTES)
+                throw new IOException("NEURO_WAN_VOICE_MUX_SIZE_INVALID");
+            return Files.readAllBytes(output);
+        } finally {
+            Files.deleteIfExists(video);
+            Files.deleteIfExists(audio);
+            Files.deleteIfExists(output);
+        }
+    }
+
     private byte[] recoverPaidLipSyncVideo(Job job, String lipSyncUrl) throws Exception {
         byte[] result = download(lipSyncUrl, MAX_RESULT_BYTES);
         MediaProbe media = probeMp4(result);
