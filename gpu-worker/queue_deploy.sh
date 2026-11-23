@@ -50,7 +50,16 @@ sudo docker ps -a --filter name=hot-hat-gpu-queue
 echo 'Queue diagnostics (no secrets):'
 sudo docker logs --tail 40 hot-hat-gpu-queue 2>&1 || true
 if [ "$ready" != 1 ]; then
-  echo 'GPU queue has not confirmed Railway HTTP 200 yet; inspect status above.' >&2
+  echo 'No confirmed Railway 200. Diagnosing outbound network without machine token...' >&2
+  sudo docker exec hot-hat-gpu-queue python -m app.diagnose_relay 2>&1 || true
+  if command -v curl >/dev/null 2>&1; then
+    echo 'Checking Railway public /health from the VM host (IPv4, no bearer secret):'
+    curl -4 --silent --show-error --connect-timeout 5 --max-time 14 \
+      --output /dev/null \
+      --write-out 'host_curl: HTTP %{http_code} remote_ip=%{remote_ip} tcp=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\\n' \
+      'https://hot-hat-back.up.railway.app/api/v2/app/health' || true
+  fi
+  echo 'GPU queue has not confirmed Railway HTTP 200; no GenAPI payment has been made.' >&2
   exit 1
 fi
 echo 'GPU queue is HEALTHY: authorized Railway queue poll confirmed; no paid request made.'
