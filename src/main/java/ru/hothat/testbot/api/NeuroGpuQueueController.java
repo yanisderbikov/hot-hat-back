@@ -1,6 +1,7 @@
 package ru.hothat.testbot.api;
 
 import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
 import java.security.MessageDigest;
 import java.util.Map;
 
@@ -32,19 +33,29 @@ import ru.hothat.testbot.usecase.NeuroReplacementPilotService;
 public class NeuroGpuQueueController {
     private final NeuroReplacementPilotService service;
 
-    // Must match the private Immers gpu-worker/.env secret. Missing token disables API.
-    @Value("${HOT_HAT_GPU_TOKEN:}")
-    private String gpuToken;
+    // Store ONLY the SHA-256 of the private Immers token on Railway.
+    // An absent digest disables machine routes.
+    @Value("${HOT_HAT_GPU_TOKEN_SHA256:}")
+    private String gpuTokenHash;
 
     private void authenticate(String provided) {
-        if(gpuToken==null || gpuToken.length()<32)
+        if(gpuTokenHash==null || !gpuTokenHash.matches("[a-f0-9]{64}"))
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "NEURO_GPU_MACHINE_AUTH_UNCONFIGURED");
-        if(provided==null || !MessageDigest.isEqual(
-                gpuToken.getBytes(StandardCharsets.UTF_8),
-                provided.getBytes(StandardCharsets.UTF_8)))
+        if(provided==null || provided.length()<32 || provided.length()>256)
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                     "NEURO_GPU_MACHINE_UNAUTHORIZED");
+        try {
+            byte[] digest=MessageDigest.getInstance("SHA-256")
+                    .digest(provided.getBytes(StandardCharsets.UTF_8));
+            byte[] expected=HexFormat.of().parseHex(gpuTokenHash);
+            if(!MessageDigest.isEqual(expected,digest))
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                        "NEURO_GPU_MACHINE_UNAUTHORIZED");
+        }catch(java.security.NoSuchAlgorithmException missing){
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_GPU_DIGEST_UNAVAILABLE");
+        }
     }
 
     @GetMapping("/next")
