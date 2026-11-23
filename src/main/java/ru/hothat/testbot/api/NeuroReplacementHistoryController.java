@@ -68,6 +68,37 @@ public class NeuroReplacementHistoryController {
      * SCRUM-60: separate 10s Wan keyboard-rap studio above the legacy upload.
      * Never submits a paid model on configuration/status/restore GET requests.
      */
+    /**
+     * SCRUM-65: fully independent one-button owner test with a fresh webcam,
+     * exact keyboard-rap brief, no Lip Sync, and mandatory server RTX 4090 matte.
+     * Older paid keyboard-rap routes remain unchanged for recovery/history.
+     */
+    @GetMapping("/studio/keyboard-rap/server/config")
+    public Map<String,Object> keyboardRapServerConfig(
+            @AuthenticationPrincipal HotHatUser owner) {
+        return pilot.keyboardGpuConfig();
+    }
+
+    @GetMapping("/studio/keyboard-rap/server/by-test/{testId}")
+    public Map<String,Object> keyboardRapServerByTest(
+            @AuthenticationPrincipal HotHatUser owner,@PathVariable String testId) {
+        return pilot.keyboardGpuByTest(owner.uid(),testId);
+    }
+
+    @PostMapping(value="/studio/keyboard-rap/server",
+                 consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ApiResponse(responseCode="202",
+            description="Owner-confirmed new Wan 3 + TTS + Chatterbox; NO Lip Sync; final matte ONLY on Immers RTX 4090")
+    public ResponseEntity<Map<String,Object>> startKeyboardRapServer(
+            @AuthenticationPrincipal HotHatUser owner,
+            @RequestParam("testId") String testId,
+            @RequestParam(name="consented",defaultValue="false") boolean consented,
+            @RequestPart("video") MultipartFile video,
+            @RequestPart("voice") MultipartFile voice) {
+        return ResponseEntity.accepted().body(
+                pilot.startKeyboardGpu(owner.uid(),testId,consented,video,voice));
+    }
+
     @GetMapping("/studio/keyboard-rap/config")
     public Map<String,Object> keyboardRapConfig(@AuthenticationPrincipal HotHatUser owner) {
         return pilot.keyboardRapConfig();
