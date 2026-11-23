@@ -24,6 +24,6 @@ jobs:
         env:
           PYTHONPATH: .
         run: |
-          python -m py_compile app/matting.py app/download_models.py app/main.py app/inspect_alpha.py
-          bash -n smoke_person_video.sh
+          python -m py_compile app/matting.py app/download_models.py app/main.py app/inspect_alpha.py app/queue_worker.py app/queue_healthcheck.py app/diagnose_relay.py
+          bash -n smoke_person_video.sh queue_deploy.sh
           python -m pytest -q tests/test_matting_pipeline.py tests/test_video_mux.py tests/test_audio_integrity.py
