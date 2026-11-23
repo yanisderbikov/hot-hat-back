@@ -135,6 +135,10 @@ public class WebSecurityConfig {
                         // /api/v2/admin/users отвечал бы ему 403 до того, как дело
                         // дойдёт до hasRole('OWNER') на сценарии. Матчер здесь —
                         // второй рубеж: точное право объявлено на каждом use-case.
+                        // Machine API is guarded by a constant-time shared-secret check.
+                        .requestMatchers("/api/v2/gpu/neuro/next",
+                                "/api/v2/gpu/neuro/jobs/*/input",
+                                "/api/v2/gpu/neuro/jobs/*/result").permitAll()
                         .requestMatchers("/api/v2/admin/**").hasAnyRole("ADMIN", "OWNER")
                         // Новая поверхность решает права на сценарии: у каждого
                         // use-case свой @PreAuthorize, и ровно десять из них
