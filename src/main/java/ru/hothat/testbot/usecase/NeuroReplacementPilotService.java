@@ -1673,6 +1673,138 @@ public class NeuroReplacementPilotService {
                 KEYBOARD_RAP_ASSIGNMENT,10);
     }
 
+
+    /** Server-only queue: claim one durable job atomically across Railway replicas.
+     * A crashed worker's claim expires after ten minutes; no paid POST is repeated.
+     */
+    public Map<String,Object> claimServerMatte() {
+        if(jdbc==null || objectStore==null || !objectStore.configured())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_GPU_ARCHIVE_UNAVAILABLE");
+        List<String> claimed=jdbc.query("""
+                WITH candidate AS (
+                  SELECT job_id FROM neuro_replacement_job
+                   WHERE room_id LIKE 'hat-fac7edkeyboardgpu%'
+                     AND state='processing' AND final_video_key IS NOT NULL
+                     AND (provider_requests->>'__diag.serverMatte'='pending'
+                         OR (provider_requests->>'__diag.serverMatte'='claimed'
+                             AND updated_at<now()-interval '10 minutes'))
+                   ORDER BY updated_at ASC
+                   FOR UPDATE SKIP LOCKED LIMIT 1
+                )
+                UPDATE neuro_replacement_job AS j
+                   SET provider_requests=jsonb_set(j.provider_requests,
+                         '{__diag.serverMatte}','"claimed"'::jsonb,true),
+                       stage='RTX 4090: серверный маттинг выполняется',
+                       updated_at=now()
+                  FROM candidate c
+                 WHERE j.job_id=c.job_id
+                RETURNING j.job_id
+                """,(rs,row)->rs.getString(1));
+        if(claimed.isEmpty())return Map.of("available",false);
+        return Map.of("available",true,"jobId",claimed.get(0));
+    }
+
+    private Job requireServerGpuJob(String id) {
+        if(id==null || !id.matches("[0-9a-fA-F-]{36}"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_GPU_JOB_ID_INVALID");
+        Job job=loadJobById(id);
+        if(job==null || !keyboardGpuMode(job) || job.finalVideoKey==null)
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "NEURO_GPU_JOB_NOT_AVAILABLE");
+        return job;
+    }
+
+    public byte[] serverMatteSource(String id) {
+        Job job=requireServerGpuJob(id);
+        String state=job.providerRequests.getOrDefault("__diag.serverMatte","");
+        if(!"claimed".equals(state) && !"ready".equals(state))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_GPU_NOT_CLAIMED");
+        return objectStore.get(job.finalVideoKey);
+    }
+
+    /** GPU-produced WebM is stored as a separate object, not overwriting Wan. */
+    public Map<String,Object> acceptServerMatte(String id,MultipartFile upload) {
+        Job job=requireServerGpuJob(id);
+        if(upload==null || upload.isEmpty() || upload.getSize()>MAX_RESULT_BYTES)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_GPU_ALPHA_SIZE_INVALID");
+        if("ready".equals(job.providerRequests.get("__diag.serverMatte")))
+            return Map.of("jobId",job.id,"status","ready","duplicate",true);
+        if(!"claimed".equals(job.providerRequests.get("__diag.serverMatte")))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_GPU_ALPHA_NOT_CLAIMED");
+        try {
+            byte[] bytes=upload.getBytes();
+            verifyServerMatteWebm(bytes,plannedSceneForJob(job).durationSeconds());
+            String alphaKey="neuro-replacements/"+job.ownerUid+"/"+job.id+"-gpu-alpha.webm";
+            objectStore.put(alphaKey,bytes,"video/webm");
+            int changed=jdbc.update("""
+                UPDATE neuro_replacement_job
+                   SET state='ready',stage='Готово: Wan + голос + серверная RTX 4090 без Lip Sync',
+                       error_message=NULL,
+                       provider_requests=jsonb_set(provider_requests,
+                           '{__diag.serverMatte}','"ready"'::jsonb,true),
+                       updated_at=now()
+                 WHERE job_id=? AND room_id LIKE 'hat-fac7edkeyboardgpu%'
+                   AND state='processing'
+                   AND provider_requests->>'__diag.serverMatte'='claimed'
+                """,job.id);
+            if(changed!=1)
+                throw new IOException("NEURO_GPU_ALPHA_PERSIST_RACE");
+            return Map.of("jobId",job.id,"status","ready","bytes",bytes.length);
+        }catch(ResponseStatusException e){throw e;}
+        catch(Exception e){
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "NEURO_GPU_ALPHA_INVALID_OR_STORAGE_FAILED",e);
+        }
+    }
+
+    /** Refuse alpha-only metadata spoof: check codec, audio, video duration and
+     * decoded alpha bytes on the GPU itself before uploading this result.
+     */
+    private void verifyServerMatteWebm(byte[] bytes,int expectedSeconds) throws Exception {
+        Path path=Files.createTempFile("neuro-gpu-verify-", ".webm");
+        try {
+            Files.write(path,bytes);
+            Process probe=new ProcessBuilder("ffprobe","-v","error","-show_streams",
+                    "-show_format","-of","json",path.toString())
+                    .redirectErrorStream(true).start();
+            if(!probe.waitFor(25,TimeUnit.SECONDS) || probe.exitValue()!=0) {
+                probe.destroyForcibly();
+                throw new IOException("NEURO_GPU_WEBM_PROBE_FAILED");
+            }
+            JsonNode info=json.readTree(probe.getInputStream().readAllBytes());
+            boolean alpha=false,audio=false;
+            for(JsonNode stream:info.path("streams")) {
+                if("video".equals(stream.path("codec_type").asText()))
+                    alpha="vp9".equals(stream.path("codec_name").asText()) &&
+                            "1".equals(stream.path("tags").path("alpha_mode").asText());
+                if("audio".equals(stream.path("codec_type").asText()))
+                    audio="opus".equals(stream.path("codec_name").asText());
+            }
+            double seconds=info.path("format").path("duration").asDouble(0);
+            if(!alpha || !audio || seconds<expectedSeconds-.7 || seconds>expectedSeconds+.7)
+                throw new IOException("NEURO_GPU_WEBM_ALPHA_AUDIO_DURATION_INVALID");
+        }finally{Files.deleteIfExists(path);}
+    }
+
+    public byte[] ownerServerMatteVideo(String ownerUid,String id) {
+        Job job=requireServerGpuJob(id);
+        if(!ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_GPU_JOB_NOT_FOUND");
+        if(!"ready".equals(job.providerRequests.get("__diag.serverMatte")))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_GPU_ALPHA_NOT_READY");
+        return objectStore.get("neuro-replacements/"+job.ownerUid+"/"+job.id+"-gpu-alpha.webm");
+    }
+
+    public byte[] ownerServerWanVideo(String ownerUid,String id) {
+        Job job=requireServerGpuJob(id);
+        if(!ownerUid.equals(job.ownerUid))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"NEURO_GPU_JOB_NOT_FOUND");
+        return objectStore.get(job.finalVideoKey);
+    }
+
     private static String keyboardRapRoom(String testId) {
         if(testId==null || !testId.matches(
                 "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
