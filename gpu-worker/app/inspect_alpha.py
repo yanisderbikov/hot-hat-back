@@ -11,6 +11,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from app.matting import stream_duration
 
 
 def inspect(video: Path, preview: Path) -> dict:
@@ -40,6 +41,8 @@ def inspect(video: Path, preview: Path) -> dict:
         "transparent_pct": round(float(np.mean(alpha < 25) * 100), 2),
         "opaque_pct": round(float(np.mean(alpha > 230) * 100), 2),
         "audio_present": True, "vp9_alpha_metadata": True,
+        "video_seconds": stream_duration(v),
+        "audio_seconds": stream_duration(next(s for s in streams if s["codec_type"] == "audio")),
     }
     if stats["transparent_pct"] < .5 or stats["opaque_pct"] < .5:
         raise ValueError(f"Mask appears blank or all opaque/transparent: {stats}")
