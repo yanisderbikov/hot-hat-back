@@ -1668,8 +1668,17 @@ public class NeuroReplacementPilotService {
         // Never authorize paid video/voice when the required server-only GPU
         // isn't seen recently. A local browser fallback is forbidden.
         quote.put("providerReady",Boolean.TRUE.equals(quote.get("providerReady")) && online);
-        quote.put("priceEstimateRoubles",
-                Math.max(0,((Number)quote.get("priceEstimateRoubles")).intValue()-20));
+        // Official GenAPI Wan 3.0: 720p 25 RUB per generated second.
+        // 10s Wan=250 RUB. Gemini Flash TTS (4.25/1000 chars) and
+        // Chatterbox speech (3 RUB/min) have separate small usage charges.
+        int videoRoubles=keyboardRapScene().durationSeconds()*25;
+        quote.put("priceWanRoubles",videoRoubles);
+        quote.put("priceEstimateRoubles",videoRoubles);
+        quote.put("priceVoiceEstimateRoubles",1);
+        quote.put("priceTotalEstimateRoubles",videoRoubles+1);
+        quote.put("sourceRecordingSeconds",10);
+        quote.put("wanReferenceSeconds",9.75);
+        quote.put("priceExplanation","Wan 3.0 720p: 25 RUB/second; Gemini Flash TTS and Chatterbox billed separately");
         return quote;
     }
 
@@ -1688,6 +1697,24 @@ public class NeuroReplacementPilotService {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "NEURO_GPU_KEYBOARD_WAN_NOT_SELECTED_NO_CHARGE");
         keyboardRapScene();
+        // The new route accepts exactly one fresh ~10-second camera/voice
+        // recording, not the legacy 23/25-second video sample.
+        if(video==null||voice==null||video.isEmpty()||voice.isEmpty())
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_GPU_TEN_SECOND_REFERENCE_REQUIRED_NO_CHARGE");
+        try {
+            MediaProbe source=probeMp4(video.getBytes());
+            MediaProbe mic=probeMp4(voice.getBytes());
+            if(!source.video||!source.audio||!mic.audio||
+                    (source.seconds>0 && (source.seconds<9.2 || source.seconds>12.0))||
+                    (mic.seconds>0 && (mic.seconds<9.2 || mic.seconds>12.0)))
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "NEURO_GPU_REFERENCE_MUST_BE_ABOUT_10_SECONDS_NO_CHARGE");
+        }catch(ResponseStatusException bad){throw bad;}
+        catch(Exception invalid){
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "NEURO_GPU_CAMERA_OR_MIC_INVALID_NO_CHARGE");
+        }
         if(!gpuWorkerRecentlySeen())
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "NEURO_GPU_WORKER_OFFLINE_NO_CHARGE");
@@ -2925,7 +2952,7 @@ public class NeuroReplacementPilotService {
         String keyPath="neuro-replacements/"+ownerUid+"/"+jobId+"-kling-reference.mp4";
         try {
             byte[] bytes=objectStore.get(keyPath);
-            verifyKlingElementReference(bytes);
+            verifyKlingElementReference(bytes,keyboardGpuMode(job));
             return bytes;
         } catch(Exception exception) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,"NEURO_REFERENCE_CLIP_NOT_YET_READY");
@@ -3231,7 +3258,8 @@ public class NeuroReplacementPilotService {
             // Before spending ~448 RUB on 8s Kling, first generate/verify
             // small-cost speech, including its actual duration and tempo.
             // If TTS/voice is 42s as in c1aec325, reject without Kling POST.
-            NeuroVoiceReady preparedVoice=simpleUpload
+            // Validate server-only Wan video reference BEFORE any billable TTS.
+            NeuroVoiceReady preparedVoice=simpleUpload && !keyboardGpuMode(job)
                     ? prepareVerifiedNeuroVoice(job,scene,voice,voiceMime)
                     : null;
             String referenceKey="neuro-replacements/"+job.ownerUid+"/"+job.id+
@@ -3239,8 +3267,11 @@ public class NeuroReplacementPilotService {
             if(!job.providerRequests.containsKey(videoModel)){
                 job.stage="Готовлю видеореференс внешности для GenAPI O3";
                 checkpoint(job);
-                byte[] sample=prepareVideoCharacterPreviewBytes(camera,cameraMime,
-                        voice,voiceMime,job.startSeconds);
+                byte[] sample=keyboardGpuMode(job)
+                        ? prepareVideoCharacterPreviewBytes(camera,cameraMime,
+                                  voice,voiceMime,job.startSeconds,9.75)
+                        : prepareVideoCharacterPreviewBytes(camera,cameraMime,
+                                  voice,voiceMime,job.startSeconds);
                 objectStore.put(referenceKey,sample,"video/mp4");
             }
             // GenAPI validates start_image_url as REQUIRED whenever
@@ -3266,7 +3297,9 @@ public class NeuroReplacementPilotService {
             // Validate the actual transcoded element sample, not merely the
             // player's original WebM. Kling O3 video-character references
             // require a compatible 3-8s MP4 with stable 24fps/1080p.
-            verifyKlingElementReference(objectStore.get(referenceKey));
+            verifyKlingElementReference(objectStore.get(referenceKey),keyboardGpuMode(job));
+            if(preparedVoice==null && keyboardGpuMode(job))
+                preparedVoice=prepareVerifiedNeuroVoice(job,scene,voice,voiceMime);
             String cleanVideo=cleanGenApiInputUrl(job,referenceKey,"mp4");
             String cleanImage=cleanGenApiInputUrl(job,stillKey,"jpg");
             checkGenApiMediaDownload(cleanVideo,"video/mp4");
@@ -3505,8 +3538,9 @@ public class NeuroReplacementPilotService {
                          "Keep the room framing and lighting from the identity video. ")
                 + " Reference is IDENTITY only; perform entirely NEW movements." +
                 " The identity video itself is the sole visual reference; " +
-                "do NOT replay the video unchanged. Final speech and lip " +
-                "synchronization will be provided separately.";
+                "do NOT replay the video unchanged. Animate plausible mouth " +
+                "opening and closing during the Russian spoken line. The actual " +
+                "synthesized voice will be overlaid later without Lip Sync.";
         if(prompt.length()>MAX_GENAPI_VISUAL_PROMPT_CHARS+300)
             throw new IllegalArgumentException("NEURO_WAN_PROMPT_TOO_LONG_NO_CHARGE");
         return Map.of(
@@ -3938,6 +3972,15 @@ public class NeuroReplacementPilotService {
     private byte[] prepareVideoCharacterPreviewBytes(byte[] videoBytes,String videoMime,
                                                       byte[] voiceBytes,String voiceMime,
                                                       double startSeconds) {
+        return prepareVideoCharacterPreviewBytes(
+                videoBytes,videoMime,voiceBytes,voiceMime,startSeconds,7.5);
+    }
+
+    private byte[] prepareVideoCharacterPreviewBytes(byte[] videoBytes,String videoMime,
+                                                      byte[] voiceBytes,String voiceMime,
+                                                      double startSeconds,double clipSeconds) {
+        if(clipSeconds!=7.5 && clipSeconds!=9.75)
+            throw new IllegalArgumentException("NEURO_REFERENCE_DURATION_INVALID");
         if(videoBytes==null || voiceBytes==null || videoBytes.length==0 ||
                 voiceBytes.length==0 || videoBytes.length>MAX_VIDEO_BYTES ||
                 voiceBytes.length>MAX_VOICE_BYTES ||
@@ -3971,7 +4014,7 @@ public class NeuroReplacementPilotService {
                     "-ss",String.valueOf(startSeconds),"-i",microphone.toString(),
                     // Kling O3 video element maximum is 8 seconds. AAC caused -t 8
                     // to yield 8.005s in the owner sample, violating the limit.
-                    "-t","7.5","-map","0:v:0","-map","1:a:0",
+                    "-t",String.valueOf(clipSeconds),"-map","0:v:0","-map","1:a:0",
                     "-vf","scale=1920:1080:force_original_aspect_ratio=decrease:flags=bilinear,"+
                             "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24,setsar=1",
                     "-c:v","libx264","-preset","ultrafast","-tune","zerolatency",
@@ -3986,9 +4029,12 @@ public class NeuroReplacementPilotService {
                 throw new IOException("NEURO_CHARACTER_PREVIEW_TRANSCODE_INVALID");
             byte[] sample=Files.readAllBytes(output);
             MediaProbe info=probeMp4(sample);
-            if(!info.video || !info.audio || !validKlingElementDuration(info.seconds) ||
+            boolean acceptable=clipSeconds==9.75
+                    ? validWanGpuReferenceDuration(info.seconds)
+                    : validKlingElementDuration(info.seconds);
+            if(!info.video || !info.audio || !acceptable ||
                     sample.length>22*1024*1024 || sample.length<25_000)
-                throw new IOException("NEURO_CHARACTER_PREVIEW_REQUIRES_7_5_SECONDS_WITH_AUDIO");
+                throw new IOException("NEURO_CHARACTER_PREVIEW_DURATION_OR_AUDIO_INVALID");
             return sample;
         }catch(InterruptedException error){
             Thread.currentThread().interrupt();
@@ -4015,8 +4061,16 @@ public class NeuroReplacementPilotService {
     private static boolean validKlingElementDuration(double seconds) {
         return Double.isFinite(seconds)&&seconds>=7.25&&seconds<8.0;
     }
+    private static boolean validWanGpuReferenceDuration(double seconds) {
+        // Approx. ten seconds, under Wan's 15-second identity limit.
+        return Double.isFinite(seconds)&&seconds>=9.5&&seconds<=10.1;
+    }
 
     private void verifyKlingElementReference(byte[] mp4) throws Exception {
+        verifyKlingElementReference(mp4,false);
+    }
+
+    private void verifyKlingElementReference(byte[] mp4,boolean wanGpu) throws Exception {
         if(mp4==null||mp4.length<25_000||mp4.length>22*1024*1024)
             throw new IOException("NEURO_KLING_ELEMENT_SAMPLE_SIZE_INVALID_NO_CHARGE");
         Path file=Files.createTempFile("neuro-o3-element-audit-", ".mp4");
@@ -4034,8 +4088,9 @@ public class NeuroReplacementPilotService {
                 throw new IOException("NEURO_KLING_ELEMENT_FFPROBE_FAILED_NO_CHARGE");
             JsonNode data=json.readTree(probe.getInputStream());
             double seconds=data.path("format").path("duration").asDouble(0);
-            if(!validKlingElementDuration(seconds))
-                throw new IOException("NEURO_KLING_ELEMENT_DURATION_INVALID_NO_CHARGE");
+            if(!(wanGpu ? validWanGpuReferenceDuration(seconds)
+                    : validKlingElementDuration(seconds)))
+                throw new IOException("NEURO_REFERENCE_DURATION_INVALID_NO_CHARGE");
             boolean video=false,audio=false;
             for(JsonNode stream:data.path("streams")){
                 String type=stream.path("codec_type").asText("");
