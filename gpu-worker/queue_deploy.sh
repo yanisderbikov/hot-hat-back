@@ -16,6 +16,9 @@ done
 sudo docker rm -f hot-hat-gpu-queue >/dev/null 2>&1 || true
 sudo docker run -d --name hot-hat-gpu-queue --restart unless-stopped \
   --gpus all --env-file "$PWD/.env" \
+  --health-cmd "python -m app.queue_healthcheck" \
+  --health-interval 20s --health-timeout 5s --health-start-period 60s \
+  --health-retries 3 \
   -v "$PWD/models:/models:ro" -v "$PWD/clips:/clips" \
   --entrypoint python hot-hat/gpu-worker:scrum-65 -m app.queue_worker
 echo 'Outbound GPU queue container started; no public port exposed.'
@@ -29,4 +32,5 @@ if len(tokens) != 1 or len(tokens[0]) < 32:
     raise SystemExit("Invalid private token in .env")
 print("HOT_HAT_GPU_TOKEN_SHA256=" + hashlib.sha256(tokens[0].encode()).hexdigest())
 PY
-echo 'Diagnostics: sudo docker logs --tail 30 hot-hat-gpu-queue'
+echo 'Docker health requires a successful authorized Railway /next response within 75 seconds.'
+echo 'Diagnostics: sudo docker logs --tail 40 hot-hat-gpu-queue'

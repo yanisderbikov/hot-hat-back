@@ -19,6 +19,7 @@ BASE=os.getenv("HOT_HAT_GPU_SERVER_BASE_URL","https://hot-hat-back.up.railway.ap
 TOKEN=os.getenv("HOT_HAT_GPU_TOKEN","")
 PATH=BASE+"/api/v2/gpu/neuro"
 STOP=False
+HEALTH_FILE=Path("/tmp/hot-hat-gpu-queue.last-ok")
 
 def stop(*_):
     global STOP
@@ -73,11 +74,22 @@ def handle(s,job):
 def main():
     s=make_client()
     print("Immers GPU queue running: outbound HTTPS, server-only neuro matting",flush=True)
+    HEALTH_FILE.unlink(missing_ok=True)
+    connected_once=False
     while not STOP:
         try:
             response=s.get(PATH+"/next",timeout=(15,35))
             response.raise_for_status()
             payload=response.json()
+            if not isinstance(payload,dict) or not isinstance(payload.get("available"),bool):
+                raise ValueError("GPU_QUEUE_BAD_RAILWAY_RESPONSE")
+            # The queue has no HTTP /health endpoint. Record a real successful
+            # machine-authenticated poll for Docker readiness monitoring.
+            HEALTH_FILE.touch()
+            if not connected_once:
+                print("GPU queue CONNECTED to Railway: HTTP 200 /next, authentication OK",
+                      flush=True)
+                connected_once=True
             if payload.get("available"):
                 handle(s,str(payload["jobId"]))
                 continue
