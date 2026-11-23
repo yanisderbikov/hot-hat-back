@@ -1644,11 +1644,30 @@ public class NeuroReplacementPilotService {
         return KEYBOARD_GPU_ROOM_PREFIX+testId.replace("-","");
     }
 
+    private boolean gpuWorkerRecentlySeen() {
+        if(jdbc==null)return false;
+        try {
+            Boolean online=jdbc.queryForObject("""
+                SELECT EXISTS(
+                  SELECT 1 FROM neuro_gpu_worker_heartbeat
+                  WHERE name='hot-hat-gpu-01'
+                    AND updated_at>now()-interval '90 seconds'
+                )
+                """,Boolean.class);
+            return Boolean.TRUE.equals(online);
+        }catch(Exception unavailable){return false;}
+    }
+
     public Map<String,Object> keyboardGpuConfig() {
         Map<String,Object> quote=new LinkedHashMap<>(keyboardRapConfig());
         quote.put("pipeline","wan3-tts-chatterbox-no-lipsync-rtx4090-only");
         quote.put("lipSyncEnabled",false);
         quote.put("mattingBackend","Immers RTX 4090");
+        boolean online=gpuWorkerRecentlySeen();
+        quote.put("gpuOnline",online);
+        // Never authorize paid video/voice when the required server-only GPU
+        // isn't seen recently. A local browser fallback is forbidden.
+        quote.put("providerReady",Boolean.TRUE.equals(quote.get("providerReady")) && online);
         quote.put("priceEstimateRoubles",
                 Math.max(0,((Number)quote.get("priceEstimateRoubles")).intValue()-20));
         return quote;
@@ -1669,6 +1688,9 @@ public class NeuroReplacementPilotService {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "NEURO_GPU_KEYBOARD_WAN_NOT_SELECTED_NO_CHARGE");
         keyboardRapScene();
+        if(!gpuWorkerRecentlySeen())
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "NEURO_GPU_WORKER_OFFLINE_NO_CHARGE");
         return start(keyboardGpuRoom(testId),ownerUid,true,video,voice,0,
                 KEYBOARD_RAP_ASSIGNMENT,10);
     }
@@ -1678,6 +1700,13 @@ public class NeuroReplacementPilotService {
      * A crashed worker's claim expires after ten minutes; no paid POST is repeated.
      */
     public Map<String,Object> claimServerMatte() {
+        if(jdbc!=null) {
+            jdbc.update("""
+                INSERT INTO neuro_gpu_worker_heartbeat (name,updated_at)
+                VALUES ('hot-hat-gpu-01',now())
+                ON CONFLICT(name) DO UPDATE SET updated_at=now()
+                """);
+        }
         if(jdbc==null || objectStore==null || !objectStore.configured())
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "NEURO_GPU_ARCHIVE_UNAVAILABLE");
