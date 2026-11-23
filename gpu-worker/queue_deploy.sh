@@ -13,9 +13,46 @@ for model in longpipe-xl-matting.onnx longpipe-xl-flow.onnx birefnet-lite-fp16.o
     exit 2
   fi
 done
+# Probe the exact backend health endpoint before replacing the existing queue.
+# A Railway app edge can be unreachable for TLS from Immers even when other
+# HTTPS destinations work. Find a reachable Railway edge dynamically, while
+# preserving the original hostname, SNI and TLS certificate verification.
+RAILWAY_HOST='hot-hat-back.up.railway.app'
+RAILWAY_HEALTH="https://${RAILWAY_HOST}/api/v2/app/health"
+command -v curl >/dev/null || { echo 'curl is required for safe Railway route preflight' >&2; exit 1; }
+route_args=()
+if curl --noproxy '*' -4 -fsS --connect-timeout 4 --max-time 8 \
+    --output /dev/null "$RAILWAY_HEALTH" 2>/dev/null; then
+  echo 'Railway default HTTPS route is healthy; no override needed.'
+else
+  echo 'Railway default HTTPS route failed; probing TLS-verified Railway edge alternatives...'
+  command -v getent >/dev/null || { echo 'getent is required for Railway edge discovery' >&2; exit 1; }
+  mapfile -t edge_ips < <(getent ahostsv4 railway.com | awk '$2 == "STREAM" {print $1}' | sort -u)
+  chosen_edge=''
+  for edge_ip in "${edge_ips[@]}"; do
+    # IPv4 input comes from DNS; reject non-IPv4 strings before constructing --add-host.
+    if [[ ! "$edge_ip" =~ ^[0-9]{1,3}(\\.[0-9]{1,3}){3}$ ]]; then
+      continue
+    fi
+    if curl --noproxy '*' -4 -fsS --connect-timeout 4 --max-time 8 \
+        --resolve "${RAILWAY_HOST}:443:${edge_ip}" \
+        --output /dev/null "$RAILWAY_HEALTH" 2>/dev/null; then
+      chosen_edge="$edge_ip"
+      break
+    fi
+  done
+  if [[ -z "$chosen_edge" ]]; then
+    echo 'No reachable TLS-verified Railway edge. Existing GPU queue was not replaced.' >&2
+    exit 1
+  fi
+  route_args=(--add-host "${RAILWAY_HOST}:${chosen_edge}")
+  echo "Railway fallback route verified: ${RAILWAY_HOST} -> ${chosen_edge} (TLS CA/SNI kept)."
+  echo 'This mapping is temporary for this container; rerun queue_deploy.sh if the edge changes.'
+fi
 sudo docker rm -f hot-hat-gpu-queue >/dev/null 2>&1 || true
-sudo docker run -d --name hot-hat-gpu-queue --restart unless-stopped \
-  --gpus all --env-file "$PWD/.env" \
+sudo docker run -d --name hot-hat-gpu-queue --restart unless-stopped \\
+  "${route_args[@]}" \\
+  --gpus all --env-file "$PWD/.env" \\
   --health-cmd "python -m app.queue_healthcheck" \
   --health-interval 20s --health-timeout 5s --health-start-period 60s \
   --health-retries 3 \
