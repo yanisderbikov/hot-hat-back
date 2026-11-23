@@ -4,3 +4,4 @@ numpy==1.26.4
 opencv-python-headless==4.10.0.84
 onnxruntime-gpu==1.23.2
 huggingface-hub==0.35.3
+requests==2.32.3
