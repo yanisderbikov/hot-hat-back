@@ -1,0 +1,22 @@
+name: SCRUM-65 Wan RTX 4090 one-click quote and reference regression
+on:
+  push:
+    branches: [new-dev]
+    paths:
+      - "src/main/java/ru/hothat/testbot/usecase/NeuroReplacementPilotService.java"
+      - "src/main/java/ru/hothat/testbot/api/NeuroGpuQueueController.java"
+      - "src/test/java/ru/hothat/testbot/usecase/NeuroWanGpuOneClickQuoteTest.java"
+      - ".github/workflows/neuro-gpu-oneclick-checks.yml"
+  workflow_dispatch:
+jobs:
+  oneclick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Verify 10-second Wan, 250 RUB video quote and old Kling isolation
+        run: mvn -B -ntp -Dtest=NeuroWanGpuOneClickQuoteTest test
