@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys a localhost-only development GPU worker on the rented Immers host.
+# SCRUM-65: idempotent local-only dev deployment on the Immers RTX 4090.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -23,6 +23,29 @@ sudo docker run -d \
   --security-opt no-new-privileges:true \
   hot-hat/gpu-worker:scrum-65
 
-echo 'Worker runs on the GPU host, bound to 127.0.0.1:8088 only.'
-curl --retry 12 --retry-delay 2 --retry-connrefused -fsS http://127.0.0.1:8088/health
-echo
+echo 'Worker started; waiting for Python/PyTorch initialization on localhost...'
+ready=false
+for attempt in $(seq 1 45); do
+  # PyTorch imports can take seconds, and curl may see both refused and reset
+  # connections during startup. Treat both as transient until the deadline.
+  if curl --silent --show-error --fail --max-time 3 \
+      http://127.0.0.1:8088/health 2>/dev/null; then
+    echo
+    ready=true
+    break
+  fi
+  state="$(sudo docker inspect --format '{{.State.Status}}' hot-hat-gpu-worker 2>/dev/null || true)"
+  if [ "$state" != "running" ]; then
+    echo "Container state: $state" >&2
+    break
+  fi
+  sleep 2
+done
+
+if [ "$ready" != true ]; then
+  echo 'GPU worker health check failed. Container diagnostics:' >&2
+  sudo docker ps -a --filter name=hot-hat-gpu-worker >&2
+  sudo docker logs --tail 80 hot-hat-gpu-worker >&2 || true
+  exit 1
+fi
+echo 'GPU worker health is OK. Port 8088 is bound to 127.0.0.1 only.'
