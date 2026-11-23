@@ -1,0 +1,10 @@
+**/.env
+**/*.pem
+.git
+.gitignore
+__pycache__
+*.pyc
+.pytest_cache
+tests
+README.md
+deploy.sh
