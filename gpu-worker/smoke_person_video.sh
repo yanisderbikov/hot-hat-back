@@ -9,26 +9,35 @@ SOURCE_URL='https://raw.githubusercontent.com/gordicaleksa/pytorch-naive-video-n
 command -v curl >/dev/null || { echo 'curl is required' >&2; exit 2; }
 rm -f clips/scrum65-public-person-source.mp4 \
       clips/scrum65-public-person.mp4 \
+      clips/scrum65-public-person-muted.mp4 \
       clips/scrum65-public-person-alpha.webm \
       clips/scrum65-public-person-preview.png
 echo 'Downloading a small public example with a person...'
 curl --fail --location --retry 3 --max-time 60 --max-filesize 10000000 \
     --output clips/scrum65-public-person-source.mp4 "$SOURCE_URL"
 
-echo 'Preparing 3 seconds / 30 frames at 640x360 with an audio track inside Docker...'
-# The pinned source has only about 1 second of footage. Loop only for the
-# structural/performance smoke test, not for judging motion-quality.
+echo 'Preparing 3 seconds / 30 frames at 640x360 (video only)...'
+# The pinned source contains ~1s footage. Repeat only for smoke testing.
 sudo docker run --rm --network none \
   --user "$(id -u):$(id -g)" \
   -v "$PWD/clips:/clips" --entrypoint ffmpeg \
   hot-hat/gpu-worker:scrum-65 \
   -nostdin -hide_banner -loglevel error -y \
   -stream_loop -1 -i /clips/scrum65-public-person-source.mp4 \
-  -f lavfi -i sine=frequency=440:sample_rate=48000 \
-  -map 0:v:0 -map 1:a:0 -t 3 -frames:v 30 \
-  -vf scale=640:360,fps=10 -c:v libx264 -preset ultrafast \
-  -pix_fmt yuv420p -c:a aac -b:a 96k -shortest \
-  /clips/scrum65-public-person.mp4
+  -map 0:v:0 -t 3 -frames:v 30 \
+  -vf scale=640:360,fps=10 -an -c:v libx264 -preset ultrafast \
+  -pix_fmt yuv420p /clips/scrum65-public-person-muted.mp4
+
+echo 'Adding a full 3-second test audio track in a separate mux pass...'
+sudo docker run --rm --network none \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/clips:/clips" --entrypoint ffmpeg \
+  hot-hat/gpu-worker:scrum-65 \
+  -nostdin -hide_banner -loglevel error -y \
+  -i /clips/scrum65-public-person-muted.mp4 \
+  -f lavfi -i sine=frequency=440:sample_rate=48000:duration=3 \
+  -map 0:v:0 -map 1:a:0 -t 3 -c:v copy \
+  -c:a aac -b:a 96k /clips/scrum65-public-person.mp4
 
 get_frames() {
   sudo docker run --rm --network none \
