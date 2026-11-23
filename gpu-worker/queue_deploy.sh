@@ -19,5 +19,14 @@ sudo docker run -d --name hot-hat-gpu-queue --restart unless-stopped \
   -v "$PWD/models:/models:ro" -v "$PWD/clips:/clips" \
   --entrypoint python hot-hat/gpu-worker:scrum-65 -m app.queue_worker
 echo 'Outbound GPU queue container started; no public port exposed.'
-echo 'Railway HOT_HAT_GPU_TOKEN must equal the private token in gpu-worker/.env.'
+echo 'Railway needs only HOT_HAT_GPU_TOKEN_SHA256 (fingerprint below), not the token.'
+python3 - <<'PY'
+import hashlib
+from pathlib import Path
+text = Path(".env").read_text()
+tokens = [x[18:] for x in text.splitlines() if x.startswith("HOT_HAT_GPU_TOKEN=")]
+if len(tokens) != 1 or len(tokens[0]) < 32:
+    raise SystemExit("Invalid private token in .env")
+print("HOT_HAT_GPU_TOKEN_SHA256=" + hashlib.sha256(tokens[0].encode()).hexdigest())
+PY
 echo 'Diagnostics: sudo docker logs --tail 30 hot-hat-gpu-queue'
