@@ -1,70 +1,58 @@
-# SCRUM-65 · HOT-HAT GPU worker (Immers Cloud)
+# SCRUM-65 · GPU маттинг нейроподмены
 
-**Status:** infrastructure smoke only. This is NOT a complete matting / realtime
-processing implementation. Do not enable it for users until Longpipe-XL + BiRefNet
-quality, alpha-video codec, audio sync, authorization and latency tests pass.
+**Текущий статус:** CUDA/PyTorch/HTTP-worker успешно проверены на RTX 4090 пользователем. Добавлен отдельный офлайновый Longpipe XL + optical flow + BiRefNet Lite CUDA/ONNX pipeline для исходного MP4; реальное качество и скорость на RTX 4090 ещё НЕ проверены. Интеграции с Java API, S3, Railway, LiveKit и real-time fallback пока нет.
 
-This directory is isolated from the Railway API and browser matting pipeline.
-It uses the rented **RTX 4090 / Ubuntu 24.04** instance and the
-`pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime` image already tested on that host.
+## Назначение и приоритет
 
-## Deploy on the Immers VM
+1. Нейроподмена: из уже оплаченного исходного MP4 создаётся отдельно прозрачный WebM VP9 + Opus (если исходный звук существует); оригинальный MP4 остаётся неизменным. Никаких повторных GenAPI запросов.
+2. Слабые клиенты: локальная GPU/CPU-модель браузера остаётся основным режимом; при необходимости в дальнейшем переход на серверный маттинг с контролем RTT/FPS и обратным переключением. Приоритет real-time выше фоновой обработки.
+3. 3D-киты: зарезервировано на будущее, не реализовано.
 
-Prerequisites: Docker 29+, NVIDIA Container Toolkit, `docker run --gpus all`
-successfully shows RTX 4090; `curl`, `openssl`, `git`.
+## Источники весов
+
+Скрипт `download_models.sh` скачивает только эти файлы:
+- [Longpipe official ONNX](https://huggingface.co/Longpipe/longpipe): `onnx/xl/matting_landscape.onnx`, `onnx/xl/flow_landscape.onnx` (MIT);
+- [BiRefNet Lite ONNX](https://huggingface.co/onnx-community/BiRefNet_lite-ONNX): `onnx/model_fp16.onnx` (MIT);
+- предподготовка: Longpipe RGB float32 [0..1] 1280x768, BiRefNet RGB float32 ImageNet-normalized 1024x1024. BiRefNet выход — logits, sigmoid.
+
+Ни одна модель не загружается в Git, модели живут только в `gpu-worker/models/`. Из-за лицензий, происхождения датасетов и использования в продукте отдельно проверить условия коммерческого применения.
+
+## Установка / обновление на Immers VM
+
+Для существующего клона:
 
 ```bash
-git clone --branch new-dev https://github.com/yanisderbikov/hot-hat-back.git
-cd hot-hat-back/gpu-worker
+cd ~/hot-hat-back
+git pull --ff-only origin new-dev
+cd gpu-worker
 bash deploy.sh
+bash download_models.sh
 ```
 
-For an existing clone, run `git pull --ff-only origin new-dev` before
-`bash gpu-worker/deploy.sh` from the repository root.
+После скачивания сверить SHA-256 и успешную CUDA загрузку на **реальном** видео. `download_models.sh` скачивает веса из Hugging Face, нужен исходящий HTTPS. Файлы могут занимать сотни МБ. При ошибке загрузки скрипт не создаёт фальшивый результат.
 
-Deployment generates a 64-character random token in `gpu-worker/.env`
-(chmod 600 due to umask 077). **Never copy the token into GitHub/Trello/chat.**
-The container binds **127.0.0.1:8088** on the host, NOT the public interface.
-Do not open port 8088 on the public Internet.
-
-Check local health:
+Исходный ролик положить в `gpu-worker/clips/original.mp4` (каталог приватный, не включён в Git) и выполнить:
 
 ```bash
-curl -fsS http://127.0.0.1:8088/health
+bash process_mp4.sh clips/original.mp4 clips/original-transparent.webm
 ```
 
-Test authenticated GPU access without printing the secret:
+Процесс запускает отдельный одноразовый GPU-контейнер, читает исходник, вычисляет маску с Longpipe XL + flow + BiRefNet, кодирует VP9 с альфой, сохраняет аудио как Opus, проверяет `alpha_mode=1` и наличие аудиодорожки. При ошибке не переименовывает `.partial` в готовый файл и не изменяет исходник.
 
-```bash
-set -a; source .env; set +a
-curl -fsS -H "X-Hot-Hat-GPU-Token: $HOT_HAT_GPU_TOKEN" http://127.0.0.1:8088/ready
-curl -fsS -X POST -H "X-Hot-Hat-GPU-Token: $HOT_HAT_GPU_TOKEN" http://127.0.0.1:8088/v1/gpu/smoke
-unset HOT_HAT_GPU_TOKEN
-```
+Ограничения: вход до 100 МиБ, 15 секунд, 1920x1080, 5–120 исходных fps (при >30 fps нормализует до 30). Один batch-clip в момент времени (flock). Прозрачность WebM не гарантированно видна в стандартных медиаплеерах; проверять в Chromium и при декодировании с `libvpx-vp9`.
 
-### Design constraints before production
+## API и безопасность
 
-1. **Priority 1:** asynchronous background removal on the original paid
-   neuro-replacement MP4. Store original input and a separate transparent result;
-   no second GenAPI call. Longpipe-XL temporal person + BiRefNet edge/prop
-   models must be validated using real clips (hands, hair, moving keyboard).
-2. **Priority 2:** opt-in automatic server fallback for slow client devices.
-   Local matting remains default; consider latency and bandwidth before switching.
-   Realtime sessions take priority over queue jobs; do not duplicate LiveKit tracks.
-3. **Priority 3:** leave an extension point for future 3D kits. No implementation now.
-4. Private communication to Railway: choose a TLS-protected authenticated gateway
-   or tunnel *before* exposing the worker beyond localhost. Never store users'
-   MP4s indefinitely. Apply bounded queues, size caps, timeouts and cleanup.
-5. GPU idle state: verify Immers shelve/unshelve and lingering storage/IP charges
-   before automating stop/start; `docker stop` does **not** stop the rental.
-6. Performance acceptance: test 720p/30FPS, 1/5/10 cameras for quality, GPU VRAM,
-   end-to-end latency and actual ruble cost. A successful smoke test proves only
-   PyTorch CUDA, not Longpipe-XL/BiRefNet or actual video processing.
+HTTP-worker (порт 8088) привязан **только к 127.0.0.1**. `.env` генерируется с отдельным секретом длиной 64 hex; не класть его, SSH-ключи и приватные видео в Git/chat. Доступны `GET /health`, защищённые `GET /ready`, `POST /v1/gpu/smoke`. Публичного MP4 endpoint нет до прохождения качества, безопасной очереди, S3-подписей, TTL и подключения через TLS-посредника к Railway.
 
-Tests (on a host with Python dependencies):
+Сам сервер Immers остаётся оплачиваемым, пока активен. `docker stop` не выключает аренду; Shelve / disk / IP тарифы проверить отдельно.
+
+## Тесты
 
 ```bash
 cd gpu-worker
 python -m pip install -r requirements.txt pytest httpx
 python -m pytest -q tests
 ```
+
+Тесты видеомультиплексирования без CUDA используют подставную маску и **не** считаются доказательством качества нейросетей. Перед включением в игру обязательны реальные MP4 со сложными объектами/волосами/руками, проверка альфа-границ и звука, измерение 1/5/10 потоков (720p30), задержки, VRAM и расходов. Сохранить исходные оплаченные job ID и данные архива.
