@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
 import java.security.MessageDigest;
 import java.util.Map;
+import io.swagger.v3.oas.annotations.Hidden;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
@@ -27,6 +28,7 @@ import ru.hothat.config.HotHatUser;
 import ru.hothat.testbot.usecase.NeuroReplacementPilotService;
 
 /** Isolated RTX 4090 queue. No client-side neuro-replacement matting fallback. */
+@Hidden // Internal machine-only endpoints; not a public OpenAPI contract.
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v2/gpu/neuro")
