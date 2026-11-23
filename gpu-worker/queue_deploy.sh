@@ -31,7 +31,7 @@ else
   chosen_edge=''
   for edge_ip in "${edge_ips[@]}"; do
     # IPv4 input comes from DNS; reject non-IPv4 strings before constructing --add-host.
-    if [[ ! "$edge_ip" =~ ^[0-9]{1,3}(\\.[0-9]{1,3}){3}$ ]]; then
+    if [[ ! "$edge_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
       continue
     fi
     if curl --noproxy '*' -4 -fsS --connect-timeout 4 --max-time 8 \
@@ -50,9 +50,9 @@ else
   echo 'This mapping is temporary for this container; rerun queue_deploy.sh if the edge changes.'
 fi
 sudo docker rm -f hot-hat-gpu-queue >/dev/null 2>&1 || true
-sudo docker run -d --name hot-hat-gpu-queue --restart unless-stopped \\
-  "${route_args[@]}" \\
-  --gpus all --env-file "$PWD/.env" \\
+sudo docker run -d --name hot-hat-gpu-queue --restart unless-stopped \
+  "${route_args[@]}" \
+  --gpus all --env-file "$PWD/.env" \
   --health-cmd "python -m app.queue_healthcheck" \
   --health-interval 20s --health-timeout 5s --health-start-period 60s \
   --health-retries 3 \
