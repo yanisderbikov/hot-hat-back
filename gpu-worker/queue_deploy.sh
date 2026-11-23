@@ -32,5 +32,25 @@ if len(tokens) != 1 or len(tokens[0]) < 32:
     raise SystemExit("Invalid private token in .env")
 print("HOT_HAT_GPU_TOKEN_SHA256=" + hashlib.sha256(tokens[0].encode()).hexdigest())
 PY
-echo 'Docker health requires a successful authorized Railway /next response within 75 seconds.'
-echo 'Diagnostics: sudo docker logs --tail 40 hot-hat-gpu-queue'
+echo 'Checking actual authenticated Railway polling, not the unrelated HTTP /health route...'
+ready=0
+for attempt in $(seq 1 15); do
+  status="$(sudo docker inspect --format '{{.State.Health.Status}}' hot-hat-gpu-queue 2>/dev/null || echo missing)"
+  if [ "$status" = healthy ]; then
+    ready=1
+    break
+  fi
+  if [ "$status" = missing ] || [ "$(sudo docker inspect --format '{{.State.Running}}' hot-hat-gpu-queue 2>/dev/null)" != true ]; then
+    break
+  fi
+  sleep 4
+done
+echo 'Container status:'
+sudo docker ps -a --filter name=hot-hat-gpu-queue
+echo 'Queue diagnostics (no secrets):'
+sudo docker logs --tail 40 hot-hat-gpu-queue 2>&1 || true
+if [ "$ready" != 1 ]; then
+  echo 'GPU queue has not confirmed Railway HTTP 200 yet; inspect status above.' >&2
+  exit 1
+fi
+echo 'GPU queue is HEALTHY: authorized Railway queue poll confirmed; no paid request made.'
